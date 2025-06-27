@@ -285,9 +285,10 @@ if "last_query" not in st.session_state:
 st.header("Ask a question about your knowledge base")
 
 user_query = st.text_input("Your question:", value=st.session_state.get("last_query", ""))
+user_query = user_query or ""
+query_words = [w.strip().lower() for w in user_query.split()]
 matching_excels = []
 excel_scores = []
-query_words = [w.strip().lower() for w in user_query.split()]
 for file_path in all_files:
     if file_path.endswith('.xlsx'):
         meta_path = os.path.join(
