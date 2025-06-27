@@ -1,0 +1,15 @@
+{
+  "title": "Document Metadata",
+  "author": "",
+  "date": "",
+  "category": "Spreadsheet",
+  "tags": [
+    "metadata",
+    "spreadsheet",
+    "document",
+    "title",
+    "author"
+  ],
+  "summary": "This spreadsheet contains metadata information for a document, including columns for Title, Author, Date, Category, and Tags. It is designed to organize and categorize document details efficiently.",
+  "source_file": "LLM_Metadata_Template_Excel.xlsx"
+}
