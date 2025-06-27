@@ -13,11 +13,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-PROJECT_ROOT = r"G:\My Drive\Ethos LLM\Project_Root"
+PROJECT_ROOT = "./Project_Root"
 
 def extract_text_for_metadata(path, max_ocr_pages=5):
     if path.endswith(".docx"):
