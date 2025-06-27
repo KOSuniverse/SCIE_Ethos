@@ -1,0 +1,14 @@
+streamlit
+openai
+faiss-cpu
+python-docx
+pdfplumber
+pytesseract
+python-pptx
+openpyxl
+pandas
+numpy
+matplotlib
+seaborn
+Pillow
+
