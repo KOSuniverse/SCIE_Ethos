@@ -15,7 +15,7 @@ import seaborn as sns
 
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-client = OpenAI(api_key="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")
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 PROJECT_ROOT = r"G:\My Drive\Ethos LLM\Project_Root"
 
@@ -24,23 +24,19 @@ def extract_text_for_metadata(path, max_ocr_pages=5):
         doc = Document(path)
         return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
     elif path.endswith(".xlsx"):
-        wb = openpyxl.load_workbook(path)
+        wb = openpyxl.load_workbook(path, read_only=True)
+        text = []
+        sheet_names = []
+        columns_by_sheet = {}
         for sheet in wb.worksheets:
-            # process every sheet
             sheet_names.append(sheet.title)
             text.append(f"Sheet: {sheet.title}")
-            # Get column headers (first row)
+            # Only get headers (first row)
             headers = [cell.value for cell in next(sheet.iter_rows(max_row=1))]
             columns_by_sheet[sheet.title] = [str(h) for h in headers if h]
             if headers:
                 text.append("Columns: " + " | ".join([str(h) for h in headers if h]))
-            # Optionally, add a few sample rows
-            for row in sheet.iter_rows(min_row=2, max_row=6):
-                # just limits sample rows, not sheets
-                row_text = [str(cell.value) for cell in row if cell.value]
-                if row_text:
-                    text.append(" | ".join(row_text))
-        # Save sheet_names and columns_by_sheet as attributes for metadata
+            # Do NOT read sample rows for speed!
         return "\n".join(text), sheet_names, columns_by_sheet
     elif path.endswith(".pptx"):
         prs = Presentation(path)
@@ -189,10 +185,11 @@ def excel_qa(file_path, user_query):
         f"Columns: {list(df.columns)}\n"
         f"Sample data:\n{df.head(5).to_string(index=False)}\n\n"
         f"User question: {user_query}\n\n"
-        "First, return only valid Python code that uses pandas, matplotlib, or seaborn to answer the question. "
+        "Return only valid Python code that uses the provided 'df' DataFrame (do NOT reload or create new data). "
         "If a chart is required, generate and show it using matplotlib/seaborn. "
-        "Assign any tabular result to a variable named `result`.\n"
-        "After the code block, provide a brief summary of what the chart or table shows, with possible causes and insights, in plain English."
+        "Assign any tabular result to a variable named 'result'.\n"
+        "After the code block, provide a brief summary of what the chart or table shows. "
+        "Then, in a separate paragraph, suggest at least two possible causes or business insights that could explain the observed pattern, even if you have to speculate based on typical business scenarios."
     )
 
     response = client.chat.completions.create(
@@ -232,7 +229,6 @@ def excel_qa(file_path, user_query):
         st.markdown(f"**Explanation:** {explanation}")
 
 # --- Gather all chunks from all files ---
-st.info("Scanning all documents for Q&A...")
 all_files = find_all_files(PROJECT_ROOT)
 all_chunks = []
 for file_path in all_files:
@@ -281,118 +277,131 @@ for file_path in all_files:
 # --- Q&A Section ---
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
+if "last_excel" not in st.session_state:
+    st.session_state.last_excel = None
+if "last_query" not in st.session_state:
+    st.session_state.last_query = None
 
 st.header("Ask a question about your knowledge base")
 
-user_query = st.text_input("Your question:")
-if st.button("Ask") and user_query:
-    matching_excels = []
-    excel_scores = []
-    query_words = [w.strip().lower() for w in user_query.split()]
-    for file_path in all_files:
-        if file_path.endswith('.xlsx'):
-            meta_path = os.path.join(
-                os.path.dirname(file_path),
-                "_metadata",
-                os.path.splitext(os.path.basename(file_path))[0] + ".json"
-            )
-            meta = {"source_file": os.path.basename(file_path)}
-            if os.path.exists(meta_path):
-                try:
-                    with open(meta_path, "r") as jf:
-                        meta.update(json.load(jf))
-                except Exception:
-                    pass
-            # Normalize category and tags
-            category_words = []
-            if "category" in meta and meta["category"]:
-                if isinstance(meta["category"], list):
-                    for cat in meta["category"]:
-                        category_words.extend([w.strip().lower() for w in str(cat).replace(",", " ").split() if w.strip()])
-                else:
-                    category_words = [w.strip().lower() for w in str(meta["category"]).replace(",", " ").split() if w.strip()]
-            tag_words = []
-            if "tags" in meta and meta["tags"]:
-                tag_words = [w.strip().lower() for w in meta["tags"] if w.strip()]
-            sheet_names = meta.get("sheet_names", [])
-            columns = meta.get("columns", [])
-            sample_values = []
+user_query = st.text_input("Your question:", value=st.session_state.get("last_query", ""))
+matching_excels = []
+excel_scores = []
+query_words = [w.strip().lower() for w in user_query.split()]
+for file_path in all_files:
+    if file_path.endswith('.xlsx'):
+        meta_path = os.path.join(
+            os.path.dirname(file_path),
+            "_metadata",
+            os.path.splitext(os.path.basename(file_path))[0] + ".json"
+        )
+        meta = {"source_file": os.path.basename(file_path)}
+        if os.path.exists(meta_path):
             try:
-                df = pd.read_excel(file_path, nrows=1)
-                for val in df.iloc[0].values:
-                    if pd.notnull(val):
-                        sample_values.append(str(val).strip().lower())
+                with open(meta_path, "r") as jf:
+                    meta.update(json.load(jf))
             except Exception:
                 pass
-            meta_text = " ".join([
-                str(meta.get("title", "")).lower(),
-                " ".join(category_words),
-                " ".join(tag_words),
-                str(meta.get("source_file", "")).lower(),
-                " ".join(sheet_names).lower() if isinstance(sheet_names, list) else str(sheet_names).lower(),
-                " ".join(columns).lower() if isinstance(columns, list) else str(columns).lower(),
-                str(meta.get("summary", "")).lower(),
-                " ".join(sample_values)
-            ])
-            score = sum(word in meta_text for word in query_words)
-            if score > 0:
-                matching_excels.append(file_path)
-                excel_scores.append(score)
+        # Normalize category and tags
+        category_words = []
+        if "category" in meta and meta["category"]:
+            if isinstance(meta["category"], list):
+                for cat in meta["category"]:
+                    category_words.extend([w.strip().lower() for w in str(cat).replace(",", " ").split() if w.strip()])
+            else:
+                category_words = [w.strip().lower() for w in str(meta["category"]).replace(",", " ").split() if w.strip()]
+        tag_words = []
+        if "tags" in meta and meta["tags"]:
+            tag_words = [w.strip().lower() for w in meta["tags"] if w.strip()]
+        sheet_names = meta.get("sheet_names", [])
+        columns = meta.get("columns", [])
+        sample_values = []
+        try:
+            df = pd.read_excel(file_path, nrows=1)
+            for val in df.iloc[0].values:
+                if pd.notnull(val):
+                    sample_values.append(str(val).strip().lower())
+        except Exception:
+            pass
+        meta_text = " ".join([
+            str(meta.get("title", "")).lower(),
+            " ".join(category_words),
+            " ".join(tag_words),
+            str(meta.get("source_file", "")).lower(),
+            " ".join(sheet_names).lower() if isinstance(sheet_names, list) else str(sheet_names).lower(),
+            " ".join(columns).lower() if isinstance(columns, list) else str(columns).lower(),
+            str(meta.get("summary", "")).lower(),
+            " ".join(sample_values)
+        ])
+        score = sum(word in meta_text for word in query_words)
+        if score > 0:
+            matching_excels.append(file_path)
+            excel_scores.append(score)
 
-    selected_excel = None
-    if matching_excels:
-        # Pick the best match as default
-        best_idx = int(np.argmax(excel_scores))
-        selected_excel = st.selectbox(
-            "Select an Excel file to answer your question:",
-            matching_excels,
-            index=best_idx
-        )
-        st.info(f"Matching Excel files: {[os.path.basename(f) for f in matching_excels]}")
-        if selected_excel:
-            excel_qa(selected_excel, user_query)
+selected_excel = None
+if matching_excels:
+    best_idx = int(np.argmax(excel_scores))
+    selected_excel = st.selectbox(
+        "Select an Excel file to answer your question:",
+        matching_excels,
+        index=best_idx,
+        key="excel_select"
+    )
+    st.info(f"Matching Excel files: {[os.path.basename(f) for f in matching_excels]}")
+
+    # Only run excel_qa if the file or question changed, or button pressed
+    run_excel_qa = (
+        st.button("Ask") or
+        selected_excel != st.session_state.get("last_excel") or
+        user_query != st.session_state.get("last_query")
+    )
+    if run_excel_qa and selected_excel and user_query:
+        excel_qa(selected_excel, user_query)
+        st.session_state.last_excel = selected_excel
+        st.session_state.last_query = user_query
+        # Only append to chat history if this is a new question
+        if st.session_state.chat_history == [] or st.session_state.chat_history[-1]["content"] != user_query:
             st.session_state.chat_history.append({"role": "user", "content": user_query})
             st.session_state.chat_history.append({"role": "assistant", "content": "Chart or result generated above."})
-    else:
-        st.warning("⚠️ No matching Excel file found. Falling back to GPT chat.")
-        relevant = get_relevant_chunks(user_query, all_chunks, top_k=4)
-        context = "\n\n".join(chunk for meta, chunk in relevant)
-        system_prompt = (
-            "You are a helpful assistant answering questions based on internal business documents. "
-            "Use the provided context to answer as best you can."
-        )
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {user_query}"}
-            ],
-            temperature=0.3
-        )
-        answer = response.choices[0].message.content.strip()
-        st.session_state.chat_history.append({"role": "user", "content": user_query})
-        st.session_state.chat_history.append({"role": "assistant", "content": answer})
+else:
+    relevant = get_relevant_chunks(user_query, all_chunks, top_k=4)
+    context = "\n\n".join(chunk for meta, chunk in relevant)
+    system_prompt = (
+        "You are a helpful assistant answering questions based on internal business documents. "
+        "Use the provided context to answer as best you can."
+    )
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {user_query}"}
+        ],
+        temperature=0.3
+    )
+    answer = response.choices[0].message.content.strip()
+    st.session_state.chat_history.append({"role": "user", "content": user_query})
+    st.session_state.chat_history.append({"role": "assistant", "content": answer})
 
-        try:
-            chart_data = json.loads(answer)
-            if "chart_type" in chart_data and "x" in chart_data and "y" in chart_data:
-                st.write(chart_data.get("title", "Chart"))
-                if chart_data["chart_type"] == "bar":
-                    df = pd.DataFrame({"x": chart_data["x"], "y": chart_data["y"]})
-                    st.bar_chart(df.set_index("x"))
-            else:
-                st.write(answer)
-        except Exception:
+    try:
+        chart_data = json.loads(answer)
+        if "chart_type" in chart_data and "x" in chart_data and "y" in chart_data:
+            st.write(chart_data.get("title", "Chart"))
+            if chart_data["chart_type"] == "bar":
+                df = pd.DataFrame({"x": chart_data["x"], "y": chart_data["y"]})
+                st.bar_chart(df.set_index("x"))
+        else:
             st.write(answer)
+    except Exception:
+        st.write(answer)
 
-        with st.expander("Show supporting context"):
-            for meta, chunk in relevant:
-                st.write(f"**Source:** {meta.get('title', meta.get('source_file', 'N/A'))}")
-                st.write(f"**Category:** {meta.get('category', '')}")
-                st.write(f"**Tags:** {', '.join(meta.get('tags', []))}")
-                st.write(f"**Summary:** {meta.get('summary', '')}")
-                st.write(chunk[:500] + ("..." if len(chunk) > 500 else ""))
-                st.write("---")
+    with st.expander("Show supporting context"):
+        for meta, chunk in relevant:
+            st.write(f"**Source:** {meta.get('title', meta.get('source_file', 'N/A'))}")
+            st.write(f"**Category:** {meta.get('category', '')}")
+            st.write(f"**Tags:** {', '.join(meta.get('tags', []))}")
+            st.write(f"**Summary:** {meta.get('summary', '')}")
+            st.write(chunk[:500] + ("..." if len(chunk) > 500 else ""))
+            st.write("---")
 
 # Place this where you want the chat to appear (after processing the question)
 with st.container():
