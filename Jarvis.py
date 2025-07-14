@@ -16,6 +16,7 @@ import seaborn as sns
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 PROJECT_ROOT = "./Project_Root"
+GLOBAL_ALIAS_PATH = os.path.join(PROJECT_ROOT, "global_column_aliases.json")
 
 # --- Embedding utilities ---
 embedding_cache = {}
@@ -30,6 +31,30 @@ def get_embedding(text):
 
 def cosine_similarity(a, b):
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+# --- Column-to-Concept Mapping ---
+def map_columns_to_concepts(columns, global_aliases=None):
+    unmapped = [col for col in columns if not global_aliases or col not in global_aliases]
+    mapping = global_aliases.copy() if global_aliases else {}
+    if unmapped:
+        prompt = (
+            "Map the following Excel column headers to standard business concepts. "
+            "Return a JSON dictionary where each key is the original column name and each value is a standard concept "
+            "(e.g., 'quantity', 'part_number', 'location'). If a header is junk or unrecognizable, map it to 'ignore'.\n\n"
+            f"Columns: {unmapped}"
+        )
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2
+        )
+        raw = response.choices[0].message.content.strip()
+        try:
+            new_mapping = json.loads(raw)
+            mapping.update(new_mapping)
+        except Exception:
+            pass
+    return mapping
 
 # --- Feedback loop prep ---
 def profile_file_usage(file_path, tags):
@@ -196,7 +221,7 @@ def auto_generate_metadata(prompt_text):
         print("⚠️ GPT returned invalid JSON:", raw)
         raise e
 
-def excel_qa(file_path, user_query):
+def excel_qa(file_path, user_query, column_aliases=None):
     import matplotlib.pyplot as plt
     import seaborn as sns
     import re
@@ -205,6 +230,7 @@ def excel_qa(file_path, user_query):
     # --- Auto-visual triggering ---
     auto_chart = any(word in user_query.lower() for word in ["trend", "compare", "distribution", "growth", "pattern", "chart", "plot", "visual"])
     prompt = (
+        f"Column aliases for this file: {json.dumps(column_aliases or {})}\n"
         f"You are a data analyst working with the following Excel file.\n"
         f"Columns: {list(df.columns)}\n"
         f"Sample data:\n{df.head(5).to_string(index=False)}\n\n"
@@ -256,9 +282,17 @@ def excel_qa(file_path, user_query):
     if explanation:
         st.markdown(f"**Explanation:** {explanation}")
 
+# --- Load global column aliases ---
+if os.path.exists(GLOBAL_ALIAS_PATH):
+    with open(GLOBAL_ALIAS_PATH, "r") as f:
+        global_aliases = json.load(f)
+else:
+    global_aliases = {}
+
 # --- Gather all chunks from all files ---
 all_files = find_all_files(PROJECT_ROOT)
 all_chunks = []
+updated_global_aliases = global_aliases.copy()
 for file_path in all_files:
     ext = os.path.splitext(file_path)[1].lower()
     max_ocr_pages = 5 if ext == ".pdf" else 0
@@ -278,6 +312,11 @@ for file_path in all_files:
             for cols in columns_by_sheet.values():
                 all_columns.extend(cols)
             meta["columns"] = list(set(all_columns))
+            # --- Column alias mapping ---
+            column_aliases = map_columns_to_concepts(meta["columns"], updated_global_aliases)
+            meta["column_aliases"] = column_aliases
+            # Update global alias dictionary
+            updated_global_aliases.update(column_aliases)
         # Load or generate metadata
         meta_path = os.path.join(os.path.dirname(file_path), "_metadata", os.path.splitext(os.path.basename(file_path))[0] + ".json")
         if os.path.exists(meta_path):
@@ -311,6 +350,10 @@ for file_path in all_files:
                 print(f"Embedding failed for {file_path}: {e}")
         if embedding is not None:
             embedding_cache[file_path] = embedding
+
+# --- Save updated global column aliases ---
+with open(GLOBAL_ALIAS_PATH, "w") as f:
+    json.dump(updated_global_aliases, f, indent=2)
 
 # --- Q&A Section ---
 if "chat_history" not in st.session_state:
@@ -427,7 +470,21 @@ if top_files:
         user_query != st.session_state.get("last_query")
     )
     if run_excel_qa and selected_excel and user_query:
-        excel_qa(selected_excel, user_query)
+        # Pass column_aliases to excel_qa
+        meta_path = os.path.join(
+            os.path.dirname(selected_excel),
+            "_metadata",
+            os.path.splitext(os.path.basename(selected_excel))[0] + ".json"
+        )
+        column_aliases = {}
+        if os.path.exists(meta_path):
+            try:
+                with open(meta_path, "r") as jf:
+                    meta_excel = json.load(jf)
+                    column_aliases = meta_excel.get("column_aliases", {})
+            except Exception:
+                pass
+        excel_qa(selected_excel, user_query, column_aliases)
         st.session_state.last_excel = selected_excel
         st.session_state.last_query = user_query
         profile_file_usage(selected_excel, meta.get("tags", []))  # Feedback loop prep
