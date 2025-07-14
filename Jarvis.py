@@ -53,12 +53,6 @@ def map_columns_to_concepts(columns, global_aliases=None):
             pass
     return mapping
 
-def profile_file_usage(file_path, tags):
-    pass
-
-def profile_excel_file(file_path):
-    pass
-
 def extract_text_for_metadata(path, max_ocr_pages=5):
     if path.endswith(".docx"):
         doc = Document(path)
@@ -264,7 +258,7 @@ def excel_qa(file_path, user_query, column_aliases=None):
         if "result" in local_vars:
             st.write("✅ Result:")
             if isinstance(local_vars["result"], pd.DataFrame):
-                st.dataframe(local_vars["result"])
+                st.dataframe(local_vars["result"].astype(str))
             else:
                 st.write(local_vars["result"])
         st.pyplot(plt)
@@ -292,7 +286,6 @@ for file_path in all_files:
     max_ocr_pages = 5 if ext == ".pdf" else 0
     if ext == ".xlsx":
         text, sheet_names, columns_by_sheet = extract_text_for_metadata(file_path, max_ocr_pages=max_ocr_pages)
-        profile_excel_file(file_path)
     else:
         text = extract_text_for_metadata(file_path, max_ocr_pages=max_ocr_pages)
         sheet_names, columns_by_sheet = [], {}
@@ -341,19 +334,6 @@ for file_path in all_files:
 with open(GLOBAL_ALIAS_PATH, "w") as f:
     json.dump(updated_global_aliases, f, indent=2)
 
-# --- Download button for global alias file ---
-if os.path.exists(GLOBAL_ALIAS_PATH):
-    with open(GLOBAL_ALIAS_PATH, "r", encoding="utf-8") as f:
-        global_alias_json = f.read()
-else:
-    global_alias_json = "{}"
-st.download_button(
-    label="Download global_column_aliases.json",
-    data=global_alias_json,
-    file_name="global_column_aliases.json",
-    mime="application/json"
-)
-
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "last_excel" not in st.session_state:
@@ -367,12 +347,6 @@ st.header("Ask a question about your knowledge base")
 
 # --- Find matching Excel files ---
 user_query = ""
-with st.form("question_form", clear_on_submit=False):
-    user_query = st.text_input("Your question:", value=st.session_state.get("last_query", ""))
-    submit = st.form_submit_button("Ask")
-
-user_query = user_query or ""
-query_words = [w.strip().lower() for w in user_query.split()]
 matching_excels = []
 excel_scores = []
 for file_path in all_files:
@@ -424,7 +398,7 @@ for file_path in all_files:
             str(meta.get("summary", "")).lower(),
             " ".join(sample_values)
         ])
-        score = sum(word in meta_text for word in query_words)
+        score = sum(word in meta_text for word in user_query.split())
         if score > 0:
             matching_excels.append(file_path)
             excel_scores.append(score)
@@ -470,6 +444,10 @@ if top_files:
     )
     st.info(f"Matching Excel files: {[os.path.basename(f) for f in matching_excels]}")
 
+    with st.form("question_form", clear_on_submit=False):
+        user_query = st.text_input("Your question:", value=st.session_state.get("last_query", ""))
+        submit = st.form_submit_button("Ask")
+
     run_excel_qa = submit or (selected_excel != st.session_state.get("last_excel")) or (user_query != st.session_state.get("last_query"))
     if run_excel_qa and selected_excel and user_query:
         meta_path = os.path.join(
@@ -507,136 +485,21 @@ if top_files:
             "reasoning": "Chart or result generated above."
         })
 else:
-    system_prompt = (
-        "You are a helpful assistant answering questions based on internal business documents. "
-        "For each question, follow this reasoning chain:\n"
-        "1. Identify the key data needed to answer the question.\n"
-        "2. Retrieve or summarize the relevant information from the provided context.\n"
-        "3. Generate a chart if it would help illustrate the answer (return a valid Chart.js config as JSON if possible).\n"
-        "4. Explain what the result or chart shows.\n"
-        "5. Suggest 1–2 possible causes or business insights that could explain the observed pattern.\n"
-        "Use the provided context to answer as best you can."
-    )
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {user_query}"}
-        ],
-        temperature=0.3
-    )
-    answer = response.choices[0].message.content.strip()
-    st.session_state.chat_history.append({"role": "user", "content": user_query})
-    st.session_state.chat_history.append({"role": "assistant", "content": answer})
+    st.write("No matching Excel files found.")
+    with st.form("question_form", clear_on_submit=False):
+        user_query = st.text_input("Your question:", value=st.session_state.get("last_query", ""))
+        submit = st.form_submit_button("Ask")
+    # You can add non-Excel Q&A logic here if needed
 
-    st.session_state.query_log.append({
-        "timestamp": datetime.now().isoformat(),
-        "question": user_query,
-        "file": None,
-        "excel_sheets": [],
-        "chart_generated": False,
-        "reasoning": answer
-    })
-
-    try:
-        chart_data = json.loads(answer)
-        if "chart_type" in chart_data and "x" in chart_data and "y" in chart_data:
-            st.write(chart_data.get("title", "Chart"))
-            if chart_data["chart_type"] == "bar":
-                df = pd.DataFrame({"x": chart_data["x"], "y": chart_data["y"]})
-                st.bar_chart(df.set_index("x"))
-        else:
-            st.write(answer)
-    except Exception:
-        st.write(answer)
-
-    with st.expander("Show supporting context"):
-        for fp in top_files_for_context:
-            meta_path = os.path.join(
-                os.path.dirname(fp),
-                "_metadata",
-                os.path.splitext(os.path.basename(fp))[0] + ".json"
-            )
-            meta = {}
-            if os.path.exists(meta_path):
-                try:
-                    with open(meta_path, "r") as jf:
-                        meta.update(json.load(jf))
-                except Exception:
-                    pass
-            st.write(f"**Source:** {meta.get('title', meta.get('source_file', os.path.basename(fp)))}")
-            st.write(f"**Category:** {meta.get('category', '')}")
-            st.write(f"**Tags:** {', '.join(meta.get('tags', []))}")
-            st.write(f"**Summary:** {meta.get('summary', '')}")
-            file_chunks = [chunk for m, chunk in all_chunks if m.get("source_file") == os.path.basename(fp)]
-            if file_chunks:
-                st.write(file_chunks[0][:500] + ("..." if len(file_chunks[0]) > 500 else ""))
-            st.write("---")
-
-with st.expander("Show Query Log"):
-    for entry in st.session_state.query_log:
-        st.write(entry)
-
-with st.container():
-    st.markdown(
-        """
-        <style>
-        .chat-container {
-            max-height: 400px;
-            overflow-y: auto;
-            padding: 1em;
-            background: #f7f7f9;
-            border-radius: 8px;
-            border: 1px solid #eee;
-        }
-        .user-msg {
-            background: #d1e7dd;
-            padding: 0.5em 1em;
-            border-radius: 12px;
-            margin-bottom: 0.5em;
-            align-self: flex-end;
-            max-width: 80%;
-        }
-        .assistant-msg {
-            background: #f8d7da;
-            padding: 0.5em 1em;
-            border-radius: 12px;
-            margin-bottom: 0.5em;
-            align-self: flex-start;
-            max-width: 80%;
-        }
-        </style>
-        <div class="chat-container">
-        """,
-        unsafe_allow_html=True,
-    )
-    for msg in reversed(st.session_state.chat_history):
-        if msg["role"] == "user":
-            st.markdown(
-                f'<div class="user-msg"><b>You:</b> {msg["content"]}</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                f'<div class="assistant-msg"><b>Assistant:</b> {msg["content"]}</div>',
-                unsafe_allow_html=True,
-            )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# --- Download buttons for per-file metadata ---
-for file_path in all_files:
-    meta_path = os.path.join(os.path.dirname(file_path), "_metadata", os.path.splitext(os.path.basename(file_path))[0] + ".json")
-    if os.path.exists(meta_path):
-        with open(meta_path, "r", encoding="utf-8") as f:
-            json_data = f.read()
-        st.download_button(
-            label=f"Download metadata for {os.path.basename(file_path)}",
-            data=json_data,
-            file_name=os.path.basename(meta_path),
-            mime="application/json"
-        )
-
-
-
-
-
+# --- Download button for global alias file ---
+if os.path.exists(GLOBAL_ALIAS_PATH):
+    with open(GLOBAL_ALIAS_PATH, "r", encoding="utf-8") as f:
+        global_alias_json = f.read()
+else:
+    global_alias_json = "{}"
+st.download_button(
+    label="Download global_column_aliases.json",
+    data=global_alias_json,
+    file_name="global_column_aliases.json",
+    mime="application/json"
+)
