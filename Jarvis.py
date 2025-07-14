@@ -341,6 +341,19 @@ for file_path in all_files:
 with open(GLOBAL_ALIAS_PATH, "w") as f:
     json.dump(updated_global_aliases, f, indent=2)
 
+# --- Download button for global alias file ---
+if os.path.exists(GLOBAL_ALIAS_PATH):
+    with open(GLOBAL_ALIAS_PATH, "r", encoding="utf-8") as f:
+        global_alias_json = f.read()
+else:
+    global_alias_json = "{}"
+st.download_button(
+    label="Download global_column_aliases.json",
+    data=global_alias_json,
+    file_name="global_column_aliases.json",
+    mime="application/json"
+)
+
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "last_excel" not in st.session_state:
@@ -352,11 +365,11 @@ if "query_log" not in st.session_state:
 
 st.header("Ask a question about your knowledge base")
 
+# --- Find matching Excel files ---
+user_query = ""
 with st.form("question_form", clear_on_submit=False):
     user_query = st.text_input("Your question:", value=st.session_state.get("last_query", ""))
     submit = st.form_submit_button("Ask")
-
-run_excel_qa = submit or (selected_excel != st.session_state.get("last_excel")) or (user_query != st.session_state.get("last_query"))
 
 user_query = user_query or ""
 query_words = [w.strip().lower() for w in user_query.split()]
@@ -457,11 +470,7 @@ if top_files:
     )
     st.info(f"Matching Excel files: {[os.path.basename(f) for f in matching_excels]}")
 
-    run_excel_qa = (
-        st.button("Ask") or
-        selected_excel != st.session_state.get("last_excel") or
-        user_query != st.session_state.get("last_query")
-    )
+    run_excel_qa = submit or (selected_excel != st.session_state.get("last_excel")) or (user_query != st.session_state.get("last_query"))
     if run_excel_qa and selected_excel and user_query:
         meta_path = os.path.join(
             os.path.dirname(selected_excel),
@@ -614,6 +623,7 @@ with st.container():
             )
     st.markdown("</div>", unsafe_allow_html=True)
 
+# --- Download buttons for per-file metadata ---
 for file_path in all_files:
     meta_path = os.path.join(os.path.dirname(file_path), "_metadata", os.path.splitext(os.path.basename(file_path))[0] + ".json")
     if os.path.exists(meta_path):
