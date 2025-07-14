@@ -1,0 +1,12 @@
+{
+  "title": "Inventory and Order Analysis",
+  "category": "Spreadsheet",
+  "tags": [
+    "inventory",
+    "orders",
+    "valuation",
+    "consumption",
+    "cost analysis"
+  ],
+  "summary": "This spreadsheet provides a comprehensive analysis of inventory and order data, including details on part numbers, descriptions, valuation basis, quantities, and values across multiple time frames. Key columns include part_no, description, valuation_basis_unit, quantity, value, and various metrics related to stock adjustments, purchase orders, and consumption. The data also covers aspects such as inventory location, material type, and financial metrics like total cost, average cost, and unit price. Additional information includes customer details, sales orders, and work orders, offering insights into inventory management and financial performance over the last 12 months."
+}
