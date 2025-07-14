@@ -22,8 +22,45 @@ from pdfminer.high_level import extract_text
 from pdf2image import convert_from_path
 import pytesseract
 import numpy as np
+import pandas as pd
 
 client = OpenAI(api_key="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")  # Replace with your real key
+
+def get_embedding(text):
+    response = client.embeddings.create(
+        model="text-embedding-ada-002",
+        input=text
+    )
+    return np.array(response.data[0].embedding)
+
+def enrich_tags(existing_tags, query_log):
+    # Add new tags from most common queries (simple example)
+    new_tags = set(existing_tags)
+    for q in query_log.get("most_common_queries", []):
+        for word in q.lower().split():
+            if word not in new_tags and len(word) > 3:
+                new_tags.add(word)
+    return list(new_tags)
+
+def profile_excel(file_path):
+    wb = openpyxl.load_workbook(file_path, read_only=True)
+    profile = {}
+    for sheet in wb.worksheets:
+        sheet_profile = {}
+        df = pd.DataFrame(sheet.values)
+        df.columns = df.iloc[0]
+        df = df[1:]
+        for col in df.columns:
+            col_data = df[col]
+            sheet_profile[str(col)] = {
+                "type": str(col_data.dtype),
+                "null_pct": float(col_data.isnull().mean()),
+                "min": col_data.min() if pd.api.types.is_numeric_dtype(col_data) else None,
+                "max": col_data.max() if pd.api.types.is_numeric_dtype(col_data) else None,
+                "sample_values": col_data.dropna().unique()[:5].tolist()
+            }
+        profile[sheet.title] = sheet_profile
+    return profile
 
 def extract_text_for_metadata(path):
     if path.endswith(".docx"):
@@ -110,20 +147,16 @@ def extract_metadata_from_docx(doc_path):
 def extract_metadata_from_xlsx(file_path):
     wb = openpyxl.load_workbook(file_path, read_only=True)
     metadata = {}
-    # Sheet names
     metadata["sheet_names"] = wb.sheetnames
-    # Columns by sheet
     columns_by_sheet = {}
     for sheet in wb.worksheets:
         headers = [cell.value for cell in next(sheet.iter_rows(max_row=1))]
         columns_by_sheet[sheet.title] = [str(h) for h in headers if h]
     metadata["columns_by_sheet"] = columns_by_sheet
-    # Flat list of all columns (optional, for easier searching)
     all_columns = []
     for cols in columns_by_sheet.values():
         all_columns.extend(cols)
     metadata["columns"] = list(set(all_columns))
-    # Optionally, extract other metadata from the first sheet
     ws = wb.active
     for row in ws.iter_rows(min_row=1, max_row=5, min_col=1, max_col=2):
         key = row[0].value
@@ -161,7 +194,7 @@ def extract_metadata_from_pdf(pdf_path):
                 metadata[key.strip().lower()] = value.strip()
     return metadata
 
-def generate_json(metadata, original_filename):
+def generate_json(metadata, original_filename, profile_data=None, embedding=None, usage_stats=None):
     return {
         "title": metadata.get("title", ""),
         "author": metadata.get("author", ""),
@@ -170,10 +203,13 @@ def generate_json(metadata, original_filename):
         "tags": metadata.get("tags", []) if isinstance(metadata.get("tags"), list)
         else [tag.strip() for tag in metadata.get("tags", "").split(',') if tag.strip()] if "tags" in metadata else [],
         "summary": metadata.get("summary", ""),
-        "source_file": original_filename
+        "source_file": original_filename,
+        "profile_data": profile_data or {},
+        "embedding": embedding.tolist() if embedding is not None else [],
+        "usage_stats": usage_stats or {"times_used": 0, "last_used": None, "most_common_queries": []}
     }
 
-def scan_and_process(base_dir):
+def scan_and_process(base_dir, query_log=None):
     print(f"Scanning {base_dir}...")
     for root, dirs, files in os.walk(base_dir):
         for file in files:
@@ -202,80 +238,43 @@ def scan_and_process(base_dir):
                 if not metadata.get(key):
                     metadata[key] = gpt_metadata.get(key, "")
 
-            json_data = generate_json(metadata, file)
+            # --- Profile Data ---
+            profile_data = {}
+            if ext == ".xlsx":
+                try:
+                    profile_data = profile_excel(full_path)
+                except Exception as e:
+                    print(f"Profile data error: {e}")
+
+            # --- Embedding ---
+            summary_text = metadata.get("summary", "")
+            embedding = get_embedding(summary_text) if summary_text else None
+
+            # --- Usage Stats ---
             meta_dir = os.path.join(root, "_metadata")
-            os.makedirs(meta_dir, exist_ok=True)
             json_file_path = os.path.join(meta_dir, f"{base_name}.json")
+            usage_stats = None
+            if os.path.exists(json_file_path):
+                try:
+                    with open(json_file_path, "r") as f:
+                        old = json.load(f)
+                        usage_stats = old.get("usage_stats", None)
+                        # Enrich tags based on query log if provided
+                        if query_log and "tags" in metadata:
+                            metadata["tags"] = enrich_tags(metadata["tags"], usage_stats or {})
+                except Exception:
+                    pass
+            else:
+                # If query_log provided, enrich tags
+                if query_log and "tags" in metadata:
+                    metadata["tags"] = enrich_tags(metadata["tags"], query_log)
+
+            json_data = generate_json(metadata, file, profile_data, embedding, usage_stats)
+            os.makedirs(meta_dir, exist_ok=True)
             with open(json_file_path, "w", encoding="utf-8") as f:
                 json.dump(json_data, f, indent=2)
             print(f"✅ Metadata saved: {json_file_path}")
 
-def extract_text_chunks_from_pdf(path, chunk_size=3000):
-    text = []
-    with pdfplumber.open(path) as pdf:
-        for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text.append(page_text)
-    full_text = "\n".join(text)
-    print(f"[DEBUG] Extracted {len(full_text)} characters from {os.path.basename(path)}")
-    chunks = [full_text[i:i+chunk_size] for i in range(0, len(full_text), chunk_size)]
-    print(f"[DEBUG] {len(chunks)} chunks extracted for {os.path.basename(path)}")
-    return chunks
-
-def extract_text_chunks_from_pdf_pypdf2(path, chunk_size=3000):
-    text = []
-    with open(path, "rb") as f:
-        reader = PyPDF2.PdfReader(f)
-        for page in reader.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text.append(page_text)
-    full_text = "\n".join(text)
-    print(f"[DEBUG][PyPDF2] Extracted {len(full_text)} characters from {os.path.basename(path)}")
-    chunks = [full_text[i:i+chunk_size] for i in range(0, len(full_text), chunk_size)]
-    print(f"[DEBUG][PyPDF2] {len(chunks)} chunks extracted for {os.path.basename(path)}")
-    if chunks:
-        print(f"First chunk (PyPDF2): {repr(chunks[0][:500])}")
-    else:
-        print("No text extracted with PyPDF2 either.")
-    return chunks
-
-def extract_text_chunks_from_pdf_pdfminer(path, chunk_size=3000):
-    try:
-        full_text = extract_text(path)
-        print(f"[DEBUG][pdfminer] Extracted {len(full_text)} characters from {os.path.basename(path)}")
-        chunks = [full_text[i:i+chunk_size] for i in range(0, len(full_text), chunk_size)]
-        print(f"[DEBUG][pdfminer] {len(chunks)} chunks extracted for {os.path.basename(path)}")
-        if chunks:
-            print(f"First chunk (pdfminer): {repr(chunks[0][:500])}")
-        else:
-            print("No text extracted with pdfminer either.")
-        return chunks
-    except Exception as e:
-        print(f"[DEBUG][pdfminer] Extraction failed: {e}")
-        return []
-
-def extract_text_chunks_from_pdf_ocr(path, chunk_size=3000, max_pages=5):
-    text = []
-    with pdfplumber.open(path) as pdf:
-        for i, page in enumerate(pdf.pages):
-            print(f"[DEBUG][OCR] Processing page {i+1}/{len(pdf.pages)}")
-            if i >= max_pages:
-                break
-            image = page.to_image(resolution=300).original
-            ocr_text = pytesseract.image_to_string(image)
-            if ocr_text:
-                text.append(ocr_text)
-    full_text = "\n".join(text)
-    print(f"[DEBUG][OCR] Extracted {len(full_text)} characters from {os.path.basename(path)}")
-    chunks = [full_text[i:i+chunk_size] for i in range(0, len(full_text), chunk_size)]
-    print(f"[DEBUG][OCR] {len(chunks)} chunks extracted for {os.path.basename(path)}")
-    if chunks:
-        print(f"First chunk (OCR): {repr(chunks[0][:500])}")
-    else:
-        print("No text extracted with OCR either.")
-    return chunks
-
 if __name__ == "__main__":
+    # Optionally, pass a query_log dict for tag enrichment
     scan_and_process("/content/drive/MyDrive/Ethos LLM/Project_Root")
