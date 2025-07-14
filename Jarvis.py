@@ -597,6 +597,18 @@ with st.container():
             )
     st.markdown("</div>", unsafe_allow_html=True)
 
+for file_path in all_files:
+    meta_path = os.path.join(os.path.dirname(file_path), "_metadata", os.path.splitext(os.path.basename(file_path))[0] + ".json")
+    if os.path.exists(meta_path):
+        with open(meta_path, "r", encoding="utf-8") as f:
+            json_data = f.read()
+        st.download_button(
+            label=f"Download metadata for {os.path.basename(file_path)}",
+            data=json_data,
+            file_name=os.path.basename(meta_path),
+            mime="application/json"
+        )
+
 
 
 
