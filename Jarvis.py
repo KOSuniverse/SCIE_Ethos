@@ -258,7 +258,10 @@ def excel_qa(file_path, user_query, column_aliases=None):
         exec(code, {}, local_vars)
         if "result" in local_vars:
             st.write("✅ Result:")
-            st.dataframe(local_vars["result"])
+            if isinstance(local_vars["result"], pd.DataFrame):
+                st.dataframe(local_vars["result"])
+            else:
+                st.write(local_vars["result"])
         st.pyplot(plt)
     except Exception as e:
         st.warning("⚠️ GPT-generated code did not execute successfully.")
