@@ -301,13 +301,16 @@ for file_path in all_files:
         for chunk in chunk_text(text):
             all_chunks.append((meta, chunk))
         # --- Store embedding for semantic search ---
-        summary_text = meta.get("summary", "")
-        if summary_text:
+        embedding = None
+        if "embedding" in meta and meta["embedding"]:
+            embedding = np.array(meta["embedding"])
+        elif meta.get("summary", ""):
             try:
-                embedding = get_embedding(summary_text)
-                embedding_cache[file_path] = embedding
+                embedding = get_embedding(meta["summary"])
             except Exception as e:
                 print(f"Embedding failed for {file_path}: {e}")
+        if embedding is not None:
+            embedding_cache[file_path] = embedding
 
 # --- Q&A Section ---
 if "chat_history" not in st.session_state:
