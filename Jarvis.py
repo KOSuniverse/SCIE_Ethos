@@ -18,11 +18,9 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 PROJECT_ROOT = "./Project_Root"
 GLOBAL_ALIAS_PATH = os.path.join(PROJECT_ROOT, "global_column_aliases.json")
 
-# --- Embedding utilities ---
 embedding_cache = {}
 
 def get_embedding(text):
-    # Use OpenAI's embedding API (text-embedding-ada-002 is fast & cheap)
     response = client.embeddings.create(
         model="text-embedding-ada-002",
         input=text
@@ -32,7 +30,6 @@ def get_embedding(text):
 def cosine_similarity(a, b):
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
-# --- Column-to-Concept Mapping ---
 def map_columns_to_concepts(columns, global_aliases=None):
     unmapped = [col for col in columns if not global_aliases or col not in global_aliases]
     mapping = global_aliases.copy() if global_aliases else {}
@@ -56,14 +53,10 @@ def map_columns_to_concepts(columns, global_aliases=None):
             pass
     return mapping
 
-# --- Feedback loop prep ---
 def profile_file_usage(file_path, tags):
-    # Placeholder for future enrichment logic
     pass
 
-# --- File profiling hook ---
 def profile_excel_file(file_path):
-    # Placeholder for profiling logic (e.g., stats, column types, missing values)
     pass
 
 def extract_text_for_metadata(path, max_ocr_pages=5):
@@ -78,12 +71,10 @@ def extract_text_for_metadata(path, max_ocr_pages=5):
         for sheet in wb.worksheets:
             sheet_names.append(sheet.title)
             text.append(f"Sheet: {sheet.title}")
-            # Only get headers (first row)
             headers = [cell.value for cell in next(sheet.iter_rows(max_row=1))]
             columns_by_sheet[sheet.title] = [str(h) for h in headers if h]
             if headers:
                 text.append("Columns: " + " | ".join([str(h) for h in headers if h]))
-            # Do NOT read sample rows for speed!
         return "\n".join(text), sheet_names, columns_by_sheet
     elif path.endswith(".pptx"):
         prs = Presentation(path)
@@ -94,17 +85,12 @@ def extract_text_for_metadata(path, max_ocr_pages=5):
                     text.append(shape.text)
         return "\n".join(text)
     elif path.endswith(".pdf"):
-        # Define cache path
         cache_dir = os.path.join(os.path.dirname(path), "_ocr_cache")
         os.makedirs(cache_dir, exist_ok=True)
         cache_file = os.path.join(cache_dir, os.path.splitext(os.path.basename(path))[0] + ".txt")
-
-        # If cache exists, use it
         if os.path.exists(cache_file):
             with open(cache_file, "r", encoding="utf-8") as f:
                 return f.read()
-
-        # Otherwise, extract text and cache it
         text = []
         with pdfplumber.open(path) as pdf:
             for page in pdf.pages:
@@ -116,8 +102,6 @@ def extract_text_for_metadata(path, max_ocr_pages=5):
             with open(cache_file, "w", encoding="utf-8") as f:
                 f.write(result)
             return result
-
-        # Fallback to OCR if no text extracted
         ocr_text = []
         with pdfplumber.open(path) as pdf:
             for i, page in enumerate(pdf.pages):
@@ -156,16 +140,21 @@ def get_relevant_chunks(query, all_chunks, top_k=4):
     query_words = query.lower().split()
     scored = []
     for meta, chunk in all_chunks:
+        category_value = meta.get("category", "")
         category_words = []
-        if "category" in meta and meta["category"]:
-            if isinstance(meta["category"], list):
-                for cat in meta["category"]:
+        if category_value:
+            if isinstance(category_value, list):
+                for cat in category_value:
                     category_words.extend([w.strip().lower() for w in str(cat).replace(",", " ").split() if w.strip()])
             else:
-                category_words = [w.strip().lower() for w in str(meta["category"]).replace(",", " ").split() if w.strip()]
+                category_words = [w.strip().lower() for w in str(category_value).replace(",", " ").split() if w.strip()]
+        tag_value = meta.get("tags", [])
         tag_words = []
-        if "tags" in meta and meta["tags"]:
-            tag_words = [w.strip().lower() for w in meta["tags"] if w.strip()]
+        if tag_value:
+            if isinstance(tag_value, list):
+                tag_words = [w.strip().lower() for w in tag_value if w.strip()]
+            else:
+                tag_words = [w.strip().lower() for w in str(tag_value).replace(",", " ").split() if w.strip()]
         meta_text = " ".join([
             str(meta.get("title", "")).lower(),
             " ".join(category_words),
@@ -227,7 +216,6 @@ def excel_qa(file_path, user_query, column_aliases=None):
     import re
 
     df = pd.read_excel(file_path)
-    # --- Auto-visual triggering ---
     auto_chart = any(word in user_query.lower() for word in ["trend", "compare", "distribution", "growth", "pattern", "chart", "plot", "visual"])
     prompt = (
         f"Column aliases for this file: {json.dumps(column_aliases or {})}\n"
@@ -259,7 +247,6 @@ def excel_qa(file_path, user_query, column_aliases=None):
     code_match = re.search(r"```(?:python)?(.*?)```", answer, re.DOTALL)
     code = code_match.group(1).strip() if code_match else answer.strip()
 
-    # Extract explanation text after the code block
     explanation = ""
     if code_match:
         explanation = answer[code_match.end():].strip()
@@ -278,7 +265,6 @@ def excel_qa(file_path, user_query, column_aliases=None):
         st.text(code)
         st.error(str(e))
 
-    # Show the explanation text if present
     if explanation:
         st.markdown(f"**Explanation:** {explanation}")
 
@@ -298,7 +284,7 @@ for file_path in all_files:
     max_ocr_pages = 5 if ext == ".pdf" else 0
     if ext == ".xlsx":
         text, sheet_names, columns_by_sheet = extract_text_for_metadata(file_path, max_ocr_pages=max_ocr_pages)
-        profile_excel_file(file_path)  # File profiling hook
+        profile_excel_file(file_path)
     else:
         text = extract_text_for_metadata(file_path, max_ocr_pages=max_ocr_pages)
         sheet_names, columns_by_sheet = [], {}
@@ -307,17 +293,13 @@ for file_path in all_files:
         if ext == ".xlsx":
             meta["sheet_names"] = sheet_names
             meta["columns_by_sheet"] = columns_by_sheet
-            # Optionally, add a flat list of all columns for easier searching
             all_columns = []
             for cols in columns_by_sheet.values():
                 all_columns.extend(cols)
             meta["columns"] = list(set(all_columns))
-            # --- Column alias mapping ---
             column_aliases = map_columns_to_concepts(meta["columns"], updated_global_aliases)
             meta["column_aliases"] = column_aliases
-            # Update global alias dictionary
             updated_global_aliases.update(column_aliases)
-        # Load or generate metadata
         meta_path = os.path.join(os.path.dirname(file_path), "_metadata", os.path.splitext(os.path.basename(file_path))[0] + ".json")
         if os.path.exists(meta_path):
             try:
@@ -326,11 +308,9 @@ for file_path in all_files:
             except Exception:
                 pass
         else:
-            # Generate metadata if not present
             try:
                 metadata = auto_generate_metadata(text)
                 meta.update(metadata)
-                # Save for future use
                 meta_dir = os.path.join(os.path.dirname(file_path), "_metadata")
                 os.makedirs(meta_dir, exist_ok=True)
                 with open(meta_path, "w") as jf:
@@ -339,7 +319,6 @@ for file_path in all_files:
                 pass
         for chunk in chunk_text(text):
             all_chunks.append((meta, chunk))
-        # --- Store embedding for semantic search ---
         embedding = None
         if "embedding" in meta and meta["embedding"]:
             embedding = np.array(meta["embedding"])
@@ -351,11 +330,9 @@ for file_path in all_files:
         if embedding is not None:
             embedding_cache[file_path] = embedding
 
-# --- Save updated global column aliases ---
 with open(GLOBAL_ALIAS_PATH, "w") as f:
     json.dump(updated_global_aliases, f, indent=2)
 
-# --- Q&A Section ---
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "last_excel" not in st.session_state:
@@ -386,17 +363,21 @@ for file_path in all_files:
                     meta.update(json.load(jf))
             except Exception:
                 pass
-        # Normalize category and tags
+        category_value = meta.get("category", "")
         category_words = []
-        if "category" in meta and meta["category"]:
-            if isinstance(meta["category"], list):
-                for cat in meta["category"]:
+        if category_value:
+            if isinstance(category_value, list):
+                for cat in category_value:
                     category_words.extend([w.strip().lower() for w in str(cat).replace(",", " ").split() if w.strip()])
             else:
-                category_words = [w.strip().lower() for w in str(meta["category"]).replace(",", " ").split() if w.strip()]
+                category_words = [w.strip().lower() for w in str(category_value).replace(",", " ").split() if w.strip()]
+        tag_value = meta.get("tags", [])
         tag_words = []
-        if "tags" in meta and meta["tags"]:
-            tag_words = [w.strip().lower() for w in meta["tags"] if w.strip()]
+        if tag_value:
+            if isinstance(tag_value, list):
+                tag_words = [w.strip().lower() for w in tag_value if w.strip()]
+            else:
+                tag_words = [w.strip().lower() for w in str(tag_value).replace(",", " ").split() if w.strip()]
         sheet_names = meta.get("sheet_names", [])
         columns = meta.get("columns", [])
         sample_values = []
@@ -422,7 +403,6 @@ for file_path in all_files:
             matching_excels.append(file_path)
             excel_scores.append(score)
 
-# --- Semantic matching ---
 query_embedding = get_embedding(user_query) if user_query else None
 semantic_scores = []
 for file_path in all_files:
@@ -433,7 +413,6 @@ for file_path in all_files:
         score = 0.0
     semantic_scores.append((file_path, score))
 
-# --- Hybrid scoring ---
 hybrid_scores = []
 for i, file_path in enumerate(all_files):
     keyword_score = excel_scores[i] if file_path in matching_excels else 0
@@ -441,17 +420,15 @@ for i, file_path in enumerate(all_files):
     hybrid_score = 0.5 * keyword_score + 0.5 * semantic_score
     hybrid_scores.append((file_path, hybrid_score))
 
-# Sort files by hybrid score
 hybrid_scores.sort(key=lambda x: x[1], reverse=True)
 top_files = [fp for fp, score in hybrid_scores if score > 0]
 
-# --- Multi-file reasoning: combine top N files for context ---
 N = 3
 top_files_for_context = [fp for fp, score in hybrid_scores[:N] if score > 0]
 context_chunks = []
 for fp in top_files_for_context:
     context_chunks.extend([chunk for meta, chunk in all_chunks if meta.get("source_file") == os.path.basename(fp)])
-context = "\n\n".join(context_chunks[:4000])  # Limit context size
+context = "\n\n".join(context_chunks[:4000])
 
 selected_excel = None
 if top_files:
@@ -463,14 +440,12 @@ if top_files:
     )
     st.info(f"Matching Excel files: {[os.path.basename(f) for f in matching_excels]}")
 
-    # Only run excel_qa if the file or question changed, or button pressed
     run_excel_qa = (
         st.button("Ask") or
         selected_excel != st.session_state.get("last_excel") or
         user_query != st.session_state.get("last_query")
     )
     if run_excel_qa and selected_excel and user_query:
-        # Pass column_aliases to excel_qa
         meta_path = os.path.join(
             os.path.dirname(selected_excel),
             "_metadata",
@@ -487,12 +462,10 @@ if top_files:
         excel_qa(selected_excel, user_query, column_aliases)
         st.session_state.last_excel = selected_excel
         st.session_state.last_query = user_query
-        profile_file_usage(selected_excel, meta.get("tags", []))  # Feedback loop prep
-        # Only append to chat history if this is a new question
+        profile_file_usage(selected_excel, meta.get("tags", []))
         if st.session_state.chat_history == [] or st.session_state.chat_history[-1]["content"] != user_query:
             st.session_state.chat_history.append({"role": "user", "content": user_query})
             st.session_state.chat_history.append({"role": "assistant", "content": "Chart or result generated above."})
-        # --- LOG QUERY ---
         try:
             excel_file = selected_excel
             excel_sheets = list(pd.ExcelFile(selected_excel).sheet_names)
@@ -504,11 +477,10 @@ if top_files:
             "question": user_query,
             "file": excel_file,
             "excel_sheets": excel_sheets,
-            "chart_generated": True,  # You can refine this if you detect chart creation
-            "reasoning": "Chart or result generated above."  # Optionally extract from LLM output
+            "chart_generated": True,
+            "reasoning": "Chart or result generated above."
         })
 else:
-    # Use multi-file context for document Q&A
     system_prompt = (
         "You are a helpful assistant answering questions based on internal business documents. "
         "For each question, follow this reasoning chain:\n"
@@ -531,7 +503,6 @@ else:
     st.session_state.chat_history.append({"role": "user", "content": user_query})
     st.session_state.chat_history.append({"role": "assistant", "content": answer})
 
-    # --- LOG QUERY ---
     st.session_state.query_log.append({
         "timestamp": datetime.now().isoformat(),
         "question": user_query,
@@ -555,7 +526,6 @@ else:
 
     with st.expander("Show supporting context"):
         for fp in top_files_for_context:
-            # Show metadata for each file used in context
             meta_path = os.path.join(
                 os.path.dirname(fp),
                 "_metadata",
@@ -572,18 +542,15 @@ else:
             st.write(f"**Category:** {meta.get('category', '')}")
             st.write(f"**Tags:** {', '.join(meta.get('tags', []))}")
             st.write(f"**Summary:** {meta.get('summary', '')}")
-            # Show first chunk for preview
             file_chunks = [chunk for m, chunk in all_chunks if m.get("source_file") == os.path.basename(fp)]
             if file_chunks:
                 st.write(file_chunks[0][:500] + ("..." if len(file_chunks[0]) > 500 else ""))
             st.write("---")
 
-# --- Query Log Display ---
 with st.expander("Show Query Log"):
     for entry in st.session_state.query_log:
         st.write(entry)
 
-# Place this where you want the chat to appear (after processing the question)
 with st.container():
     st.markdown(
         """
@@ -617,7 +584,6 @@ with st.container():
         """,
         unsafe_allow_html=True,
     )
-    # Show most recent messages at the top
     for msg in reversed(st.session_state.chat_history):
         if msg["role"] == "user":
             st.markdown(
