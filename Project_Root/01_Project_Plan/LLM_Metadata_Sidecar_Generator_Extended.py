@@ -17,14 +17,12 @@ import openpyxl
 from pptx import Presentation
 import pdfplumber
 from openai import OpenAI
-import PyPDF2
-from pdfminer.high_level import extract_text
-from pdf2image import convert_from_path
-import pytesseract
 import numpy as np
 import pandas as pd
 
 client = OpenAI(api_key="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")  # Replace with your real key
+
+GLOBAL_ALIAS_PATH = "./Project_Root/global_column_aliases.json"
 
 def get_embedding(text):
     response = client.embeddings.create(
@@ -34,13 +32,35 @@ def get_embedding(text):
     return np.array(response.data[0].embedding)
 
 def enrich_tags(existing_tags, query_log):
-    # Add new tags from most common queries (simple example)
     new_tags = set(existing_tags)
     for q in query_log.get("most_common_queries", []):
         for word in q.lower().split():
             if word not in new_tags and len(word) > 3:
                 new_tags.add(word)
     return list(new_tags)
+
+def map_columns_to_concepts(columns, global_aliases=None):
+    unmapped = [col for col in columns if not global_aliases or col not in global_aliases]
+    mapping = global_aliases.copy() if global_aliases else {}
+    if unmapped:
+        prompt = (
+            "Map the following Excel column headers to standard business concepts. "
+            "Return a JSON dictionary where each key is the original column name and each value is a standard concept "
+            "(e.g., 'quantity', 'part_number', 'location'). If a header is junk or unrecognizable, map it to 'ignore'.\n\n"
+            f"Columns: {unmapped}"
+        )
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2
+        )
+        raw = response.choices[0].message.content.strip()
+        try:
+            new_mapping = json.loads(raw)
+            mapping.update(new_mapping)
+        except Exception:
+            pass
+    return mapping
 
 def profile_excel(file_path):
     wb = openpyxl.load_workbook(file_path, read_only=True)
@@ -71,7 +91,7 @@ def extract_text_for_metadata(path):
         text = []
         for sheet in wb.worksheets:
             text.append(f"Sheet: {sheet.title}")
-            for row in sheet.iter_rows(max_row=5):  # Get first 5 rows for context
+            for row in sheet.iter_rows(max_row=5):
                 row_text = [str(cell.value) for cell in row if cell.value]
                 if row_text:
                     text.append(" | ".join(row_text))
@@ -194,7 +214,7 @@ def extract_metadata_from_pdf(pdf_path):
                 metadata[key.strip().lower()] = value.strip()
     return metadata
 
-def generate_json(metadata, original_filename, profile_data=None, embedding=None, usage_stats=None):
+def generate_json(metadata, original_filename, profile_data=None, embedding=None, usage_stats=None, column_aliases=None):
     return {
         "title": metadata.get("title", ""),
         "author": metadata.get("author", ""),
@@ -206,11 +226,22 @@ def generate_json(metadata, original_filename, profile_data=None, embedding=None
         "source_file": original_filename,
         "profile_data": profile_data or {},
         "embedding": embedding.tolist() if embedding is not None else [],
-        "usage_stats": usage_stats or {"times_used": 0, "last_used": None, "most_common_queries": []}
+        "usage_stats": usage_stats or {"times_used": 0, "last_used": None, "most_common_queries": []},
+        "column_aliases": column_aliases or {}
     }
 
 def scan_and_process(base_dir, query_log=None):
     print(f"Scanning {base_dir}...")
+
+    # --- Load global column aliases ---
+    if os.path.exists(GLOBAL_ALIAS_PATH):
+        with open(GLOBAL_ALIAS_PATH, "r") as f:
+            global_aliases = json.load(f)
+    else:
+        global_aliases = {}
+
+    updated_global_aliases = global_aliases.copy()
+
     for root, dirs, files in os.walk(base_dir):
         for file in files:
             full_path = os.path.join(root, file)
@@ -229,28 +260,27 @@ def scan_and_process(base_dir, query_log=None):
             else:
                 continue
 
-            # Always try to fill in missing fields (especially summary) with GPT
             raw_text = extract_text_for_metadata(full_path)
             gpt_metadata = auto_generate_metadata(raw_text[:3000] if raw_text else "")
 
-            # Merge structured metadata and GPT metadata (GPT fills in missing fields)
             for key in ["title", "category", "tags", "summary"]:
                 if not metadata.get(key):
                     metadata[key] = gpt_metadata.get(key, "")
 
-            # --- Profile Data ---
             profile_data = {}
+            column_aliases = {}
             if ext == ".xlsx":
                 try:
                     profile_data = profile_excel(full_path)
                 except Exception as e:
                     print(f"Profile data error: {e}")
+                # --- Column alias mapping ---
+                column_aliases = map_columns_to_concepts(metadata["columns"], updated_global_aliases)
+                updated_global_aliases.update(column_aliases)
 
-            # --- Embedding ---
             summary_text = metadata.get("summary", "")
             embedding = get_embedding(summary_text) if summary_text else None
 
-            # --- Usage Stats ---
             meta_dir = os.path.join(root, "_metadata")
             json_file_path = os.path.join(meta_dir, f"{base_name}.json")
             usage_stats = None
@@ -259,22 +289,23 @@ def scan_and_process(base_dir, query_log=None):
                     with open(json_file_path, "r") as f:
                         old = json.load(f)
                         usage_stats = old.get("usage_stats", None)
-                        # Enrich tags based on query log if provided
                         if query_log and "tags" in metadata:
                             metadata["tags"] = enrich_tags(metadata["tags"], usage_stats or {})
                 except Exception:
                     pass
             else:
-                # If query_log provided, enrich tags
                 if query_log and "tags" in metadata:
                     metadata["tags"] = enrich_tags(metadata["tags"], query_log)
 
-            json_data = generate_json(metadata, file, profile_data, embedding, usage_stats)
+            json_data = generate_json(metadata, file, profile_data, embedding, usage_stats, column_aliases)
             os.makedirs(meta_dir, exist_ok=True)
             with open(json_file_path, "w", encoding="utf-8") as f:
                 json.dump(json_data, f, indent=2)
             print(f"✅ Metadata saved: {json_file_path}")
 
+    # --- Save updated global column aliases ---
+    with open(GLOBAL_ALIAS_PATH, "w") as f:
+        json.dump(updated_global_aliases, f, indent=2)
+
 if __name__ == "__main__":
-    # Optionally, pass a query_log dict for tag enrichment
     scan_and_process("/content/drive/MyDrive/Ethos LLM/Project_Root")
