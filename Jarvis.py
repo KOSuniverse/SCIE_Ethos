@@ -136,8 +136,10 @@ def chunk_text(text, chunk_size=2000, overlap=200):
         i += chunk_size - overlap
     return chunks
 
-def get_relevant_chunks(query, all_chunks, top_k=4):
-    query_words = query.lower().split()
+def get_relevant_chunks(query, all_chunks, top_k=10):
+    query_lower = query.lower()
+    show_all = any(kw in query_lower for kw in ["all data", "all rows", "full table", "everything", "entire"])
+    query_words = query_lower.split()
     scored = []
     for meta, chunk in all_chunks:
         category_value = meta.get("category", "")
@@ -168,7 +170,10 @@ def get_relevant_chunks(query, all_chunks, top_k=4):
         score = sum(word in chunk_text_l or word in meta_text for word in query_words)
         scored.append((score, meta, chunk))
     scored = sorted(scored, reverse=True, key=lambda x: x[0])
-    return [(meta, chunk) for score, meta, chunk in scored[:top_k] if score > 0] or scored[:top_k]
+    if show_all:
+        return [(meta, chunk) for score, meta, chunk in scored if score > 0] or scored
+    else:
+        return [(meta, chunk) for score, meta, chunk in scored[:top_k] if score > 0] or scored[:top_k]
 
 def auto_generate_metadata(prompt_text):
     response = client.chat.completions.create(
@@ -273,10 +278,14 @@ def excel_qa(file_path, user_query, column_aliases=None):
 
 # --- Load global column aliases ---
 if os.path.exists(GLOBAL_ALIAS_PATH):
-    with open(GLOBAL_ALIAS_PATH, "r") as f:
-        global_aliases = json.load(f)
-else:
-    global_aliases = {}
+    with open(GLOBAL_ALIAS_PATH, "r", encoding="utf-8") as f:
+        global_alias_json = f.read()
+    st.download_button(
+        label="Download global_column_aliases.json",
+        data=global_alias_json,
+        file_name="global_column_aliases.json",
+        mime="application/json"
+    )
 
 # --- Gather all chunks from all files ---
 all_files = find_all_files(PROJECT_ROOT)
@@ -347,7 +356,12 @@ if "query_log" not in st.session_state:
 
 st.header("Ask a question about your knowledge base")
 
-user_query = st.text_input("Your question:", value=st.session_state.get("last_query", ""))
+with st.form("question_form", clear_on_submit=False):
+    user_query = st.text_input("Your question:", value=st.session_state.get("last_query", ""))
+    submit = st.form_submit_button("Ask")
+
+run_excel_qa = submit or (selected_excel != st.session_state.get("last_excel")) or (user_query != st.session_state.get("last_query"))
+
 user_query = user_query or ""
 query_words = [w.strip().lower() for w in user_query.split()]
 matching_excels = []
