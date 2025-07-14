@@ -279,13 +279,9 @@ def excel_qa(file_path, user_query, column_aliases=None):
 # --- Load global column aliases ---
 if os.path.exists(GLOBAL_ALIAS_PATH):
     with open(GLOBAL_ALIAS_PATH, "r", encoding="utf-8") as f:
-        global_alias_json = f.read()
-    st.download_button(
-        label="Download global_column_aliases.json",
-        data=global_alias_json,
-        file_name="global_column_aliases.json",
-        mime="application/json"
-    )
+        global_aliases = json.load(f)
+else:
+    global_aliases = {}
 
 # --- Gather all chunks from all files ---
 all_files = find_all_files(PROJECT_ROOT)
