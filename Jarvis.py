@@ -13,10 +13,33 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 PROJECT_ROOT = "./Project_Root"
+
+# --- Embedding utilities ---
+embedding_cache = {}
+
+def get_embedding(text):
+    # Use OpenAI's embedding API (text-embedding-ada-002 is fast & cheap)
+    response = client.embeddings.create(
+        model="text-embedding-ada-002",
+        input=text
+    )
+    return np.array(response.data[0].embedding)
+
+def cosine_similarity(a, b):
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+# --- Feedback loop prep ---
+def profile_file_usage(file_path, tags):
+    # Placeholder for future enrichment logic
+    pass
+
+# --- File profiling hook ---
+def profile_excel_file(file_path):
+    # Placeholder for profiling logic (e.g., stats, column types, missing values)
+    pass
 
 def extract_text_for_metadata(path, max_ocr_pages=5):
     if path.endswith(".docx"):
@@ -179,16 +202,22 @@ def excel_qa(file_path, user_query):
     import re
 
     df = pd.read_excel(file_path)
+    # --- Auto-visual triggering ---
+    auto_chart = any(word in user_query.lower() for word in ["trend", "compare", "distribution", "growth", "pattern", "chart", "plot", "visual"])
     prompt = (
         f"You are a data analyst working with the following Excel file.\n"
         f"Columns: {list(df.columns)}\n"
         f"Sample data:\n{df.head(5).to_string(index=False)}\n\n"
         f"User question: {user_query}\n\n"
+        "Follow this reasoning chain:\n"
+        "1. Identify the key data needed to answer the question.\n"
+        "2. Retrieve or summarize the relevant data.\n"
+        f"3. {'Generate a chart if it would help illustrate the answer (use matplotlib/seaborn and show it).' if auto_chart else 'Generate a chart if useful.'}\n"
+        "4. Explain what the result or chart shows.\n"
+        "5. Suggest 1–2 possible causes or business insights that could explain the observed pattern.\n\n"
         "Return only valid Python code that uses the provided 'df' DataFrame (do NOT reload or create new data). "
-        "If a chart is required, generate and show it using matplotlib/seaborn. "
         "Assign any tabular result to a variable named 'result'.\n"
-        "After the code block, provide a brief summary of what the chart or table shows. "
-        "Then, in a separate paragraph, suggest at least two possible causes or business insights that could explain the observed pattern, even if you have to speculate based on typical business scenarios."
+        "After the code block, provide your explanation and insights."
     )
 
     response = client.chat.completions.create(
@@ -235,6 +264,7 @@ for file_path in all_files:
     max_ocr_pages = 5 if ext == ".pdf" else 0
     if ext == ".xlsx":
         text, sheet_names, columns_by_sheet = extract_text_for_metadata(file_path, max_ocr_pages=max_ocr_pages)
+        profile_excel_file(file_path)  # File profiling hook
     else:
         text = extract_text_for_metadata(file_path, max_ocr_pages=max_ocr_pages)
         sheet_names, columns_by_sheet = [], {}
@@ -270,8 +300,14 @@ for file_path in all_files:
                 pass
         for chunk in chunk_text(text):
             all_chunks.append((meta, chunk))
-
-# (No st.write for total chunks or sample chunk here)
+        # --- Store embedding for semantic search ---
+        summary_text = meta.get("summary", "")
+        if summary_text:
+            try:
+                embedding = get_embedding(summary_text)
+                embedding_cache[file_path] = embedding
+            except Exception as e:
+                print(f"Embedding failed for {file_path}: {e}")
 
 # --- Q&A Section ---
 if "chat_history" not in st.session_state:
@@ -280,6 +316,8 @@ if "last_excel" not in st.session_state:
     st.session_state.last_excel = None
 if "last_query" not in st.session_state:
     st.session_state.last_query = None
+if "query_log" not in st.session_state:
+    st.session_state.query_log = []
 
 st.header("Ask a question about your knowledge base")
 
@@ -338,13 +376,43 @@ for file_path in all_files:
             matching_excels.append(file_path)
             excel_scores.append(score)
 
+# --- Semantic matching ---
+query_embedding = get_embedding(user_query) if user_query else None
+semantic_scores = []
+for file_path in all_files:
+    emb = embedding_cache.get(file_path)
+    if query_embedding is not None and emb is not None:
+        score = cosine_similarity(query_embedding, emb)
+    else:
+        score = 0.0
+    semantic_scores.append((file_path, score))
+
+# --- Hybrid scoring ---
+hybrid_scores = []
+for i, file_path in enumerate(all_files):
+    keyword_score = excel_scores[i] if file_path in matching_excels else 0
+    semantic_score = dict(semantic_scores).get(file_path, 0)
+    hybrid_score = 0.5 * keyword_score + 0.5 * semantic_score
+    hybrid_scores.append((file_path, hybrid_score))
+
+# Sort files by hybrid score
+hybrid_scores.sort(key=lambda x: x[1], reverse=True)
+top_files = [fp for fp, score in hybrid_scores if score > 0]
+
+# --- Multi-file reasoning: combine top N files for context ---
+N = 3
+top_files_for_context = [fp for fp, score in hybrid_scores[:N] if score > 0]
+context_chunks = []
+for fp in top_files_for_context:
+    context_chunks.extend([chunk for meta, chunk in all_chunks if meta.get("source_file") == os.path.basename(fp)])
+context = "\n\n".join(context_chunks[:4000])  # Limit context size
+
 selected_excel = None
-if matching_excels:
-    best_idx = int(np.argmax(excel_scores))
+if top_files:
     selected_excel = st.selectbox(
         "Select an Excel file to answer your question:",
-        matching_excels,
-        index=best_idx,
+        top_files,
+        index=0,
         key="excel_select"
     )
     st.info(f"Matching Excel files: {[os.path.basename(f) for f in matching_excels]}")
@@ -359,15 +427,36 @@ if matching_excels:
         excel_qa(selected_excel, user_query)
         st.session_state.last_excel = selected_excel
         st.session_state.last_query = user_query
+        profile_file_usage(selected_excel, meta.get("tags", []))  # Feedback loop prep
         # Only append to chat history if this is a new question
         if st.session_state.chat_history == [] or st.session_state.chat_history[-1]["content"] != user_query:
             st.session_state.chat_history.append({"role": "user", "content": user_query})
             st.session_state.chat_history.append({"role": "assistant", "content": "Chart or result generated above."})
+        # --- LOG QUERY ---
+        try:
+            excel_file = selected_excel
+            excel_sheets = list(pd.ExcelFile(selected_excel).sheet_names)
+        except Exception:
+            excel_file = selected_excel
+            excel_sheets = []
+        st.session_state.query_log.append({
+            "timestamp": datetime.now().isoformat(),
+            "question": user_query,
+            "file": excel_file,
+            "excel_sheets": excel_sheets,
+            "chart_generated": True,  # You can refine this if you detect chart creation
+            "reasoning": "Chart or result generated above."  # Optionally extract from LLM output
+        })
 else:
-    relevant = get_relevant_chunks(user_query, all_chunks, top_k=4)
-    context = "\n\n".join(chunk for meta, chunk in relevant)
+    # Use multi-file context for document Q&A
     system_prompt = (
         "You are a helpful assistant answering questions based on internal business documents. "
+        "For each question, follow this reasoning chain:\n"
+        "1. Identify the key data needed to answer the question.\n"
+        "2. Retrieve or summarize the relevant information from the provided context.\n"
+        "3. Generate a chart if it would help illustrate the answer (return a valid Chart.js config as JSON if possible).\n"
+        "4. Explain what the result or chart shows.\n"
+        "5. Suggest 1–2 possible causes or business insights that could explain the observed pattern.\n"
         "Use the provided context to answer as best you can."
     )
     response = client.chat.completions.create(
@@ -382,6 +471,16 @@ else:
     st.session_state.chat_history.append({"role": "user", "content": user_query})
     st.session_state.chat_history.append({"role": "assistant", "content": answer})
 
+    # --- LOG QUERY ---
+    st.session_state.query_log.append({
+        "timestamp": datetime.now().isoformat(),
+        "question": user_query,
+        "file": None,
+        "excel_sheets": [],
+        "chart_generated": False,
+        "reasoning": answer
+    })
+
     try:
         chart_data = json.loads(answer)
         if "chart_type" in chart_data and "x" in chart_data and "y" in chart_data:
@@ -395,13 +494,34 @@ else:
         st.write(answer)
 
     with st.expander("Show supporting context"):
-        for meta, chunk in relevant:
-            st.write(f"**Source:** {meta.get('title', meta.get('source_file', 'N/A'))}")
+        for fp in top_files_for_context:
+            # Show metadata for each file used in context
+            meta_path = os.path.join(
+                os.path.dirname(fp),
+                "_metadata",
+                os.path.splitext(os.path.basename(fp))[0] + ".json"
+            )
+            meta = {}
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path, "r") as jf:
+                        meta.update(json.load(jf))
+                except Exception:
+                    pass
+            st.write(f"**Source:** {meta.get('title', meta.get('source_file', os.path.basename(fp)))}")
             st.write(f"**Category:** {meta.get('category', '')}")
             st.write(f"**Tags:** {', '.join(meta.get('tags', []))}")
             st.write(f"**Summary:** {meta.get('summary', '')}")
-            st.write(chunk[:500] + ("..." if len(chunk) > 500 else ""))
+            # Show first chunk for preview
+            file_chunks = [chunk for m, chunk in all_chunks if m.get("source_file") == os.path.basename(fp)]
+            if file_chunks:
+                st.write(file_chunks[0][:500] + ("..." if len(file_chunks[0]) > 500 else ""))
             st.write("---")
+
+# --- Query Log Display ---
+with st.expander("Show Query Log"):
+    for entry in st.session_state.query_log:
+        st.write(entry)
 
 # Place this where you want the chat to appear (after processing the question)
 with st.container():
