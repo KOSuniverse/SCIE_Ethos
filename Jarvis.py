@@ -414,8 +414,12 @@ for file_path in all_files:
     semantic_scores.append((file_path, score))
 
 hybrid_scores = []
-for i, file_path in enumerate(all_files):
-    keyword_score = excel_scores[i] if file_path in matching_excels else 0
+for file_path in all_files:
+    if file_path in matching_excels:
+        idx = matching_excels.index(file_path)
+        keyword_score = excel_scores[idx]
+    else:
+        keyword_score = 0
     semantic_score = dict(semantic_scores).get(file_path, 0)
     hybrid_score = 0.5 * keyword_score + 0.5 * semantic_score
     hybrid_scores.append((file_path, hybrid_score))
