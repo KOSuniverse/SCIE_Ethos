@@ -62,7 +62,7 @@ def update_global_aliases(new_aliases):
 # --- LIST SUPPORTED DOCUMENTS ---
 def list_all_supported_files(extensions=(".xlsx", ".pdf", ".docx", ".pptx")):
     ctx = get_sharepoint_context()
-    root = ctx.web.get_folder_by_server_relative_url("Shared Documents")
+    root = ctx.web.get_folder_by_server_relative_url("Documents")
     file_list = []
 
     def traverse(folder):
