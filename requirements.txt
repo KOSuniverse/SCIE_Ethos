@@ -13,3 +13,4 @@ seaborn
 Pillow
 tqdm
 scikit-learn
+office365-rest-python-client
