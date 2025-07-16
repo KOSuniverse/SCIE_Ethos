@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime
 from io import BytesIO
 import streamlit as st
 from office365.sharepoint.client_context import ClientContext
@@ -22,6 +23,11 @@ def build_full_metadata_path(filename):
 def get_global_alias_path():
     return st.secrets["sharepoint"]["alias_file_path"]
 
+def get_learned_answers_path():
+    # Return the SharePoint path for learned_answers.json
+    # Example:
+    return st.secrets["sharepoint"]["learned_answers_path"]
+
 # --- METADATA SIDELOAD ---
 def load_metadata(filename):
     ctx = get_sharepoint_context()
@@ -39,23 +45,37 @@ def save_metadata(filename, data):
 
 # --- GLOBAL ALIAS DICT ---
 def load_global_aliases():
-    ctx = get_sharepoint_context()
-    file_url = get_global_alias_path()
     try:
-        file = ctx.web.get_file_by_server_relative_url(file_url).download()
-        ctx.execute_query()
-        return json.loads(file.content)
+        ctx = get_sharepoint_context()
+        path = get_global_alias_path()
+        file = ctx.web.get_file_by_server_relative_url(path).download().execute_query()
+        file_content = file.content
+        return json.loads(file_content)
     except Exception as e:
-        print(f"⚠️ global_column_aliases.json not found, returning empty dict. Error: {e}")
+        # If file doesn't exist, create a blank one
+        ctx = get_sharepoint_context()
+        path = os.path.dirname(get_global_alias_path())
+        filename = os.path.basename(get_global_alias_path())
+        empty = BytesIO(b"{}")
+        ctx.web.get_folder_by_server_relative_url(path).upload_file(filename, empty).execute_query()
         return {}
 
 def update_global_aliases(new_aliases):
     existing = load_global_aliases()
-    existing.update(new_aliases)
+    updated = existing.copy()
+    updated.update(new_aliases)
+
+    # --- Save backup log with timestamp ---
     ctx = get_sharepoint_context()
     path = os.path.dirname(get_global_alias_path())
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    log_filename = f"alias_log_{timestamp}.json"
+    log_stream = BytesIO(json.dumps(existing, indent=2).encode("utf-8"))
+    ctx.web.get_folder_by_server_relative_url(path).upload_file(log_filename, log_stream).execute_query()
+
+    # --- Save updated aliases ---
     filename = os.path.basename(get_global_alias_path())
-    json_str = json.dumps(existing, indent=2).encode("utf-8")
+    json_str = json.dumps(updated, indent=2).encode("utf-8")
     file_stream = BytesIO(json_str)
     ctx.web.get_folder_by_server_relative_url(path).upload_file(filename, file_stream).execute_query()
 
@@ -88,3 +108,22 @@ def download_file(relative_path):
     file = ctx.web.get_file_by_server_relative_url(relative_path).download()
     ctx.execute_query()
     return BytesIO(file.content)
+
+# --- LEARNED ANSWERS ---
+def load_learned_answers():
+    try:
+        ctx = get_sharepoint_context()
+        path = get_learned_answers_path()
+        file = ctx.web.get_file_by_server_relative_url(path).download().execute_query()
+        file_content = file.content
+        return json.loads(file_content)
+    except Exception:
+        return {}
+
+def save_learned_answers(data):
+    ctx = get_sharepoint_context()
+    path = os.path.dirname(get_learned_answers_path())
+    filename = os.path.basename(get_learned_answers_path())
+    json_str = json.dumps(data, indent=2).encode("utf-8")
+    file_stream = BytesIO(json_str)
+    ctx.web.get_folder_by_server_relative_url(path).upload_file(filename, file_stream).execute_query()
