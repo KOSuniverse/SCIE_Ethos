@@ -474,7 +474,7 @@ def excel_qa(file_path, user_query, column_aliases=None):
     try:
         file_stream = download_file(file_path)
         df = pd.read_excel(file_stream)
-        auto_chart = any word in user_query.lower() for word in ["trend", "compare", "distribution", "growth", "pattern", "chart", "plot", "visual"]
+        auto_chart = any (word in user_query.lower() for word in ["trend", "compare", "distribution", "growth", "pattern", "chart", "plot", "visual"])
         prompt = (
             f"Column aliases for this file: {json.dumps(column_aliases or {})}\n"
             f"You are a data analyst working with the following Excel file.\n"
