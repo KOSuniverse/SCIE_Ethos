@@ -999,7 +999,8 @@ def run_user_query(user_query, all_chunks):
         for src in cached.get("files_used", []):
             st.write(f"- {src}")
         return
-
+if submit and user_query.strip():
+    st.info("Processing your question. This may take a moment...")
     scored_chunks = []
     query_embedding = get_embedding(user_query)
     for meta, chunk in all_chunks:
@@ -1117,4 +1118,3 @@ with st.expander("Show Query Log"):
 with st.expander("Show Chat History"):
     for msg in st.session_state.chat_history:
         st.write(f"{msg['role'].capitalize()}: {msg['content']}")
-
