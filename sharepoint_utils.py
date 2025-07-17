@@ -54,13 +54,21 @@ def load_global_aliases():
         file_content = buffer.read().decode("utf-8")
         return json.loads(file_content)
     except Exception as e:
+        st.error(f"SharePoint error: {e}")
+        # Optionally, don't try to create the file if unauthorized
+        if "401" in str(e):
+            raise RuntimeError("SharePoint authentication failed. Check your credentials and permissions.")
         # If file doesn't exist, create a blank one
-        ctx = get_sharepoint_context()
-        path = os.path.dirname(get_global_alias_path())
-        filename = os.path.basename(get_global_alias_path())
-        empty = BytesIO(b"{}")
-        ctx.web.get_folder_by_server_relative_url(path).upload_file(filename, empty).execute_query()
-        return {}
+        try:
+            ctx = get_sharepoint_context()
+            path = os.path.dirname(get_global_alias_path())
+            filename = os.path.basename(get_global_alias_path())
+            empty = BytesIO(b"{}")
+            ctx.web.get_folder_by_server_relative_url(path).upload_file(filename, empty).execute_query()
+            return {}
+        except Exception as e2:
+            st.error(f"Failed to create blank alias file: {e2}")
+            raise
 
 def update_global_aliases(new_aliases):
     existing = load_global_aliases()
