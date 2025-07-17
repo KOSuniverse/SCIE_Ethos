@@ -748,7 +748,6 @@ if submit and user_query.strip():
         "root_cause_analysis": root_cause_analysis,
         "predictive_model_result": predictive_model_result if predictive_model_result else "",
     })
-
 else:
     st.write("Ask a question to get started.")
 
@@ -1108,7 +1107,6 @@ def run_user_query(user_query, all_chunks):
         "root_cause_analysis": root_cause_analysis,
         "predictive_model_result": predictive_model_result if predictive_model_result else "",
     })
-
 else:
     st.write("Ask a question to get started.")
 
