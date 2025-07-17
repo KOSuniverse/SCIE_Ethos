@@ -48,8 +48,10 @@ def load_global_aliases():
     try:
         ctx = get_sharepoint_context()
         path = get_global_alias_path()
-        file = ctx.web.get_file_by_server_relative_url(path).download().execute_query()
-        file_content = file.content
+        buffer = BytesIO()
+        ctx.web.get_file_by_server_relative_url(path).download(buffer).execute_query()
+        buffer.seek(0)
+        file_content = buffer.read().decode("utf-8")
         return json.loads(file_content)
     except Exception as e:
         # If file doesn't exist, create a blank one
