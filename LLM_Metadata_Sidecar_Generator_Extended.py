@@ -19,10 +19,14 @@ import pdfplumber
 from openai import OpenAI
 import numpy as np
 import pandas as pd
+from gdrive_utils import (
+    list_all_supported_files, download_file, upload_json_file
+)
 
 client = OpenAI(api_key="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")  # Replace with your real key
 
-GLOBAL_ALIAS_PATH = "./Project_Root/global_column_aliases.json"
+GLOBAL_ALIAS_PATH = "./Project_Root/01_Project_Plan/global_column_aliases.json"
+PROJECT_ROOT_ID = "1t1CcZzwsjOPMNKKMkdJd6kXhixTreNuY"  # Your Project_Root folder ID
 
 def get_embedding(text):
     response = client.embeddings.create(
@@ -239,6 +243,18 @@ def generate_json(metadata, original_filename, profile_data=None, embedding=None
         "column_aliases": column_aliases or {}
     }
 
+def get_gdrive_id_by_name(name, parent_id, is_folder=False):
+    files = list_all_supported_files(parent_id)
+    for f in files:
+        if f["name"] == name:
+            if is_folder and f["mimeType"] == "application/vnd.google-apps.folder":
+                return f["id"]
+            if not is_folder and f["mimeType"] != "application/vnd.google-apps.folder":
+                return f["id"]
+    return None
+
+METADATA_FOLDER_ID = get_gdrive_id_by_name("_metadata", PROJECT_ROOT_ID, is_folder=True)
+
 def scan_and_process(base_dir, query_log=None):
     print(f"Scanning {base_dir}...")
 
@@ -344,5 +360,111 @@ def scan_and_process(base_dir, query_log=None):
     with open(GLOBAL_ALIAS_PATH, "w") as f:
         json.dump(updated_global_aliases, f, indent=2)
 
+def scan_and_process_gdrive(project_root_id, query_log=None):
+    print(f"Scanning Google Drive folder {project_root_id}...")
+
+    # --- Load global column aliases ---
+    alias_file_id = get_gdrive_id_by_name("global_column_aliases.json", METADATA_FOLDER_ID)
+    if alias_file_id:
+        alias_stream = download_file(alias_file_id)
+        global_aliases = json.load(alias_stream)
+    else:
+        global_aliases = {}
+
+    updated_global_aliases = global_aliases.copy()
+
+    files = list_all_supported_files(project_root_id)
+    for f in files:
+        file_id = f["id"]
+        file_name = f["name"]
+        ext = os.path.splitext(file_name)[1].lower()
+        base_name = os.path.splitext(file_name)[0]
+
+        # Only process supported types
+        if ext not in [".docx", ".xlsx", ".pptx", ".pdf"]:
+            continue
+
+        # Download file to memory
+        file_stream = download_file(file_id)
+        temp_path = f"/tmp/{file_name}"
+        with open(temp_path, "wb") as tmpf:
+            tmpf.write(file_stream.read())
+
+        # --- Efficient re-indexing ---
+        # Check for existing metadata in Drive
+        json_file_name = f"{base_name}.json"
+        meta_file_id = get_gdrive_id_by_name(json_file_name, METADATA_FOLDER_ID)
+        needs_index = True
+        if meta_file_id:
+            meta_stream = download_file(meta_file_id)
+            old = json.load(meta_stream)
+            last_indexed = old.get("last_indexed")
+            file_last_modified = f.get("modifiedTime")
+            if last_indexed and file_last_modified:
+                try:
+                    from dateutil.parser import isoparse
+                    if isoparse(file_last_modified) <= isoparse(last_indexed):
+                        needs_index = False
+                except Exception:
+                    pass
+
+        if not needs_index:
+            print(f"⏩ Skipped (not modified): {file_name}")
+            continue
+
+        metadata = {}
+        if ext == ".docx":
+            metadata = extract_metadata_from_docx(temp_path)
+        elif ext == ".xlsx":
+            metadata = extract_metadata_from_xlsx(temp_path)
+        elif ext == ".pptx":
+            metadata = extract_metadata_from_pptx(temp_path)
+        elif ext == ".pdf":
+            metadata = extract_metadata_from_pdf(temp_path)
+
+        raw_text = extract_text_for_metadata(temp_path)
+        gpt_metadata = auto_generate_metadata(raw_text[:3000] if raw_text else "")
+
+        for key in ["title", "category", "tags", "summary"]:
+            metadata[key] = gpt_metadata.get(key, metadata.get(key, ""))
+
+        structural_meta = extract_structural_metadata(raw_text, ext)
+        metadata.update(structural_meta)
+
+        profile_data = {}
+        column_aliases = {}
+        if ext == ".xlsx":
+            try:
+                profile_data = profile_excel(temp_path)
+            except Exception as e:
+                print(f"Profile data error: {e}")
+            column_aliases = map_columns_to_concepts(metadata["columns"], updated_global_aliases)
+            updated_global_aliases.update(column_aliases)
+
+        summary_text = metadata.get("summary", "")
+        embedding = get_embedding(summary_text) if summary_text else None
+
+        usage_stats = None
+        if meta_file_id:
+            meta_stream = download_file(meta_file_id)
+            old = json.load(meta_stream)
+            usage_stats = old.get("usage_stats", None)
+            if query_log and "tags" in metadata:
+                metadata["tags"] = enrich_tags(metadata["tags"], usage_stats or {})
+        else:
+            if query_log and "tags" in metadata:
+                metadata["tags"] = enrich_tags(metadata["tags"], query_log)
+
+        from datetime import datetime
+        metadata["last_indexed"] = datetime.now().isoformat()
+        metadata["last_modified"] = f.get("modifiedTime")
+
+        json_data = generate_json(metadata, file_name, profile_data, embedding, usage_stats, column_aliases)
+        upload_json_file(METADATA_FOLDER_ID, json_file_name, json_data)
+        print(f"✅ Metadata saved: {json_file_name}")
+
+    # --- Save updated global column aliases ---
+    upload_json_file(METADATA_FOLDER_ID, "global_column_aliases.json", updated_global_aliases)
+
 if __name__ == "__main__":
-    scan_and_process("/content/drive/MyDrive/Ethos LLM/Project_Root")
+    scan_and_process_gdrive(PROJECT_ROOT_ID)
