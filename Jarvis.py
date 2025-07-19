@@ -20,11 +20,9 @@ import seaborn as sns
 from collections import defaultdict
 import joblib  # For loading prebuilt models
 from io import BytesIO
-from sharepoint_utils import (
-    load_metadata, save_metadata,
-    load_global_aliases, update_global_aliases,
-    list_all_supported_files, download_file,
-    load_learned_answers, save_learned_answers
+from gdrive_utils import (
+    list_all_supported_files, download_file, get_file_last_modified,
+    load_json_file, save_json_file
 )
 import nltk
 from difflib import SequenceMatcher
@@ -33,7 +31,11 @@ import base64
 import pickle
 import io
 
-nltk.download('punkt')  # Uncomment once to download the tokenizer
+try:
+    nltk.data.find("tokenizers/punkt")
+except LookupError:
+    nltk.download("punkt")
+
 
 # --- Model Config Constants ---
 OPENAI_EMBEDDING_MODEL = "text-embedding-ada-002"
@@ -53,6 +55,65 @@ def openai_with_retry(call_fn, max_retries=3, delay=2):
                 time.sleep(delay)
             else:
                 raise e
+PROJECT_ROOT_ID = "1t1CcZzwsjOPMNKKMkdJd6kXhixTreNuY"  # Your Project_Root folder ID
+
+def get_gdrive_id_by_name(name, parent_id, is_folder=False):
+    files = list_all_supported_files(parent_id)
+    for f in files:
+        if f["name"] == name:
+            if is_folder and f["mimeType"] == "application/vnd.google-apps.folder":
+                return f["id"]
+            if not is_folder and f["mimeType"] != "application/vnd.google-apps.folder":
+                return f["id"]
+    return None
+
+# Find the metadata folder inside 01_Project_Plan
+METADATA_PARENT_ID = get_gdrive_id_by_name("01_Project_Plan", PROJECT_ROOT_ID, is_folder=True)
+if METADATA_PARENT_ID:
+    METADATA_FOLDER_ID = get_gdrive_id_by_name("_metadata", METADATA_PARENT_ID, is_folder=True)
+else:
+    st.error("Could not find 01_Project_Plan/_metadata in Project_Root.")
+    st.stop()
+def load_metadata(filename):
+    file_id = get_gdrive_id_by_name(f"{filename}.json", METADATA_FOLDER_ID)
+    if not file_id:
+        st.warning(f"Metadata file {filename}.json not found.")
+        return {}
+    return load_json_file(file_id)
+
+def save_metadata(filename, data):
+    file_id = get_gdrive_id_by_name(f"{filename}.json", METADATA_FOLDER_ID)
+    if not file_id:
+        st.warning(f"Metadata file {filename}.json not found. (Create logic not implemented.)")
+        return
+    save_json_file(file_id, data)
+
+def load_global_aliases():
+    file_id = get_gdrive_id_by_name("global_column_aliases.json", METADATA_FOLDER_ID)
+    if not file_id:
+        st.warning("global_column_aliases.json not found in metadata folder.")
+        return {}
+    return load_json_file(file_id)
+
+def update_global_aliases(new_aliases):
+    file_id = get_gdrive_id_by_name("global_column_aliases.json", METADATA_FOLDER_ID)
+    if not file_id:
+        st.warning("global_column_aliases.json not found in metadata folder.")
+        return
+    save_json_file(file_id, new_aliases)
+
+def load_learned_answers():
+    file_id = get_gdrive_id_by_name("learned_answers.json", METADATA_FOLDER_ID)
+    if not file_id:
+        return {}
+    return load_json_file(file_id)
+
+def save_learned_answers(data):
+    file_id = get_gdrive_id_by_name("learned_answers.json", METADATA_FOLDER_ID)
+    if not file_id:
+        st.warning("learned_answers.json not found in metadata folder.")
+        return
+    save_json_file(file_id, data) 
 
 # --- Vector Validation ---
 def validate_embedding(vec, expected_dim=1536):
@@ -545,9 +606,9 @@ if st.checkbox("🔧 Edit Column Alias Mappings"):
 # --- Gather all files from Cleaned Engineering Files for Q&A and modeling ---
 # List all supported files in the SharePoint document library, EXCLUDING raw data folder
 all_files = [
-    f["relative_path"]
-    for f in list_all_supported_files()
-    if not f["relative_path"].startswith(st.secrets["sharepoint"]["raw_data_folder"])
+    f["name"]
+    for f in list_all_supported_files(PROJECT_ROOT_ID)
+    if not f["name"].startswith("Raw_Data")
 ]
 
 all_chunks = []
@@ -1000,7 +1061,7 @@ def run_user_query(user_query, all_chunks):
             st.write(f"- {src}")
         return
 if submit and user_query.strip():
-    st.info("Processing your question. This may take a moment...")
+    run_user_query(user_query, all_chunks)
     scored_chunks = []
     query_embedding = get_embedding(user_query)
     for meta, chunk in all_chunks:
@@ -1118,3 +1179,45 @@ with st.expander("Show Query Log"):
 with st.expander("Show Chat History"):
     for msg in st.session_state.chat_history:
         st.write(f"{msg['role'].capitalize()}: {msg['content']}")
+
+# --- Metadata and Alias Management Functions ---
+def load_metadata(filename):
+    file_id = get_gdrive_id_by_name(f"{filename}.json", METADATA_FOLDER_ID)
+    if not file_id:
+        st.warning(f"Metadata file {filename}.json not found.")
+        return {}
+    return load_json_file(file_id)
+
+def save_metadata(filename, data):
+    file_id = get_gdrive_id_by_name(f"{filename}.json", METADATA_FOLDER_ID)
+    if not file_id:
+        st.warning(f"Metadata file {filename}.json not found. (Create logic not implemented.)")
+        return
+    save_json_file(file_id, data)
+
+def load_global_aliases():
+    file_id = get_gdrive_id_by_name("global_column_aliases.json", METADATA_FOLDER_ID)
+    if not file_id:
+        st.warning("global_column_aliases.json not found in metadata folder.")
+        return {}
+    return load_json_file(file_id)
+
+def update_global_aliases(new_aliases):
+    file_id = get_gdrive_id_by_name("global_column_aliases.json", METADATA_FOLDER_ID)
+    if not file_id:
+        st.warning("global_column_aliases.json not found in metadata folder.")
+        return
+    save_json_file(file_id, new_aliases)
+
+def load_learned_answers():
+    file_id = get_gdrive_id_by_name("learned_answers.json", METADATA_FOLDER_ID)
+    if not file_id:
+        return {}
+    return load_json_file(file_id)
+
+def save_learned_answers(data):
+    file_id = get_gdrive_id_by_name("learned_answers.json", METADATA_FOLDER_ID)
+    if not file_id:
+        st.warning("learned_answers.json not found in metadata folder.")
+        return
+    save_json_file(file_id, data)
