@@ -138,7 +138,14 @@ with st.form("question_form", clear_on_submit=False):
 if submit and user_query.strip():
     # --- Check for file count queries ---
     query_lower = user_query.lower()
-    if any(phrase in query_lower for phrase in ["how many files", "number of files", "file count", "count files"]):
+    file_count_keywords = [
+        "how many files", "number of files", "file count", "count files",
+        "how many documents", "number of documents", "document count", "count documents",
+        "files do you have", "documents do you have", "files are there", "documents are there",
+        "total files", "total documents", "files in drive", "documents in drive"
+    ]
+    if any(phrase in query_lower for phrase in file_count_keywords):
+        st.info(f"🔍 Detected file count query: '{user_query}'")
         file_types = {}
         for file in all_files:
             ext = file["name"].lower().split(".")[-1] if "." in file["name"] else "unknown"
