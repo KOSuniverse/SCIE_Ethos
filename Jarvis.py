@@ -623,15 +623,17 @@ for idx, file in enumerate(all_files):
     file_name = file["name"]
     file_id = file["id"]
     ext = file_name.lower().split('.')[-1]
-    
+
     file_last_modified = get_file_last_modified(file_id)
     meta = load_metadata(file_name) or {"source_file": file_name}
     needs_index = True
 
-    # Check if we can skip reindexing
+    # --- Efficient re-indexing: skip if file hasn't changed since last_indexed
     if meta.get("last_indexed") and file_last_modified:
         try:
-            if file_last_modified <= datetime.fromisoformat(meta["last_indexed"]).timestamp():
+            # file_last_modified is ISO string from Drive, meta["last_indexed"] is ISO string
+            from dateutil.parser import isoparse
+            if isoparse(file_last_modified) <= isoparse(meta["last_indexed"]):
                 needs_index = False
         except Exception:
             pass
@@ -647,28 +649,13 @@ for idx, file in enumerate(all_files):
             if isinstance(text, tuple):
                 text = text[0]
 
-    # Efficient re-indexing: skip if file hasn't changed since last_indexed
-    if meta and meta.get("last_indexed") and file_last_modified:
-        try:
-            if file_last_modified <= datetime.fromisoformat(meta["last_indexed"]).timestamp():
-                needs_index = False
-        except Exception:
-            pass
-
-    if needs_index:
-        try:
-            if ext == "xlsx":
-                text, sheet_names, columns_by_sheet = extract_text_for_metadata(file_path)
-            else:
-                text = extract_text_for_metadata(file_path)
-                sheet_names, columns_by_sheet = [], {}
-            if isinstance(text, tuple):
-                text = text[0]
             if text.strip():
                 meta["file_type"] = ext
-                meta["file_size"] = os.path.getsize(file_path) if os.path.exists(file_path) else None
-                meta["last_modified"] = datetime.fromtimestamp(file_last_modified).isoformat() if file_last_modified else None
+                # Optionally get file size from Drive metadata if needed
+                meta["file_size"] = file.get("size", None)
+                meta["last_modified"] = file_last_modified
                 meta["last_indexed"] = datetime.now().isoformat()
+
                 # Excel-specific
                 if ext == "xlsx":
                     meta["sheet_names"] = sheet_names
@@ -680,14 +667,18 @@ for idx, file in enumerate(all_files):
                     column_aliases = map_columns_to_concepts(meta["columns"], updated_global_aliases)
                     meta["column_aliases"] = column_aliases
                     updated_global_aliases.update(column_aliases)
+
                 # LLM-generated summary/tags/category for ALL files
                 llm_meta = generate_llm_metadata(text, ext)
                 meta.update(llm_meta)
                 # Structural metadata for all files
                 meta.update(extract_structural_metadata(text, ext))
-                save_metadata(file_path, meta)
+                save_metadata(file_name, meta)
+
                 for chunk in chunk_text(text):
                     all_chunks.append((meta, chunk))
+
+                # --- Embedding (based on summary)
                 embedding = None
                 if "embedding" in meta and meta["embedding"]:
                     embedding = np.array(meta["embedding"])
@@ -695,18 +686,20 @@ for idx, file in enumerate(all_files):
                     try:
                         embedding = get_embedding(meta["summary"])
                     except Exception as e:
-                        st.warning(f"Embedding failed for {file_path}: {e}")
+                        st.warning(f"Embedding failed for {file_name}: {e}")
                 if embedding is not None:
-                    embedding_cache[file_path] = embedding
+                    embedding_cache[file_name] = embedding
+
         except Exception as e:
-            st.warning(f"Failed to process {file_path}: {e}")
+            st.warning(f"⚠️ Failed to process {file_name}: {e}")
     else:
         # Use existing metadata and skip re-indexing
         if "summary" in meta:
             for chunk in chunk_text(meta["summary"]):
                 all_chunks.append((meta, chunk))
         if "embedding" in meta and meta["embedding"]:
-            embedding_cache[file_path] = np.array(meta["embedding"])
+            embedding_cache[file_name] = np.array(meta["embedding"])
+
     progress_bar.progress((idx + 1) / len(all_files), text=f"Indexed {idx+1}/{len(all_files)} files")
 progress_bar.empty()
 update_global_aliases(updated_global_aliases)
