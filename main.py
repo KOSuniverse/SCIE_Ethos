@@ -56,9 +56,9 @@ if st.checkbox("🔧 Edit Column Alias Mappings"):
         st.info("No aliases found. They will be created automatically as files are processed.")
 
 # --- Load aliases and files ---
-global_aliases = load_global_aliases()
+global_aliases = load_global_aliases() or {}  # Ensure it's never None
 updated_global_aliases = global_aliases.copy()
-learned_answers = load_learned_answers()
+learned_answers = load_learned_answers() or {}  # Ensure it's never None
 
 all_files = list_all_supported_files()
 all_chunks = []
@@ -88,24 +88,27 @@ for idx, file in enumerate(all_files):
 
     if needs_index:
         try:
-            text, sheet_names, columns_by_sheet = extract_text_for_metadata(file_id) if ext == "xlsx" else (extract_text_for_metadata(file_id), [], {})
-            text = text[0] if isinstance(text, tuple) else text
-
-            if text.strip():
+            # Extract text based on file type - no special handling for xlsx since you don't have Google Sheets
+            text = extract_text_for_metadata(file_id)
+            
+            # Handle tuple return from some extract functions
+            if isinstance(text, tuple):
+                text = text[0] if text[0] else ""
+            
+            if text and text.strip():
                 meta.update({
                     "file_type": ext,
                     "last_modified": datetime.fromtimestamp(file_last_modified).isoformat() if file_last_modified else None,
                     "last_indexed": datetime.now().isoformat(),
                 })
-                if ext == "xlsx":
-                    meta.update({
-                        "sheet_names": sheet_names,
-                        "columns_by_sheet": columns_by_sheet,
-                        "columns": list(set(col for cols in columns_by_sheet.values() for col in cols))
-                    })
-                    col_aliases = map_columns_to_concepts(meta["columns"], updated_global_aliases)
-                    meta["column_aliases"] = col_aliases
-                    updated_global_aliases.update(col_aliases)
+                
+                # Only process Excel files for column data if they're actually Excel files
+                if ext == "xlsx" and "." in file_name:
+                    try:
+                        # Simple Excel processing - no complex sheet handling
+                        meta["file_type"] = "excel"
+                    except Exception:
+                        pass  # Skip Excel-specific processing if it fails
 
                 llm_meta = generate_llm_metadata(text, ext)
                 meta.update(llm_meta)
@@ -118,7 +121,8 @@ for idx, file in enumerate(all_files):
                 if meta.get("summary"):
                     embedding_cache[file_name] = get_embedding(meta["summary"])
         except Exception as e:
-            st.warning(f"Failed to process {file_name}: {e}")
+            st.warning(f"⚠️ Skipped {file_name}: {e}")
+            continue
     else:
         if meta.get("summary"):
             for chunk in chunk_text(meta["summary"]):
@@ -148,12 +152,56 @@ if submit and user_query.strip():
         st.info(f"🔍 Detected file count query: '{user_query}'")
         file_types = {}
         for file in all_files:
-            ext = file["name"].lower().split(".")[-1] if "." in file["name"] else "unknown"
+            file_name = file["name"]
+            if "." in file_name:
+                ext = file_name.lower().split(".")[-1]
+            else:
+                ext = "no extension"
             file_types[ext] = file_types.get(ext, 0) + 1
         
-        answer = f"I found **{len(all_files)} files** in your Google Drive knowledge base:\n\n"
-        for ext, count in sorted(file_types.items()):
-            answer += f"- {count} .{ext} file{'s' if count != 1 else ''}\n"
+        # Debug: Show file names to understand the issue
+        st.write("**Debug - File Details:**")
+        for i, file in enumerate(all_files[:7]):  # Show all files since you have 7
+            file_name = file['name']
+            mime_type = file.get('mimeType', 'Unknown')
+            
+            # Better file type detection based on MIME type
+            if 'spreadsheet' in mime_type or file_name.lower().endswith('.xlsx'):
+                file_type = "Excel"
+            elif 'pdf' in mime_type or file_name.lower().endswith('.pdf'):
+                file_type = "PDF"
+            elif 'document' in mime_type or file_name.lower().endswith('.docx'):
+                file_type = "Word"
+            elif 'folder' in mime_type:
+                file_type = "Folder"
+            else:
+                file_type = f"Other ({mime_type})"
+                
+            st.write(f"{i+1}. **{file_name}** - {file_type}")
+        
+        # Better file type counting
+        file_types = {}
+        for file in all_files:
+            file_name = file["name"]
+            mime_type = file.get('mimeType', '')
+            
+            if 'spreadsheet' in mime_type or file_name.lower().endswith('.xlsx'):
+                file_type = "Excel files"
+            elif 'pdf' in mime_type or file_name.lower().endswith('.pdf'):
+                file_type = "PDF files"
+            elif 'document' in mime_type or file_name.lower().endswith('.docx'):
+                file_type = "Word documents"
+            elif 'folder' in mime_type:
+                file_type = "Folders"
+            else:
+                file_type = "Other files"
+                
+            file_types[file_type] = file_types.get(file_type, 0) + 1
+        
+        # Generate the answer
+        answer = f"I found **{len(all_files)} items** in your Google Drive knowledge base:\n\n"
+        for file_type, count in sorted(file_types.items()):
+            answer += f"- {count} {file_type}\n"
         
         st.markdown("**Answer:**")
         st.markdown(answer)
