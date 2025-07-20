@@ -66,6 +66,10 @@ def get_gdrive_id_by_name(name, parent_id, is_folder=False):
             if not is_folder and f["mimeType"] != "application/vnd.google-apps.folder":
                 return f["id"]
     return None
+MODELS_FOLDER_ID = get_gdrive_id_by_name("Models", get_gdrive_id_by_name("04_Data", PROJECT_ROOT_ID, is_folder=True), is_folder=True)
+if not MODELS_FOLDER_ID:
+    st.error("❌ Could not find 04_Data/Models in Google Drive.")
+    st.stop()
 
 # Find the metadata folder inside 01_Project_Plan
 METADATA_PARENT_ID = get_gdrive_id_by_name("01_Project_Plan", PROJECT_ROOT_ID, is_folder=True)
@@ -606,7 +610,7 @@ if st.checkbox("🔧 Edit Column Alias Mappings"):
 # --- Gather all files from Cleaned Engineering Files for Q&A and modeling ---
 # List all supported files in the SharePoint document library, EXCLUDING raw data folder
 all_files = [
-    f["name"]
+    f
     for f in list_all_supported_files(PROJECT_ROOT_ID)
     if not f["name"].startswith("Raw_Data")
 ]
@@ -615,10 +619,13 @@ all_chunks = []
 updated_global_aliases = global_aliases.copy()
 progress_bar = st.progress(0, text="Indexing files and building metadata...")
 
-for idx, file_path in enumerate(all_files):
-    ext = file_path.lower().split('.')[-1]
-    file_last_modified = get_file_last_modified(file_path)
-    meta = load_metadata(file_path) or {"source_file": file_path}
+for idx, file in enumerate(all_files):
+    file_name = file["name"]
+    file_id = file["id"]
+    ext = file_name.lower().split('.')[-1]
+    
+    file_last_modified = get_file_last_modified(file_id)
+    meta = load_metadata(file_name) or {"source_file": file_name}
     needs_index = True
 
     # Efficient re-indexing: skip if file hasn't changed since last_indexed
@@ -878,16 +885,32 @@ def run_model_code(model_code, df):
         return None
 
 # --- Save Model as .pkl ---
+from googleapiclient.http import MediaIoBaseUpload
+
 def save_model(local_vars, model_name="auto_model.pkl"):
     model = local_vars.get("model", None)
-    if model:
-        model_bytes = pickle.dumps(model)
-        path = os.path.join(MODELS_FOLDER, model_name)
-        with open(path, "wb") as f:
-            f.write(model_bytes)
-        st.success(f"✅ Model saved to {path}")
-    else:
+    if not model:
         st.warning("⚠️ No model object found to save.")
+        return
+
+    try:
+        # Serialize model to bytes
+        model_bytes = pickle.dumps(model)
+        buffer = BytesIO(model_bytes)
+        buffer.seek(0)
+
+        # Prepare upload
+        media = MediaIoBaseUpload(buffer, mimetype="application/octet-stream", resumable=True)
+        metadata = {
+            "name": model_name,
+            "parents": [MODELS_FOLDER_ID]
+        }
+
+        service = get_drive_service()
+        uploaded = service.files().create(body=metadata, media_body=media, fields="id").execute()
+        st.success(f"✅ Model uploaded to Google Drive (ID: {uploaded['id']})")
+    except Exception as e:
+        st.error(f"❌ Failed to upload model to Drive: {e}")
 
 # --- MAIN: Guided Model Builder ---
 def build_and_run_model(user_query, top_chunks, target_column=None):
@@ -1180,44 +1203,3 @@ with st.expander("Show Chat History"):
     for msg in st.session_state.chat_history:
         st.write(f"{msg['role'].capitalize()}: {msg['content']}")
 
-# --- Metadata and Alias Management Functions ---
-def load_metadata(filename):
-    file_id = get_gdrive_id_by_name(f"{filename}.json", METADATA_FOLDER_ID)
-    if not file_id:
-        st.warning(f"Metadata file {filename}.json not found.")
-        return {}
-    return load_json_file(file_id)
-
-def save_metadata(filename, data):
-    file_id = get_gdrive_id_by_name(f"{filename}.json", METADATA_FOLDER_ID)
-    if not file_id:
-        st.warning(f"Metadata file {filename}.json not found. (Create logic not implemented.)")
-        return
-    save_json_file(file_id, data)
-
-def load_global_aliases():
-    file_id = get_gdrive_id_by_name("global_column_aliases.json", METADATA_FOLDER_ID)
-    if not file_id:
-        st.warning("global_column_aliases.json not found in metadata folder.")
-        return {}
-    return load_json_file(file_id)
-
-def update_global_aliases(new_aliases):
-    file_id = get_gdrive_id_by_name("global_column_aliases.json", METADATA_FOLDER_ID)
-    if not file_id:
-        st.warning("global_column_aliases.json not found in metadata folder.")
-        return
-    save_json_file(file_id, new_aliases)
-
-def load_learned_answers():
-    file_id = get_gdrive_id_by_name("learned_answers.json", METADATA_FOLDER_ID)
-    if not file_id:
-        return {}
-    return load_json_file(file_id)
-
-def save_learned_answers(data):
-    file_id = get_gdrive_id_by_name("learned_answers.json", METADATA_FOLDER_ID)
-    if not file_id:
-        st.warning("learned_answers.json not found in metadata folder.")
-        return
-    save_json_file(file_id, data)
