@@ -3,6 +3,7 @@
 import json
 import streamlit as st
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 from google.oauth2 import service_account
 from io import BytesIO
 
@@ -202,7 +203,11 @@ def create_json_file(folder_id, filename, data):
     try:
         # Convert data to JSON bytes
         json_bytes = json.dumps(data, indent=2).encode('utf-8')
-        media_body = BytesIO(json_bytes)
+        buffer = BytesIO(json_bytes)
+        buffer.seek(0)
+        
+        # Create MediaUpload object
+        media = MediaIoBaseUpload(buffer, mimetype='application/json', resumable=True)
         
         # File metadata
         file_metadata = {
@@ -213,7 +218,7 @@ def create_json_file(folder_id, filename, data):
         # Create the file
         file = service.files().create(
             body=file_metadata,
-            media_body=media_body,
+            media_body=media,
             fields='id'
         ).execute()
         
