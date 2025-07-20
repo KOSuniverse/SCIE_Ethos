@@ -153,23 +153,8 @@ def _extract_pdf_content(file_stream, max_ocr_pages=5):
             
             # No extractable text — try OCR fallback
             st.warning("No extractable text found. This PDF may require OCR.")
-            ocr_text = []
-            max_ocr_pages = 5
-            
-            if st.checkbox("Run full OCR on all pages? (May take time)"):
-                pages_to_ocr = pdf.pages
-            else:
-                pages_to_ocr = pdf.pages[:max_ocr_pages]
-                st.info(f"Only scanning first {max_ocr_pages} pages with OCR...")
-            
-            for i, page in enumerate(pages_to_ocr):
-                st.write(f"OCR processing page {i+1}/{len(pages_to_ocr)}")
-                image = page.to_image().original
-                ocr_page = pytesseract.image_to_string(image)
-                if ocr_page:
-                    ocr_text.append(ocr_page)
-            
-            return "\n".join(ocr_text), [], {}
+            st.info("OCR processing not available in cloud deployment (tesseract not installed).")
+            return "", [], {}
             
     except Exception as e:
         st.warning(f"PDF extraction failed: {e}")
