@@ -14,7 +14,18 @@ from utils.gdrive import download_file
 try:
     nltk.data.find("tokenizers/punkt")
 except LookupError:
-    nltk.download("punkt")
+    try:
+        nltk.download("punkt")
+    except:
+        pass
+
+try:
+    nltk.data.find("tokenizers/punkt_tab")
+except LookupError:
+    try:
+        nltk.download("punkt_tab")
+    except:
+        pass
 
 def chunk_text(text, chunk_size=2000, overlap=200, max_chars=4000):
     """
