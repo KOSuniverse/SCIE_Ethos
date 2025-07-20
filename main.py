@@ -65,6 +65,11 @@ all_chunks = []
 embedding_cache = {}
 
 # --- File indexing ---
+st.write(f"📁 **Found {len(all_files)} files in Google Drive**")
+if len(all_files) == 0:
+    st.warning("⚠️ No files found in Google Drive. Please check your connection and folder permissions.")
+    st.stop()
+
 progress_bar = st.progress(0, text="Indexing files and building metadata...")
 for idx, file in enumerate(all_files):
     file_name = file["name"]
@@ -131,6 +136,24 @@ with st.form("question_form", clear_on_submit=False):
     submit = st.form_submit_button("Ask")
 
 if submit and user_query.strip():
+    # --- Check for file count queries ---
+    query_lower = user_query.lower()
+    if any(phrase in query_lower for phrase in ["how many files", "number of files", "file count", "count files"]):
+        file_types = {}
+        for file in all_files:
+            ext = file["name"].lower().split(".")[-1] if "." in file["name"] else "unknown"
+            file_types[ext] = file_types.get(ext, 0) + 1
+        
+        answer = f"I found **{len(all_files)} files** in your Google Drive knowledge base:\n\n"
+        for ext, count in sorted(file_types.items()):
+            answer += f"- {count} .{ext} file{'s' if count != 1 else ''}\n"
+        
+        st.markdown("**Answer:**")
+        st.markdown(answer)
+        st.session_state.chat_history.append({"role": "user", "content": user_query})
+        st.session_state.chat_history.append({"role": "assistant", "content": answer})
+        st.stop()
+    
     # --- Check if already learned ---
     if user_query in learned_answers:
         cached = learned_answers[user_query]
