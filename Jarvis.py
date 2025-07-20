@@ -537,7 +537,7 @@ def excel_qa(file_path, user_query, column_aliases=None):
     import re
 
     try:
-        file_stream = download_file(file_path)
+        file_stream = download_file(file_id)
         df = pd.read_excel(file_stream)
         auto_chart = any (word in user_query.lower() for word in ["trend", "compare", "distribution", "growth", "pattern", "chart", "plot", "visual"])
         prompt = (
@@ -627,6 +627,25 @@ for idx, file in enumerate(all_files):
     file_last_modified = get_file_last_modified(file_id)
     meta = load_metadata(file_name) or {"source_file": file_name}
     needs_index = True
+
+    # Check if we can skip reindexing
+    if meta.get("last_indexed") and file_last_modified:
+        try:
+            if file_last_modified <= datetime.fromisoformat(meta["last_indexed"]).timestamp():
+                needs_index = False
+        except Exception:
+            pass
+
+    if needs_index:
+        try:
+            if ext == "xlsx":
+                text, sheet_names, columns_by_sheet = extract_text_for_metadata(file_id)
+            else:
+                text = extract_text_for_metadata(file_id)
+                sheet_names, columns_by_sheet = [], {}
+
+            if isinstance(text, tuple):
+                text = text[0]
 
     # Efficient re-indexing: skip if file hasn't changed since last_indexed
     if meta and meta.get("last_indexed") and file_last_modified:
