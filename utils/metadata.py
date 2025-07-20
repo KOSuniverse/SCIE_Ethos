@@ -9,6 +9,9 @@ def load_metadata(filename):
     """Load metadata for a specific file."""
     try:
         metadata_folder_id = get_metadata_folder_id()
+        if not metadata_folder_id:
+            return {}  # No metadata folder available
+        
         file_id = get_gdrive_id_by_name(f"{filename}.json", metadata_folder_id)
         if not file_id:
             # Metadata doesn't exist yet - that's normal for new files
@@ -21,6 +24,9 @@ def save_metadata(filename, data):
     """Save metadata for a specific file - create JSON file if it doesn't exist."""
     try:
         metadata_folder_id = get_metadata_folder_id()
+        if not metadata_folder_id:
+            return  # No metadata folder available, skip saving
+        
         json_filename = f"{filename}.json"
         file_id = get_gdrive_id_by_name(json_filename, metadata_folder_id)
         
@@ -42,6 +48,9 @@ def load_global_aliases():
     """Load global column aliases."""
     try:
         metadata_folder_id = get_metadata_folder_id()
+        if not metadata_folder_id:
+            return {}  # No metadata folder available
+        
         file_id = get_gdrive_id_by_name("global_column_aliases.json", metadata_folder_id)
         if not file_id:
             # File doesn't exist yet - that's OK, return empty dict
@@ -56,6 +65,9 @@ def update_global_aliases(new_aliases):
         if not new_aliases:  # Don't save empty aliases
             return
         metadata_folder_id = get_metadata_folder_id()
+        if not metadata_folder_id:
+            return  # No metadata folder available, skip saving
+        
         file_id = get_gdrive_id_by_name("global_column_aliases.json", metadata_folder_id)
         
         if file_id:
@@ -71,6 +83,9 @@ def load_learned_answers():
     """Load previously learned answers."""
     try:
         metadata_folder_id = get_metadata_folder_id()
+        if not metadata_folder_id:
+            return {}  # No metadata folder available
+        
         file_id = get_gdrive_id_by_name("learned_answers.json", metadata_folder_id)
         if not file_id:
             return {}
@@ -84,6 +99,9 @@ def save_learned_answers(data):
         if not data:  # Don't save empty data
             return
         metadata_folder_id = get_metadata_folder_id()
+        if not metadata_folder_id:
+            return  # No metadata folder available, skip saving
+        
         file_id = get_gdrive_id_by_name("learned_answers.json", metadata_folder_id)
         
         if file_id:

@@ -15,7 +15,8 @@ PROJECT_ROOT_ID = "1t1CcZzwsjOPMNKKMkdJd6kXhixTreNuY"
 
 def get_gdrive_id_by_name(name, parent_id, is_folder=False):
     """Find a file or folder by name within a parent directory."""
-    files = list_all_supported_files(parent_id)
+    # Use the non-recursive function to avoid circular calls
+    files = _list_all_supported_files(parent_id)
     for f in files:
         if f["name"] == name:
             if is_folder and f["mimeType"] == "application/vnd.google-apps.folder":
@@ -81,14 +82,18 @@ def get_models_folder_id():
 
 def get_metadata_folder_id():
     """Get the metadata folder ID from 01_Project_Plan/_metadata."""
-    project_plan_id = get_gdrive_id_by_name("01_Project_Plan", PROJECT_ROOT_ID, is_folder=True)
-    if not project_plan_id:
-        st.error("Could not find 01_Project_Plan in Project_Root.")
-        st.stop()
-    
-    metadata_folder_id = get_gdrive_id_by_name("_metadata", project_plan_id, is_folder=True)
-    if not metadata_folder_id:
-        st.error("Could not find 01_Project_Plan/_metadata in Project_Root.")
-        st.stop()
-    
-    return metadata_folder_id
+    try:
+        project_plan_id = get_gdrive_id_by_name("01_Project_Plan", PROJECT_ROOT_ID, is_folder=True)
+        if not project_plan_id:
+            st.warning("⚠️ Could not find 01_Project_Plan folder. Metadata features disabled.")
+            return None
+        
+        metadata_folder_id = get_gdrive_id_by_name("_metadata", project_plan_id, is_folder=True)
+        if not metadata_folder_id:
+            st.warning("⚠️ Could not find 01_Project_Plan/_metadata folder. Metadata features disabled.")
+            return None
+        
+        return metadata_folder_id
+    except Exception as e:
+        st.warning(f"⚠️ Error accessing metadata folder: {e}")
+        return None
