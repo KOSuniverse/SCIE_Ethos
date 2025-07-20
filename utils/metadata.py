@@ -73,9 +73,12 @@ def update_global_aliases(new_aliases):
         if file_id:
             # File exists - update it
             save_json_file(file_id, new_aliases)
+            st.success("✅ Updated global column aliases")
         else:
             # File doesn't exist - create it
-            create_json_file(metadata_folder_id, "global_column_aliases.json", new_aliases)
+            new_file_id = create_json_file(metadata_folder_id, "global_column_aliases.json", new_aliases)
+            if new_file_id:
+                st.success("🆕 Created global column aliases file")
     except Exception as e:
         st.warning(f"Could not save aliases: {e}")
 
@@ -107,8 +110,11 @@ def save_learned_answers(data):
         if file_id:
             # File exists - update it
             save_json_file(file_id, data)
+            st.success("✅ Updated learned answers")
         else:
             # File doesn't exist - create it
-            create_json_file(metadata_folder_id, "learned_answers.json", data)
+            new_file_id = create_json_file(metadata_folder_id, "learned_answers.json", data)
+            if new_file_id:
+                st.success("🆕 Created learned answers file")
     except Exception as e:
         st.warning(f"Could not save learned answers: {e}")
