@@ -3,6 +3,7 @@
 import streamlit as st
 from datetime import datetime
 from difflib import SequenceMatcher
+from dateutil.parser import isoparse
 from utils.metadata import load_metadata, save_metadata, load_global_aliases, update_global_aliases, load_learned_answers, save_learned_answers
 from utils.gdrive import list_all_supported_files, get_file_last_modified, download_file
 from llm_client import get_embedding, cosine_similarity, answer_question, verify_answer, generate_llm_metadata, mine_for_root_causes
@@ -82,7 +83,10 @@ for idx, file in enumerate(all_files):
 
     if meta.get("last_indexed") and file_last_modified:
         try:
-            if file_last_modified <= datetime.fromisoformat(meta["last_indexed"]).timestamp():
+            # Convert both to timestamps for comparison
+            file_timestamp = isoparse(file_last_modified).timestamp()
+            indexed_timestamp = datetime.fromisoformat(meta["last_indexed"]).timestamp()
+            if file_timestamp <= indexed_timestamp:
                 needs_index = False
         except Exception:
             pass
