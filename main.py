@@ -124,14 +124,6 @@ for idx, file in enumerate(all_files):
 progress_bar.empty()
 update_global_aliases(updated_global_aliases)
 
-# --- Editable Alias Mapping UI ---
-if st.checkbox("🔧 Edit Column Alias Mappings"):
-    current_aliases = load_global_aliases()
-    editable_aliases = st.experimental_data_editor(current_aliases, num_rows="dynamic", key="alias_editor")
-    if st.button("💾 Save Updated Aliases"):
-        update_global_aliases(editable_aliases)
-        st.success("Aliases updated successfully.")
-
 # --- Question form ---
 with st.form("question_form", clear_on_submit=False):
     user_query = st.text_input("Your question:", value=st.session_state.get("last_query", ""))
