@@ -74,7 +74,8 @@ progress_bar = st.progress(0, text="Indexing files and building metadata...")
 for idx, file in enumerate(all_files):
     file_name = file["name"]
     file_id = file["id"]
-    ext = file_name.lower().split(".")[-1]
+    ext = file_name.lower().split(".")[-1] if "." in file_name else "unknown"
+    
     meta = load_metadata(file_name) or {"source_file": file_name}
     file_last_modified = get_file_last_modified(file_id)
     needs_index = True
@@ -161,38 +162,41 @@ if submit and user_query.strip():
         
         # Debug: Show file names to understand the issue
         st.write("**Debug - File Details:**")
-        for i, file in enumerate(all_files[:7]):  # Show all files since you have 7
+        for i, file in enumerate(all_files[:10]):  # Show first 10 files
             file_name = file['name']
             mime_type = file.get('mimeType', 'Unknown')
+            folder_path = file.get('folder_path', 'Root')
             
-            # Better file type detection based on MIME type
-            if 'spreadsheet' in mime_type or file_name.lower().endswith('.xlsx'):
+            # Better file type detection based on file extension
+            if file_name.lower().endswith('.xlsx'):
                 file_type = "Excel"
-            elif 'pdf' in mime_type or file_name.lower().endswith('.pdf'):
+            elif file_name.lower().endswith('.pdf'):
                 file_type = "PDF"
-            elif 'document' in mime_type or file_name.lower().endswith('.docx'):
+            elif file_name.lower().endswith('.docx'):
                 file_type = "Word"
             elif 'folder' in mime_type:
                 file_type = "Folder"
             else:
-                file_type = f"Other ({mime_type})"
+                file_type = f"Other"
                 
-            st.write(f"{i+1}. **{file_name}** - {file_type}")
+            st.write(f"{i+1}. **{file_name}** - {file_type} (in {folder_path})")
+        
+        if len(all_files) > 10:
+            st.write(f"... and {len(all_files) - 10} more files")
         
         # Better file type counting
         file_types = {}
         for file in all_files:
             file_name = file["name"]
-            mime_type = file.get('mimeType', '')
             
-            if 'spreadsheet' in mime_type or file_name.lower().endswith('.xlsx'):
+            if file_name.lower().endswith('.xlsx'):
                 file_type = "Excel files"
-            elif 'pdf' in mime_type or file_name.lower().endswith('.pdf'):
+            elif file_name.lower().endswith('.pdf'):
                 file_type = "PDF files"
-            elif 'document' in mime_type or file_name.lower().endswith('.docx'):
+            elif file_name.lower().endswith('.docx'):
                 file_type = "Word documents"
-            elif 'folder' in mime_type:
-                file_type = "Folders"
+            elif file_name.lower().endswith('.pptx'):
+                file_type = "PowerPoint files"
             else:
                 file_type = "Other files"
                 
