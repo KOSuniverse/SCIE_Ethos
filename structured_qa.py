@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import io
 import re
 from utils.gdrive import download_file
-from utils.llm_client import answer_question
+from llm_client import answer_question
 
 
 def structured_data_qa(user_query, top_chunks):
