@@ -5,9 +5,9 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from utils.metadata import load_metadata, save_metadata, load_global_aliases, update_global_aliases, load_learned_answers, save_learned_answers
 from utils.gdrive import list_all_supported_files, get_file_last_modified, download_file
-from utils.llm_client import get_embedding, cosine_similarity, answer_question, verify_answer, generate_llm_metadata, mine_for_root_causes
+from llm_client import get_embedding, cosine_similarity, answer_question, verify_answer, generate_llm_metadata, mine_for_root_causes
 from utils.text_utils import chunk_text, extract_text_for_metadata, extract_structural_metadata
-from utils.modeling import predictive_modeling_prebuilt, predictive_modeling_guided, predictive_modeling_inference, build_and_run_model
+from modeling import predictive_modeling_prebuilt, predictive_modeling_guided, predictive_modeling_inference, build_and_run_model
 from utils.excel_qa import excel_qa, structured_data_qa
 from utils.column_mapping import map_columns_to_concepts
 
