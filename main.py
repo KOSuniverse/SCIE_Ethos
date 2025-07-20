@@ -77,62 +77,71 @@ for idx, file in enumerate(all_files):
     file_id = file["id"]
     ext = file_name.lower().split(".")[-1] if "." in file_name else "unknown"
     
-    meta = load_metadata(file_name) or {"source_file": file_name}
     file_last_modified = get_file_last_modified(file_id)
+    meta = load_metadata(file_name) or {"source_file": file_name}
     needs_index = True
 
+    # --- Efficient re-indexing: skip if file hasn't changed since last_indexed
     if meta.get("last_indexed") and file_last_modified:
         try:
-            # Convert both to timestamps for comparison
-            file_timestamp = isoparse(file_last_modified).timestamp()
-            indexed_timestamp = datetime.fromisoformat(meta["last_indexed"]).timestamp()
-            if file_timestamp <= indexed_timestamp:
+            # file_last_modified is ISO string from Drive, meta["last_indexed"] is ISO string
+            if isoparse(file_last_modified) <= isoparse(meta["last_indexed"]):
                 needs_index = False
         except Exception:
             pass
 
     if needs_index:
         try:
-            # Extract text based on file type - no special handling for xlsx since you don't have Google Sheets
-            text = extract_text_for_metadata(file_id)
-            
-            # Handle tuple return from some extract functions
-            if isinstance(text, tuple):
-                text = text[0] if text[0] else ""
-            
-            if text and text.strip():
-                meta.update({
-                    "file_type": ext,
-                    "last_modified": datetime.fromtimestamp(file_last_modified).isoformat() if file_last_modified else None,
-                    "last_indexed": datetime.now().isoformat(),
-                })
-                
-                # Only process Excel files for column data if they're actually Excel files
-                if ext == "xlsx" and "." in file_name:
-                    try:
-                        # Simple Excel processing - no complex sheet handling
-                        meta["file_type"] = "excel"
-                    except Exception:
-                        pass  # Skip Excel-specific processing if it fails
+            if ext == "xlsx":
+                text, sheet_names, columns_by_sheet = extract_text_for_metadata(file_id)
+            else:
+                text = extract_text_for_metadata(file_id)
+                sheet_names, columns_by_sheet = [], {}
 
+            if isinstance(text, tuple):
+                text = text[0]
+
+            if text and text.strip():
+                meta["file_type"] = ext
+                meta["file_size"] = file.get("size", None)
+                meta["last_modified"] = file_last_modified
+                meta["last_indexed"] = datetime.now().isoformat()
+
+                # Excel-specific
+                if ext == "xlsx":
+                    meta["sheet_names"] = sheet_names
+                    meta["columns_by_sheet"] = columns_by_sheet
+                    all_columns = []
+                    for cols in columns_by_sheet.values():
+                        all_columns.extend(cols)
+                    meta["columns"] = list(set(all_columns))
+                    column_aliases = map_columns_to_concepts(meta["columns"], updated_global_aliases)
+                    meta["column_aliases"] = column_aliases
+                    updated_global_aliases.update(column_aliases)
+
+                # LLM-generated summary/tags/category for ALL files
                 llm_meta = generate_llm_metadata(text, ext)
                 meta.update(llm_meta)
+                # Structural metadata for all files
                 meta.update(extract_structural_metadata(text, ext))
                 save_metadata(file_name, meta)
 
                 for chunk in chunk_text(text):
                     all_chunks.append((meta, chunk))
 
-                if meta.get("summary"):
+                # --- Embedding (based on summary)
+                if meta.get("summary", ""):
                     embedding_cache[file_name] = get_embedding(meta["summary"])
+
         except Exception as e:
-            st.warning(f"⚠️ Skipped {file_name}: {e}")
+            st.warning(f"⚠️ Failed to process {file_name}: {e}")
             continue
     else:
-        if meta.get("summary"):
+        # Use existing metadata and skip re-indexing
+        if "summary" in meta:
             for chunk in chunk_text(meta["summary"]):
                 all_chunks.append((meta, chunk))
-        if meta.get("embedding"):
+        if "embedding" in meta and meta["embedding"]:
             embedding_cache[file_name] = meta["embedding"]
 
     progress_bar.progress((idx + 1) / len(all_files), text=f"Indexed {idx+1}/{len(all_files)} files")
