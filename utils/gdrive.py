@@ -25,15 +25,35 @@ def get_gdrive_id_by_name(name, parent_id, is_folder=False):
     return None
 
 def list_all_supported_files(folder_id=None):
-    """List all supported files, excluding raw data folder."""
+    """List all supported files recursively, excluding raw data folder."""
     if folder_id is None:
         folder_id = PROJECT_ROOT_ID
     
-    all_files = [
-        f
-        for f in _list_all_supported_files(folder_id)
-        if not f["name"].startswith("Raw_Data")
-    ]
+    all_files = []
+    
+    def scan_folder_recursively(current_folder_id, path=""):
+        """Recursively scan folders for supported files."""
+        files_in_folder = _list_all_supported_files(current_folder_id)
+        
+        for f in files_in_folder:
+            file_name = f["name"]
+            mime_type = f.get("mimeType", "")
+            
+            # Skip Raw_Data folders
+            if file_name.startswith("Raw_Data"):
+                continue
+                
+            if mime_type == "application/vnd.google-apps.folder":
+                # It's a folder - scan it recursively
+                new_path = f"{path}/{file_name}" if path else file_name
+                scan_folder_recursively(f["id"], new_path)
+            else:
+                # It's a file - add it to our list
+                f["folder_path"] = path  # Add folder path info
+                all_files.append(f)
+    
+    # Start recursive scan from root
+    scan_folder_recursively(folder_id)
     return all_files
 
 def download_file(file_id):
