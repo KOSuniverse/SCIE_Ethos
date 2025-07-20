@@ -8,7 +8,7 @@ import traceback
 from io import BytesIO
 from googleapiclient.http import MediaIoBaseUpload
 from utils.gdrive import download_file, list_all_supported_files, get_models_folder_id
-from utils.llm_client import answer_question
+from llm_client import answer_question
 from gdrive_utils import get_drive_service
 from utils.structured_qa import model_name_input
 MODELS_FOLDER_NAME = "Models"
