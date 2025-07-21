@@ -15,7 +15,7 @@ if st.button("Insert Test Metadata"):
         "filetype": "xlsx",
         "last_modified": datetime.utcnow().isoformat()
     }
-   import mimetypes
+import mimetypes
 from supabase_config import supabase
 from supabase_utils import insert_metadata
 import base64
