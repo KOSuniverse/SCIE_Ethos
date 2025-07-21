@@ -39,7 +39,7 @@ if st.button("List Files in Bucket"):
 st.markdown("---")
 st.subheader("📁 Upload a File to Supabase")
 
-#uploaded_file = st.file_uploader("Choose a file", type=["pdf", "docx", "xlsx", "pptx"])
+uploaded_file = st.file_uploader("Choose a file", type=["pdf", "docx", "xlsx", "pptx"])
 
 if uploaded_file:
     file_bytes = uploaded_file.read()
