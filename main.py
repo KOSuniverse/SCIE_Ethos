@@ -69,3 +69,14 @@ if uploaded_file:
     except Exception as e:
         st.error(f"❌ Failed to upload or insert metadata: {e}")
 
+st.markdown("---")
+st.subheader("📋 Supabase Connection Test")
+
+if st.button("Show Metadata Table Rows"):
+    try:
+        rows = supabase.table("metadata").select("*").limit(5).execute()
+        st.success("✅ Retrieved rows from Supabase:")
+        st.json(rows.data)
+    except Exception as e:
+        st.error(f"❌ Failed to query metadata table: {e}")
+
