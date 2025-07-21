@@ -65,10 +65,10 @@ if uploaded_file:
         metadata = {
             "filename": filename,
             "folder": folder,
-            "title": filename.split(".")[0],
-            "category": folder,
-            "tags": [extension],
-            "summary": f"Uploaded via Streamlit on {datetime.utcnow().isoformat()}",
+            "title": gpt_generated_title,
+            "category": gpt_generated_category,
+            "tags": gpt_generated_tags,
+            "summary": gpt_generated_summary,
             "filetype": extension,
             "last_modified": datetime.utcnow().isoformat()
         }
