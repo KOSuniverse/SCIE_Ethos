@@ -3,6 +3,65 @@ from datetime import datetime
 import mimetypes
 from supabase_config import supabase
 from supabase_utils import insert_metadata
+import pandas as pd
+
+def extract_text_from_excel(file_bytes):
+    try:
+        df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None)
+        text = ""
+        for sheet_name, sheet_df in df.items():
+            text += f"\n\nSheet: {sheet_name}\n"
+            text += sheet_df.astype(str).to_string(index=False)
+        return text[:6000]  # limit to ~6K characters for GPT
+    except Exception as e:
+        return f"Error reading Excel: {e}"
+
+import openai
+openai.api_key = st.secrets["OPENAI_API_KEY"]
+
+def generate_metadata_from_text(text):
+    prompt = f"""
+You are a metadata extraction assistant.
+
+Given the following document content, extract:
+- A short, descriptive title
+- A one-word category
+- A 1–2 sentence summary
+- A list of 3–5 relevant tags (as a Python list)
+
+Respond in this exact Python dictionary format:
+{{
+    "title": "...",
+    "category": "...",
+    "summary": "...",
+    "tags": ["...", "...", ...]
+}}
+
+Document content:
+{text}
+    """
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that extracts structured metadata."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=500,
+            temperature=0.3
+        )
+        reply = response.choices[0].message["content"]
+
+        # Evaluate the returned dictionary
+        return eval(reply)  # 👈 this is safe here since you control the prompt format
+    except Exception as e:
+        return {
+            "title": "Untitled",
+            "category": "Unknown",
+            "summary": "Metadata generation failed.",
+            "tags": []
+        }
 
 st.title("🚀 Supabase Test App")
 
@@ -61,14 +120,20 @@ if uploaded_file:
         supabase.storage.from_("llm-files").upload(file_path, file_bytes)
         st.success(f"✅ Uploaded {filename} to Supabase at `{file_path}`")
 
-        # Generate and insert metadata
+        # Extract text and generate AI metadata
+        if extension == "xlsx":
+            text = extract_text_from_excel(file_bytes)
+        else:
+            text = ""  # You can add other extractors for docx, pdf, pptx if needed
+        ai_metadata = generate_metadata_from_text(text)
+
         metadata = {
             "filename": filename,
             "folder": folder,
-            "title": gpt_generated_title,
-            "category": gpt_generated_category,
-            "tags": gpt_generated_tags,
-            "summary": gpt_generated_summary,
+            "title": ai_metadata["title"],
+            "category": ai_metadata["category"],
+            "tags": ai_metadata["tags"],
+            "summary": ai_metadata["summary"],
             "filetype": extension,
             "last_modified": datetime.utcnow().isoformat()
         }
