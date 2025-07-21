@@ -5,6 +5,7 @@ from supabase_config import supabase
 from supabase_utils import insert_metadata
 import pandas as pd
 import io
+from supabase_utils import save_metadata, load_metadata, update_global_aliases, load_global_aliases, save_learned_answers, load_learned_answers, list_supported_files, download_file
 
 def extract_text_from_excel(file_bytes):
     try:
@@ -167,6 +168,78 @@ if uploaded_file:
 
 st.markdown("---")
 st.subheader("📋 Supabase Connection Test")
+
+# ---- Test: Metadata Save/Load ----
+st.markdown("---")
+st.subheader("🧪 Test: Metadata Save/Load")
+if st.button("Test Save/Load Metadata"):
+    test_data = {
+        "filename": "unit_test_file.xlsx",
+        "title": "Unit Test Metadata",
+        "category": "test",
+        "summary": "Testing Supabase metadata functions.",
+        "tags": ["test", "metadata"],
+        "filetype": "xlsx",
+        "last_modified": datetime.utcnow().isoformat()
+    }
+    try:
+        save_metadata("unit_test_file.xlsx", test_data)
+        loaded = load_metadata("unit_test_file.xlsx")
+        st.success("✅ Saved and loaded metadata:")
+        st.json(loaded)
+    except Exception as e:
+        st.error(f"❌ Metadata save/load failed: {e}")
+
+# ---- Test: Global Alias Insert/Update ----
+st.markdown("---")
+st.subheader("🧪 Test: Global Alias Insert/Update")
+if st.button("Test Global Alias Insert/Update"):
+    alias_test = {
+        "QTY": "quantity",
+        "Part No.": "part_number",
+        "abc123": "ignore"
+    }
+    try:
+        update_global_aliases(alias_test)
+        aliases = load_global_aliases()
+        st.success("✅ Updated and loaded global aliases:")
+        st.json(aliases)
+    except Exception as e:
+        st.error(f"❌ Global alias test failed: {e}")
+
+# ---- Test: Learned Answers ----
+st.markdown("---")
+st.subheader("🧪 Test: Learned Answers Save/Load")
+if st.button("Test Learned Answers Save/Load"):
+    qa = {
+        "What is the par level?": {
+            "question": "What is the par level?",
+            "answer": "Par level is the minimum inventory required to meet demand.",
+            "files_used": ["test.xlsx"]
+        }
+    }
+    try:
+        save_learned_answers(qa)
+        learned = load_learned_answers()
+        st.success("✅ Saved and loaded learned answers:")
+        st.json(learned)
+    except Exception as e:
+        st.error(f"❌ Learned answers test failed: {e}")
+
+# ---- Test: File Listing/Download ----
+st.markdown("---")
+st.subheader("🧪 Test: File Listing/Download")
+if st.button("Test List/Download Files"):
+    try:
+        files = list_supported_files()
+        st.success("✅ Supported files:")
+        st.json(files)
+        if files:
+            f = files[0]['name']
+            file_stream = download_file(f"02_Excel/{f}")
+            st.success(f"Downloaded file {f} with size: {len(file_stream.getvalue())} bytes")
+    except Exception as e:
+        st.error(f"❌ File listing/download test failed: {e}")
 
 if st.button("Show Metadata Table Rows"):
     try:
