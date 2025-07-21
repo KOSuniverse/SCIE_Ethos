@@ -16,3 +16,4 @@ scikit-learn
 office365-rest-python-client
 joblib
 nltk
+supabase
