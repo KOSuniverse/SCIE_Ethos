@@ -3,6 +3,7 @@ from datetime import datetime
 import json
 import io
 import os
+print("Inserting column_aliases:", rows)
 
 # ---------- STORAGE UTILS ----------
 
