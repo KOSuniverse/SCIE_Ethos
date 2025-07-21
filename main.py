@@ -4,6 +4,7 @@ import mimetypes
 from supabase_config import supabase
 from supabase_utils import insert_metadata
 import pandas as pd
+import io
 
 def extract_text_from_excel(file_bytes):
     try:
