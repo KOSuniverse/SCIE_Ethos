@@ -1,5 +1,5 @@
 streamlit
-supabase
+supabase-py
 openai
 pandas
 numpy
