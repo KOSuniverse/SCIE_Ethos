@@ -799,9 +799,13 @@ if "query_log" not in st.session_state:
 
 st.header("Ask a question about your knowledge base")
 
-with st.form("question_form", clear_on_submit=False):
-    user_query = st.text_input("Your question:", value=st.session_state.get("last_query", ""))
-    submit = st.form_submit_button("Ask")
+user_query = st.text_input("Your question:", value=st.session_state.get("last_query", ""), key="query_input")
+
+submit = st.button("Ask")
+
+if submit or (user_query and user_query != st.session_state.get("last_query")):
+    run_user_query(user_query, all_chunks)
+
 
 if submit and user_query.strip():
     run_user_query(user_query, all_chunks)
