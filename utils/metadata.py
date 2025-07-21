@@ -23,6 +23,7 @@ def load_metadata(filename):
 def save_metadata(filename, data):
     """Save metadata for a specific file - create JSON file if it doesn't exist."""
     try:
+        st.write(f"📝 Saving metadata for {filename}")  # 🔍 DEBUG LOG
         metadata_folder_id = get_metadata_folder_id()
         if not metadata_folder_id:
             return  # No metadata folder available, skip saving
