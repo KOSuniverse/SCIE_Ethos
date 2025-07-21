@@ -5,7 +5,7 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from dateutil.parser import isoparse
 from utils.metadata import load_metadata, save_metadata, load_global_aliases, update_global_aliases, load_learned_answers, save_learned_answers
-from utils.gdrive import list_all_supported_files, get_file_last_modified, download_file
+from gdrive_utils import list_all_supported_files, get_file_last_modified, download_file, get_drive_service
 from llm_client import get_embedding, cosine_similarity, answer_question, verify_answer, generate_llm_metadata, mine_for_root_causes
 from utils.text_utils import chunk_text, extract_text_for_metadata, extract_structural_metadata
 from modeling import predictive_modeling_prebuilt, predictive_modeling_guided, predictive_modeling_inference, build_and_run_model
@@ -15,7 +15,7 @@ from utils.column_mapping import map_columns_to_concepts
 
 # --- Google Drive Configuration ---
 PROJECT_ROOT_FOLDER_ID = "1t1CcZzwsjOPMNKKMkdJd6kXhixTreNuY"  # Your main project folder
-METADATA_FOLDER_ID = "1Gj7fv5PHdHdwFpZkOb7b9fKl4NHGG6nE"  # Your _metadata folder
+METADATA_FOLDER_ID = "1l7ReGDGypnmcgUMAJ07Wf6Qwim_FGEMQ"  # Your _metadata folder (CORRECTED)
 
 def find_similar_learned_answer(query, learned_answers, threshold=0.85):
     """Find similar previously learned answers."""
@@ -65,7 +65,7 @@ global_aliases = load_global_aliases(METADATA_FOLDER_ID) or {}  # Ensure it's ne
 updated_global_aliases = global_aliases.copy()
 learned_answers = load_learned_answers(METADATA_FOLDER_ID) or {}  # Ensure it's never None
 
-all_files = list_all_supported_files()
+all_files = list_all_supported_files(PROJECT_ROOT_FOLDER_ID)
 all_chunks = []
 embedding_cache = {}
 
@@ -97,9 +97,9 @@ for idx, file in enumerate(all_files):
     if needs_index:
         try:
             if ext == "xlsx":
-                text, sheet_names, columns_by_sheet = extract_text_for_metadata(file_id, download_file, None)
+                text, sheet_names, columns_by_sheet = extract_text_for_metadata(file_id, max_ocr_pages=5, download_file_func=download_file, get_drive_service_func=get_drive_service)
             else:
-                text = extract_text_for_metadata(file_id, download_file, None)
+                text = extract_text_for_metadata(file_id, max_ocr_pages=5, download_file_func=download_file, get_drive_service_func=get_drive_service)
                 sheet_names, columns_by_sheet = [], {}
 
             if isinstance(text, tuple):
