@@ -19,7 +19,7 @@ def extract_text_from_excel(file_bytes):
 import openai
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-def generate_metadata_from_text(text):
+def generate_metadata_from_text(text, return_reply=False):
     prompt = f"""
 You are a metadata extraction assistant.
 
@@ -52,16 +52,36 @@ Document content:
             temperature=0.3
         )
         reply = response.choices[0].message["content"]
-
-        # Evaluate the returned dictionary
-        return eval(reply)  # 👈 this is safe here since you control the prompt format
+        try:
+            result = eval(reply)
+        except Exception as parse_error:
+            print(f"Failed to parse GPT reply: {reply}")
+            print(f"Parse error: {parse_error}")
+            result = {
+                "title": "Untitled",
+                "category": "Unknown",
+                "summary": "Metadata generation failed.",
+                "tags": []
+            }
+        if return_reply:
+            return result, reply
+        else:
+            return result
     except Exception as e:
-        return {
-            "title": "Untitled",
-            "category": "Unknown",
-            "summary": "Metadata generation failed.",
-            "tags": []
-        }
+        if return_reply:
+            return {
+                "title": "Untitled",
+                "category": "Unknown",
+                "summary": "Metadata generation failed.",
+                "tags": []
+            }, ""
+        else:
+            return {
+                "title": "Untitled",
+                "category": "Unknown",
+                "summary": "Metadata generation failed.",
+                "tags": []
+            }
 
 st.title("🚀 Supabase Test App")
 
@@ -125,7 +145,14 @@ if uploaded_file:
             text = extract_text_from_excel(file_bytes)
         else:
             text = ""  # You can add other extractors for docx, pdf, pptx if needed
-        ai_metadata = generate_metadata_from_text(text)
+
+        st.subheader("🧾 Extracted Text from Excel:")
+        st.code(text[:1000])  # preview only first 1000 chars
+
+        ai_metadata, gpt_reply = generate_metadata_from_text(text, return_reply=True)
+
+        st.subheader("🧠 GPT Raw Reply")
+        st.code(gpt_reply)
 
         metadata = {
             "filename": filename,
