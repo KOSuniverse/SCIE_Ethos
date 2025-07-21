@@ -1,9 +1,12 @@
 import streamlit as st
-from supabase_utils import insert_metadata
 from datetime import datetime
+import mimetypes
+from supabase_config import supabase
+from supabase_utils import insert_metadata
 
 st.title("🚀 Supabase Test App")
 
+# ---- Test Insert Button ----
 if st.button("Insert Test Metadata"):
     metadata = {
         "filename": "test_file.xlsx",
@@ -15,14 +18,14 @@ if st.button("Insert Test Metadata"):
         "filetype": "xlsx",
         "last_modified": datetime.utcnow().isoformat()
     }
-import mimetypes
-from supabase_config import supabase
-from supabase_utils import insert_metadata
-import base64
-import io
-from datetime import datetime
-import streamlit as st
+    try:
+        response = insert_metadata(metadata)
+        st.success("✅ Test metadata inserted.")
+        st.json(response.data)
+    except Exception as e:
+        st.error(f"❌ Failed to insert test metadata: {e}")
 
+# ---- File Upload Section ----
 st.markdown("---")
 st.subheader("📁 Upload a File to Supabase")
 
@@ -41,14 +44,14 @@ if uploaded_file:
         "pptx": "03_PPT"
     }
     folder = folder_map.get(extension, "unknown")
-
-    # Upload to Supabase Storage
     file_path = f"{folder}/{filename}"
+
     try:
-        supabase.storage.from_("llm-files").upload(file_path, file_bytes, {"content-type": mimetypes.guess_type(filename)[0]})
+        # Upload to Supabase Storage
+        supabase.storage.from_("llm-files").upload(file_path, file_bytes)
         st.success(f"✅ Uploaded {filename} to Supabase at `{file_path}`")
 
-        # Insert metadata
+        # Generate and insert metadata
         metadata = {
             "filename": filename,
             "folder": folder,
@@ -65,10 +68,4 @@ if uploaded_file:
 
     except Exception as e:
         st.error(f"❌ Failed to upload or insert metadata: {e}")
- 
-    try:
-        response = insert_metadata(metadata)
-        st.success("✅ Metadata inserted into Supabase.")
-        st.json(response.data)
-    except Exception as e:
-        st.error(f"❌ Error inserting metadata: {e}")
+
