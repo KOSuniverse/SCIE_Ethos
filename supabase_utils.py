@@ -3,7 +3,6 @@ from datetime import datetime
 import json
 import io
 import os
-print("Inserting column_aliases:", rows)
 
 # ---------- STORAGE UTILS ----------
 
@@ -58,6 +57,7 @@ def update_global_aliases(new_aliases: dict):
     # Overwrite by deleting all and re-inserting
     supabase.table("column_aliases").delete().neq("original", "").execute()
     rows = [{"original": k, "alias": v} for k, v in new_aliases.items()]
+    print("Inserting column_aliases:", rows)
     return supabase.table("column_aliases").insert(rows).execute()
 
 # ---------- LEARNED ANSWERS ----------
