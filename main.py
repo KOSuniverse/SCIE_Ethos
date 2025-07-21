@@ -18,6 +18,10 @@ def extract_text_from_excel(file_bytes):
     except Exception as e:
         return f"Error reading Excel: {e}"
 
+import supabase_utils
+st.code(supabase_utils.__file__, language="python")
+
+
 import openai
 
 openai.api_key = st.secrets["OPENAI_API_KEY"]
