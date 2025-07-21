@@ -25,11 +25,21 @@ if st.button("Insert Test Metadata"):
     except Exception as e:
         st.error(f"❌ Failed to insert test metadata: {e}")
 
+st.subheader("📦 Supabase Storage Test")
+
+if st.button("List Files in Bucket"):
+    try:
+        files = supabase.storage.from_("llm-files").list()
+        st.success("✅ Files in llm-files bucket:")
+        st.json(files)
+    except Exception as e:
+        st.error(f"❌ Could not access storage bucket: {e}")
+
 # ---- File Upload Section ----
 st.markdown("---")
 st.subheader("📁 Upload a File to Supabase")
 
-uploaded_file = st.file_uploader("Choose a file", type=["pdf", "docx", "xlsx", "pptx"])
+#uploaded_file = st.file_uploader("Choose a file", type=["pdf", "docx", "xlsx", "pptx"])
 
 if uploaded_file:
     file_bytes = uploaded_file.read()
