@@ -83,15 +83,21 @@ def get_models_folder_id():
 def get_metadata_folder_id():
     """Get the metadata folder ID from 01_Project_Plan/_metadata."""
     try:
+        st.write("🔍 Checking for 01_Project_Plan and _metadata folders...")  # 👈 DEBUG LOG
+        
         project_plan_id = get_gdrive_id_by_name("01_Project_Plan", PROJECT_ROOT_ID, is_folder=True)
         if not project_plan_id:
             st.warning("⚠️ Could not find 01_Project_Plan folder. Metadata features disabled.")
             return None
         
+        st.write(f"✅ Found 01_Project_Plan folder: {project_plan_id}")  # 👈 DEBUG LOG
+        
         metadata_folder_id = get_gdrive_id_by_name("_metadata", project_plan_id, is_folder=True)
         if not metadata_folder_id:
             st.warning("⚠️ Could not find 01_Project_Plan/_metadata folder. Metadata features disabled.")
             return None
+        
+        st.write(f"✅ Found _metadata folder: {metadata_folder_id}")  # 👈 DEBUG LOG
         
         return metadata_folder_id
     except Exception as e:
