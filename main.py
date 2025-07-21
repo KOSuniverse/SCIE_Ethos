@@ -124,6 +124,8 @@ for idx, file in enumerate(all_files):
                 meta.update(llm_meta)
                 # Structural metadata for all files
                 meta.update(extract_structural_metadata(text, ext))
+                
+                st.write(f"✅ Calling save_metadata for: {file_name}")  # 🔍 DEBUG LOG
                 save_metadata(file_name, meta)
 
                 for chunk in chunk_text(text):

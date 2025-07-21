@@ -182,7 +182,8 @@ def save_json_file(file_id, data):
         # Update the file
         service.files().update(
             fileId=file_id,
-            media_body=media_body
+            media_body=media_body,
+            supportsAllDrives=True  # 🔍 REQUIRED for Shared Drives
         ).execute()
         
     except Exception as e:
@@ -203,6 +204,8 @@ def create_json_file(folder_id, filename, data):
     service = get_drive_service()
     
     try:
+        st.write(f"📁 Creating new metadata file: {filename} in folder {folder_id}")  # 🔍 DEBUG LOG
+        
         # Convert data to JSON bytes
         json_bytes = json.dumps(data, indent=2).encode('utf-8')
         buffer = BytesIO(json_bytes)
@@ -221,10 +224,13 @@ def create_json_file(folder_id, filename, data):
         file = service.files().create(
             body=file_metadata,
             media_body=media,
-            fields='id'
+            fields='id',
+            supportsAllDrives=True  # 🔍 REQUIRED for Shared Drives
         ).execute()
         
-        return file.get('id')
+        file_id = file.get('id')
+        st.write(f"✅ Successfully created metadata file: {filename} with ID: {file_id}")  # 🔍 DEBUG LOG
+        return file_id
         
     except Exception as e:
         st.error(f"Error creating JSON file {filename}: {e}")
