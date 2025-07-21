@@ -70,6 +70,45 @@ with st.expander("📁 Upload a File to Supabase"):
         try:
             upload_file(path, file_bytes)
             st.success(f"✅ Uploaded to Supabase at `{path}`")
+            # --- Immediately extract and save metadata for the uploaded file ---
+            if ext == "xlsx":
+                text, sheet_names, columns_by_sheet = extract_text_for_metadata(path)
+            else:
+                text = extract_text_for_metadata(path)
+                sheet_names, columns_by_sheet = [], {}
+
+            if isinstance(text, tuple):
+                text = text[0]
+
+            if text.strip():
+                gpt_meta = generate_llm_metadata(text, ext)
+                gpt_meta["source_file"] = path
+                gpt_meta["last_indexed"] = datetime.now().isoformat()
+                gpt_meta["author"] = st.secrets.get("user_email", "system")
+                gpt_meta["file_type"] = ext
+                gpt_meta["file_size"] = len(file_bytes)
+                gpt_meta["last_modified"] = datetime.now().isoformat()
+
+                if ext == "xlsx":
+                    gpt_meta["sheet_names"] = sheet_names
+                    gpt_meta["columns_by_sheet"] = columns_by_sheet
+                    all_columns = []
+                    if columns_by_sheet:
+                        for cols in columns_by_sheet.values():
+                            all_columns.extend(cols)
+                    gpt_meta["columns"] = list(set(all_columns)) if all_columns else []
+                    if gpt_meta["columns"]:
+                        # Use current global_aliases for mapping
+                        column_aliases = map_columns_to_concepts(gpt_meta["columns"], global_aliases)
+                        gpt_meta["column_aliases"] = column_aliases
+                        update_global_aliases(column_aliases)
+
+                gpt_meta.update(extract_structural_metadata(text, ext))
+                save_metadata(path, gpt_meta)
+                st.success(f"📝 Metadata extracted and saved for `{path}`.")
+            else:
+                st.warning(f"No extractable text found in `{path}` for metadata generation.")
+
         except Exception as e:
             st.error(f"❌ Upload failed: {e}")
 
