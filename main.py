@@ -13,6 +13,10 @@ from utils.excel_qa import excel_qa
 from structured_qa import structured_data_qa
 from utils.column_mapping import map_columns_to_concepts
 
+# --- Google Drive Configuration ---
+PROJECT_ROOT_FOLDER_ID = "1t1CcZzwsjOPMNKKMkdJd6kXhixTreNuY"  # Your main project folder
+METADATA_FOLDER_ID = "1Gj7fv5PHdHdwFpZkOb7b9fKl4NHGG6nE"  # Your _metadata folder
+
 def find_similar_learned_answer(query, learned_answers, threshold=0.85):
     """Find similar previously learned answers."""
     def similarity(a, b):
@@ -50,16 +54,16 @@ if st.checkbox("🔧 Edit Column Alias Mappings"):
         )
         
         if st.button("💾 Save Updated Aliases"):
-            update_global_aliases(alias_df)
+            update_global_aliases(alias_df, METADATA_FOLDER_ID)
             st.success("Aliases updated successfully.")
             st.rerun()
     else:
         st.info("No aliases found. They will be created automatically as files are processed.")
 
 # --- Load aliases and files ---
-global_aliases = load_global_aliases() or {}  # Ensure it's never None
+global_aliases = load_global_aliases(METADATA_FOLDER_ID) or {}  # Ensure it's never None
 updated_global_aliases = global_aliases.copy()
-learned_answers = load_learned_answers() or {}  # Ensure it's never None
+learned_answers = load_learned_answers(METADATA_FOLDER_ID) or {}  # Ensure it's never None
 
 all_files = list_all_supported_files()
 all_chunks = []
@@ -78,7 +82,7 @@ for idx, file in enumerate(all_files):
     ext = file_name.lower().split(".")[-1] if "." in file_name else "unknown"
     
     file_last_modified = get_file_last_modified(file_id)
-    meta = load_metadata(file_name) or {"source_file": file_name}
+    meta = load_metadata(file_name, METADATA_FOLDER_ID) or {"source_file": file_name}
     needs_index = True
 
     # --- Efficient re-indexing: skip if file hasn't changed since last_indexed
@@ -126,7 +130,7 @@ for idx, file in enumerate(all_files):
                 meta.update(extract_structural_metadata(text, ext))
                 
                 st.write(f"✅ Calling save_metadata for: {file_name}")  # 🔍 DEBUG LOG
-                save_metadata(file_name, meta)
+                save_metadata(file_name, meta, METADATA_FOLDER_ID)
 
                 for chunk in chunk_text(text):
                     all_chunks.append((meta, chunk))
@@ -307,7 +311,7 @@ if submit and user_query.strip():
             for score, meta, _, kw, sem in top_chunks
         ]
     }
-    save_learned_answers(learned_answers)
+    save_learned_answers(learned_answers, METADATA_FOLDER_ID)
 
     # --- Chart option ---
     top_meta = top_chunks[0][1] if top_chunks else None
