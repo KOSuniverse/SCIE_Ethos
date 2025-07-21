@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import os
 
 load_dotenv()  # Load variables from .env
-
+print("Supabase URL:", os.getenv("SUPABASE_URL"))
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
