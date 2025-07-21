@@ -11,7 +11,7 @@ from gdrive_utils import (
 )
 
 # Project constants
-PROJECT_ROOT_ID = "1rhT8zhCu4FGy1YUxXABXhUYV92iZwlAE"  # Test: Shared Drive root first
+PROJECT_ROOT_ID = "0ALW_Yta1kg9Uk9PVA"
 
 def get_gdrive_id_by_name(name, parent_id, is_folder=False):
     """Find a file or folder by name within a parent directory."""
