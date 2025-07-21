@@ -61,6 +61,10 @@ Document content:
     st.code(reply)
 
     try:
+        # Strip code block markers if present
+        if reply.startswith("```"):
+            reply = reply.strip("`python").strip("`").strip()
+
         parsed = eval(reply)
         assert isinstance(parsed, dict), "Reply is not a dictionary"
         return parsed
