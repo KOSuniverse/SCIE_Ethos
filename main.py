@@ -39,7 +39,7 @@ st.header("Ask a question about your knowledge base")
 
 # --- Streamlit UI for editing column aliases ---
 if st.checkbox("🔧 Edit Column Alias Mappings"):
-    current_aliases = load_global_aliases()
+    current_aliases = load_global_aliases(METADATA_FOLDER_ID)
     
     # Create an editable interface for aliases
     st.write("**Current Column Aliases:**")
@@ -97,9 +97,9 @@ for idx, file in enumerate(all_files):
     if needs_index:
         try:
             if ext == "xlsx":
-                text, sheet_names, columns_by_sheet = extract_text_for_metadata(file_id)
+                text, sheet_names, columns_by_sheet = extract_text_for_metadata(file_id, download_file, None)
             else:
-                text = extract_text_for_metadata(file_id)
+                text = extract_text_for_metadata(file_id, download_file, None)
                 sheet_names, columns_by_sheet = [], {}
 
             if isinstance(text, tuple):
@@ -152,7 +152,7 @@ for idx, file in enumerate(all_files):
 
     progress_bar.progress((idx + 1) / len(all_files), text=f"Indexed {idx+1}/{len(all_files)} files")
 progress_bar.empty()
-update_global_aliases(updated_global_aliases)
+update_global_aliases(updated_global_aliases, METADATA_FOLDER_ID)
 
 # --- Question form ---
 with st.form("question_form", clear_on_submit=False):
