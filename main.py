@@ -18,6 +18,7 @@ def extract_text_from_excel(file_bytes):
         return f"Error reading Excel: {e}"
 
 import openai
+
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 def generate_metadata_from_text(text):
@@ -37,7 +38,7 @@ Document content:
     """
 
     try:
-        response = openai.ChatCompletion.create(
+        response = openai.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant that extracts structured metadata."},
@@ -46,7 +47,7 @@ Document content:
             max_tokens=500,
             temperature=0.3
         )
-        reply = response.choices[0].message["content"]
+        reply = response.choices[0].message.content
     except Exception as e:
         st.error(f"❌ GPT request failed: {e}")
         return {
