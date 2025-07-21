@@ -36,22 +36,31 @@ def list_all_supported_files(folder_id=None):
         """Recursively scan folders for supported files."""
         files_in_folder = _list_all_supported_files(current_folder_id)
         
+        # 🔍 DEBUG LOG - Show what we found
+        st.write(f"📂 Scanning: {path or 'ROOT'} ({current_folder_id}) — found {len(files_in_folder)} items")
+        
         for f in files_in_folder:
             file_name = f["name"]
             mime_type = f.get("mimeType", "")
             
+            # 🔍 DEBUG LOG - Show each item
+            st.write(f"   🔎 {file_name} ({mime_type})")
+            
             # Skip Raw_Data folders
             if file_name.startswith("Raw_Data"):
+                st.write(f"   ⏭️ Skipping Raw_Data folder: {file_name}")
                 continue
                 
             if mime_type == "application/vnd.google-apps.folder":
                 # It's a folder - scan it recursively
                 new_path = f"{path}/{file_name}" if path else file_name
+                st.write(f"   📁 Entering folder: {file_name}")
                 scan_folder_recursively(f["id"], new_path)
             else:
                 # It's a file - add it to our list
                 f["folder_path"] = path  # Add folder path info
                 all_files.append(f)
+                st.write(f"   ✅ Added file: {file_name} to results")
     
     # Start recursive scan from root
     scan_folder_recursively(folder_id)
