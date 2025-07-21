@@ -65,32 +65,7 @@ global_aliases = load_global_aliases(METADATA_FOLDER_ID) or {}  # Ensure it's ne
 updated_global_aliases = global_aliases.copy()
 learned_answers = load_learned_answers(METADATA_FOLDER_ID) or {}  # Ensure it's never None
 
-# 🔍 DEBUG: Test Google Drive connection and folder access
-st.write("🔍 **Debug Info:**")
-try:
-    service = get_drive_service()
-    st.write(f"✅ Google Drive service connected successfully")
-    
-    # Test root access
-    st.write(f"🔍 Testing PROJECT_ROOT_FOLDER_ID: {PROJECT_ROOT_FOLDER_ID}")
-    all_files = list_all_supported_files(PROJECT_ROOT_FOLDER_ID)
-    st.write(f"📁 Files found in project root: {len(all_files)}")
-    
-    # If no files in project root, try without folder restriction
-    if len(all_files) == 0:
-        st.write("🔍 Trying without folder restriction...")
-        all_files_unrestricted = list_all_supported_files()
-        st.write(f"📁 Total files found in entire drive: {len(all_files_unrestricted)}")
-        
-        if len(all_files_unrestricted) > 0:
-            st.write("**First 5 files found in drive:**")
-            for i, file in enumerate(all_files_unrestricted[:5]):
-                st.write(f"- {file['name']} (ID: {file['id']})")
-                
-except Exception as e:
-    st.error(f"❌ Google Drive connection failed: {e}")
-    all_files = []
-
+all_files = list_all_supported_files()
 all_chunks = []
 embedding_cache = {}
 
