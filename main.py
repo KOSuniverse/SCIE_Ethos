@@ -57,17 +57,22 @@ for idx, file in enumerate(all_files):
     file_id = file["id"]
     ext = file_name.lower().split(".")[-1] if "." in file_name else "unknown"
 
+    # ✅ Validate file is accessible (skip 404s)
     try:
         file_last_modified = get_file_last_modified(file_id)
-        meta = load_metadata(file_name, metadata_folder_id) or {"source_file": file_name}
-        needs_index = True
+    except Exception as e:
+        st.warning(f"⚠️ Skipping file: {file_name} — reason: {e}")
+        continue
 
-        if meta.get("last_indexed") and file_last_modified:
-            try:
-                if isoparse(file_last_modified) <= isoparse(meta["last_indexed"]):
-                    needs_index = False
-            except Exception:
-                pass
+    meta = load_metadata(file_name, metadata_folder_id) or {"source_file": file_name}
+    needs_index = True
+
+    if meta.get("last_indexed") and file_last_modified:
+        try:
+            if isoparse(file_last_modified) <= isoparse(meta["last_indexed"]):
+                needs_index = False
+        except Exception:
+            pass
 
         if needs_index:
             if ext == "xlsx":
