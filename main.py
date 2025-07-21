@@ -30,13 +30,7 @@ Given the following document content, extract:
 - A 1–2 sentence summary
 - A list of 3–5 relevant tags (as a Python list)
 
-Respond in this exact Python dictionary format:
-{{
-    "title": "...",
-    "category": "...",
-    "summary": "...",
-    "tags": ["...", "...", ...]
-}}
+Respond with only a valid Python dictionary, no extra text or comments.
 
 Document content:
 {text}
@@ -53,36 +47,39 @@ Document content:
             temperature=0.3
         )
         reply = response.choices[0].message["content"]
+        st.subheader("🧠 GPT Raw Reply:")
+        st.code(reply)
         try:
-            result = eval(reply)
+            parsed = eval(reply)
+            assert isinstance(parsed, dict), "Reply is not a dictionary"
+            if return_reply:
+                return parsed, reply
+            else:
+                return parsed
         except Exception as parse_error:
-            print(f"Failed to parse GPT reply: {reply}")
-            print(f"Parse error: {parse_error}")
-            result = {
+            st.error(f"⚠️ Failed to parse GPT reply: {parse_error}")
+            st.code(reply)
+            fallback = {
                 "title": "Untitled",
                 "category": "Unknown",
                 "summary": "Metadata generation failed.",
                 "tags": []
             }
-        if return_reply:
-            return result, reply
-        else:
-            return result
+            if return_reply:
+                return fallback, reply
+            else:
+                return fallback
     except Exception as e:
+        fallback = {
+            "title": "Untitled",
+            "category": "Unknown",
+            "summary": "Metadata generation failed.",
+            "tags": []
+        }
         if return_reply:
-            return {
-                "title": "Untitled",
-                "category": "Unknown",
-                "summary": "Metadata generation failed.",
-                "tags": []
-            }, ""
+            return fallback, ""
         else:
-            return {
-                "title": "Untitled",
-                "category": "Unknown",
-                "summary": "Metadata generation failed.",
-                "tags": []
-            }
+            return fallback
 
 st.title("🚀 Supabase Test App")
 
