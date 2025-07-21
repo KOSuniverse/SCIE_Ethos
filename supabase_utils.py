@@ -54,7 +54,9 @@ def load_global_aliases():
         return {}
 
 def update_global_aliases(new_aliases: dict):
-    # Overwrite by deleting all and re-inserting
+    if not new_aliases:
+        print("⚠️ No aliases to update — skipping Supabase insert.")
+        return
     supabase.table("column_aliases").delete().neq("original", "").execute()
     rows = [{"original": k, "alias": v} for k, v in new_aliases.items()]
     print("Inserting column_aliases:", rows)
