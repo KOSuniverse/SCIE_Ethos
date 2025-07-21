@@ -20,7 +20,7 @@ def extract_text_from_excel(file_bytes):
 import openai
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-def generate_metadata_from_text(text, return_reply=False):
+def generate_metadata_from_text(text):
     prompt = f"""
 You are a metadata extraction assistant.
 
@@ -47,39 +47,30 @@ Document content:
             temperature=0.3
         )
         reply = response.choices[0].message["content"]
-        st.subheader("🧠 GPT Raw Reply:")
-        st.code(reply)
-        try:
-            parsed = eval(reply)
-            assert isinstance(parsed, dict), "Reply is not a dictionary"
-            if return_reply:
-                return parsed, reply
-            else:
-                return parsed
-        except Exception as parse_error:
-            st.error(f"⚠️ Failed to parse GPT reply: {parse_error}")
-            st.code(reply)
-            fallback = {
-                "title": "Untitled",
-                "category": "Unknown",
-                "summary": "Metadata generation failed.",
-                "tags": []
-            }
-            if return_reply:
-                return fallback, reply
-            else:
-                return fallback
     except Exception as e:
-        fallback = {
+        st.error(f"❌ GPT request failed: {e}")
+        return {
             "title": "Untitled",
             "category": "Unknown",
             "summary": "Metadata generation failed.",
             "tags": []
         }
-        if return_reply:
-            return fallback, ""
-        else:
-            return fallback
+
+    st.subheader("🧠 GPT Raw Reply:")
+    st.code(reply)
+
+    try:
+        parsed = eval(reply)
+        assert isinstance(parsed, dict), "Reply is not a dictionary"
+        return parsed
+    except Exception as parse_error:
+        st.error(f"⚠️ Failed to parse GPT reply: {parse_error}")
+        return {
+            "title": "Untitled",
+            "category": "Unknown",
+            "summary": "Metadata generation failed.",
+            "tags": []
+        }
 
 st.title("🚀 Supabase Test App")
 
@@ -147,7 +138,7 @@ if uploaded_file:
         st.subheader("🧾 Extracted Text from Excel:")
         st.code(text[:1000])  # preview only first 1000 chars
 
-        ai_metadata, gpt_reply = generate_metadata_from_text(text, return_reply=True)
+        ai_metadata, gpt_reply = generate_metadata_from_text(text), ""
 
         st.subheader("🧠 GPT Raw Reply")
         st.code(gpt_reply)
