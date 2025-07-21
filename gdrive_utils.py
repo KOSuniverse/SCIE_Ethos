@@ -79,7 +79,9 @@ def list_all_supported_files(folder_id=None, mime_type_filter=None):
                 q=query,
                 pageSize=100,
                 pageToken=page_token,
-                fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, parents)"
+                fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, parents)",
+                supportsAllDrives=True,               # ✅ REQUIRED for Shared Drives
+                includeItemsFromAllDrives=True        # ✅ REQUIRED for Shared Drives
             ).execute()
             
             items = results.get('files', [])
@@ -284,7 +286,9 @@ def get_folder_id_by_name(folder_name, parent_id=None):
         
         results = service.files().list(
             q=query,
-            fields="files(id, name)"
+            fields="files(id, name)",
+            supportsAllDrives=True,               # ✅ REQUIRED for Shared Drives
+            includeItemsFromAllDrives=True        # ✅ REQUIRED for Shared Drives
         ).execute()
         
         items = results.get('files', [])
