@@ -57,9 +57,16 @@ def update_global_aliases(new_aliases: dict):
     if not new_aliases:
         print("⚠️ No aliases to update — skipping Supabase insert.")
         return
+
     supabase.table("column_aliases").delete().neq("original", "").execute()
+    
     rows = [{"original": k, "alias": v} for k, v in new_aliases.items()]
-    print("Inserting column_aliases:", rows)
+    
+    if not rows:
+        print("⚠️ No rows generated for insertion — skipping insert.")
+        return
+
+    print("✅ Inserting column_aliases:", rows)
     return supabase.table("column_aliases").insert(rows).execute()
 
 # ---------- LEARNED ANSWERS ----------
