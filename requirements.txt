@@ -6,15 +6,12 @@ numpy
 matplotlib
 seaborn
 docx
-pdfplumber
-pytesseract
 python-pptx
 openpyxl
 python-dotenv
 tiktoken
 scikit-learn
 joblib
-PyMuPDF
 python-docx
 sentence-transformers
 watchdog
