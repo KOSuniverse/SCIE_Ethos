@@ -12,7 +12,6 @@ python-pptx
 openpyxl
 python-dotenv
 tiktoken
-faiss-cpu
 scikit-learn
 joblib
 PyMuPDF
