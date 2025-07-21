@@ -803,11 +803,8 @@ user_query = st.text_input("Your question:", value=st.session_state.get("last_qu
 
 submit = st.button("Ask")
 
+
 if submit or (user_query and user_query != st.session_state.get("last_query")):
-    run_user_query(user_query, all_chunks)
-
-
-if submit and user_query.strip():
     run_user_query(user_query, all_chunks)
 
 with st.expander("Show Query Log"):
