@@ -2,7 +2,7 @@ import streamlit as st
 from datetime import datetime
 import mimetypes
 from supabase_config import supabase
-from supabase_utils import insert_metadata
+from supabase_utils import save_metadata
 import pandas as pd
 import io
 from supabase_utils import save_metadata, load_metadata, update_global_aliases, load_global_aliases, save_learned_answers, load_learned_answers, list_supported_files, download_file
@@ -97,9 +97,9 @@ if st.button("Insert Test Metadata"):
         "last_modified": datetime.utcnow().isoformat()
     }
     try:
-        response = insert_metadata(metadata)
+        response = save_metadata(metadata["filename"], metadata)
         st.success("✅ Test metadata inserted.")
-        st.json(response.data)
+        st.json(response)
     except Exception as e:
         st.error(f"❌ Failed to insert test metadata: {e}")
 
@@ -163,9 +163,9 @@ if uploaded_file:
             "filetype": extension,
             "last_modified": datetime.utcnow().isoformat()
         }
-        response = insert_metadata(metadata)
+        response = save_metadata(metadata["filename"], metadata)
         st.success("✅ Metadata inserted into Supabase.")
-        st.json(response.data)
+        st.json(response)
 
     except Exception as e:
         st.error(f"❌ Failed to upload or insert metadata: {e}")
