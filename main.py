@@ -74,64 +74,60 @@ for idx, file in enumerate(all_files):
         except Exception:
             pass
 
-        if needs_index:
-            if ext == "xlsx":
-                text, sheet_names, columns_by_sheet = extract_text_for_metadata(
-                    file_id, max_ocr_pages=5,
-                    download_file_func=download_file,
-                    get_drive_service_func=get_drive_service
-                )
-            else:
-                text, sheet_names, columns_by_sheet = extract_text_for_metadata(
-                    file_id, max_ocr_pages=5,
-                    download_file_func=download_file,
-                    get_drive_service_func=get_drive_service
-                )
-
-            if isinstance(text, tuple):
-                text = text[0]
-
-            if text and text.strip():
-                meta.update({
-                    "file_type": ext,
-                    "file_size": file.get("size", None),
-                    "last_modified": file_last_modified,
-                    "last_indexed": datetime.now().isoformat()
-                })
-
-                if ext == "xlsx":
-                    meta["sheet_names"] = sheet_names
-                    meta["columns_by_sheet"] = columns_by_sheet
-                    all_columns = [col for cols in columns_by_sheet.values() for col in cols]
-                    meta["columns"] = list(set(all_columns))
-                    column_aliases = map_columns_to_concepts(meta["columns"], updated_global_aliases)
-                    meta["column_aliases"] = column_aliases
-                    updated_global_aliases.update(column_aliases)
-
-                # Generate LLM metadata
-                llm_meta = generate_llm_metadata(text, ext)
-                meta.update(llm_meta)
-                meta.update(extract_structural_metadata(text, ext))
-
-                save_metadata(file_name, meta, metadata_folder_id)
-
-                for chunk, _, _ in chunk_text(text):
-                    all_chunks.append((meta, chunk))
-
-                if meta.get("summary", ""):
-                    embedding_cache[file_name] = get_embedding(meta["summary"])
-
+    if needs_index:
+        if ext == "xlsx":
+            text, sheet_names, columns_by_sheet = extract_text_for_metadata(
+                file_id, max_ocr_pages=5,
+                download_file_func=download_file,
+                get_drive_service_func=get_drive_service
+            )
         else:
-            # Use existing metadata
-            if "summary" in meta:
-                for chunk, _, _ in chunk_text(meta["summary"]):
-                    all_chunks.append((meta, chunk))
-            if "embedding" in meta:
-                embedding_cache[file_name] = meta["embedding"]
+            text, sheet_names, columns_by_sheet = extract_text_for_metadata(
+                file_id, max_ocr_pages=5,
+                download_file_func=download_file,
+                get_drive_service_func=get_drive_service
+            )
 
-    except Exception as e:
-        st.warning(f"⚠️ Failed to process {file_name}: {e}")
-        continue
+        if isinstance(text, tuple):
+            text = text[0]
+
+        if text and text.strip():
+            meta.update({
+                "file_type": ext,
+                "file_size": file.get("size", None),
+                "last_modified": file_last_modified,
+                "last_indexed": datetime.now().isoformat()
+            })
+
+            if ext == "xlsx":
+                meta["sheet_names"] = sheet_names
+                meta["columns_by_sheet"] = columns_by_sheet
+                all_columns = [col for cols in columns_by_sheet.values() for col in col]
+                meta["columns"] = list(set(all_columns))
+                column_aliases = map_columns_to_concepts(meta["columns"], updated_global_aliases)
+                meta["column_aliases"] = column_aliases
+                updated_global_aliases.update(column_aliases)
+
+            # Generate LLM metadata
+            llm_meta = generate_llm_metadata(text, ext)
+            meta.update(llm_meta)
+            meta.update(extract_structural_metadata(text, ext))
+
+            save_metadata(file_name, meta, metadata_folder_id)
+
+            for chunk, _, _ in chunk_text(text):
+                all_chunks.append((meta, chunk))
+
+            if meta.get("summary", ""):
+                embedding_cache[file_name] = get_embedding(meta["summary"])
+
+    else:
+        # Use existing metadata
+        if "summary" in meta:
+            for chunk, _, _ in chunk_text(meta["summary"]):
+                all_chunks.append((meta, chunk))
+        if "embedding" in meta:
+            embedding_cache[file_name] = meta["embedding"]
 
     progress_bar.progress((idx + 1) / len(all_files), text=f"Indexed {idx+1}/{len(all_files)}")
 
@@ -207,4 +203,3 @@ if submit and user_query.strip():
         ]
     }
     save_learned_answers(learned_answers, metadata_folder_id)
-
