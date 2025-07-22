@@ -666,6 +666,7 @@ with st.expander("📁 Upload a File to Supabase"):
             if text and text.strip():
                 gpt_meta = generate_llm_metadata(text, ext)
                 gpt_meta["source_file"] = path
+                gpt_meta["filename"] = filename  # Ensure NOT NULL for Supabase
                 gpt_meta["last_indexed"] = datetime.now().isoformat()
                 gpt_meta["author"] = st.secrets.get("user_email", "system")
                 gpt_meta["file_type"] = ext
@@ -806,6 +807,7 @@ for idx, file in enumerate(all_files):
                     }
 
                 gpt_meta["source_file"] = file_name
+                gpt_meta["filename"] = os.path.basename(file_name)  # Ensure NOT NULL for Supabase
                 gpt_meta["last_indexed"] = datetime.now().isoformat()
                 gpt_meta["author"] = st.secrets.get("user_email", "system")
                 gpt_meta["file_type"] = ext
