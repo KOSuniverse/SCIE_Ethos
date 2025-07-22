@@ -29,24 +29,21 @@ def get_file_last_modified(file_path: str):
 
 # ---------- METADATA UTILS ----------
 
-def load_metadata(filename: str):
+
+def load_metadata(source_file: str):
     try:
-        result = supabase.table("metadata").select("*").eq("filename", filename).single().execute()
+        result = supabase.table("metadata").select("*").eq("source_file", source_file).single().execute()
         return result.data if result.data else {}
     except Exception:
         return {}
 
-def save_metadata(filename: str, data: dict):
-    data['filename'] = filename
-    existing = load_metadata(filename)
 
-    if existing:
-        supabase.table("metadata").update(data).eq("filename", filename).execute()
-    else:
-        supabase.table("metadata").insert(data).execute()
-
-    # 🧠 This guarantees we return the record with ID
-    result = supabase.table("metadata").select("*").eq("filename", filename).single().execute()
+def save_metadata(source_file: str, data: dict):
+    data['source_file'] = source_file
+    # Use upsert for robust insert/update
+    supabase.table("metadata").upsert(data, on_conflict=["source_file"]).execute()
+    # Always return the row with id
+    result = supabase.table("metadata").select("*").eq("source_file", source_file).single().execute()
     return result.data if result.data else None
 
 
