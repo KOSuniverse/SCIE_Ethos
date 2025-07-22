@@ -750,155 +750,179 @@ if st.checkbox("🔧 Edit Column Alias Mappings"):
         update_global_aliases(editable_aliases)
         st.success("Aliases updated successfully.")
 
+
 # --- Gather all files from Supabase for Q&A and modeling ---
 # List all supported files in Supabase storage, EXCLUDING raw data folder
-all_files = [
-    f
-    for f in list_supported_files()
-    if not f["name"].startswith("Raw_Data")
-]
-
-all_chunks = []
-updated_global_aliases = global_aliases.copy()
-progress_bar = st.progress(0, text="Indexing files and building metadata...")
-
-
-for idx, file in enumerate(all_files):
-    file_name = file["name"]
-    ext = file_name.lower().split('.')[-1]
-
-    file_last_modified = get_file_last_modified(file_name)
-    meta = load_metadata(file_name) or {"source_file": file_name}
-    needs_index = True
-
-    # --- Efficient re-indexing: skip if file hasn't changed since last_indexed
-    if meta.get("last_indexed") and file_last_modified:
-        try:
-            from dateutil.parser import isoparse
-            if isoparse(file_last_modified) <= isoparse(meta["last_indexed"]):
-                needs_index = False
-        except Exception:
-            pass
-
-    if needs_index:
-        try:
-            if ext == "xlsx":
-                text, sheet_names, columns_by_sheet = extract_text_for_metadata(file_name)
-            else:
-                text = extract_text_for_metadata(file_name)
-                sheet_names, columns_by_sheet = [], {}
-
-            if isinstance(text, tuple):
-                text = text[0]
-
-            if text.strip():
-                # --- Try safe GPT metadata generation ---
-                try:
-                    gpt_meta = generate_llm_metadata(text, ext)
-                except Exception as e:
-                    st.warning(f"⚠️ Metadata generation failed: {e}")
-                    gpt_meta = {
-                        "title": "Untitled",
-                        "summary": "Metadata generation failed.",
-                        "tags": [],
-                        "category": "Unknown"
-                    }
-
-                gpt_meta["source_file"] = file_name
-                gpt_meta["filename"] = os.path.basename(file_name)  # Ensure NOT NULL for Supabase
-                gpt_meta["last_indexed"] = datetime.now().isoformat()
-                gpt_meta["author"] = st.secrets.get("user_email", "system")
-                gpt_meta["file_type"] = ext
-                gpt_meta["file_size"] = file.get("size", None)
-                gpt_meta["last_modified"] = file_last_modified
-
+def reindex_all_files():
+    all_files = [
+        f
+        for f in list_supported_files()
+        if not f["name"].startswith("Raw_Data")
+    ]
+    all_chunks = []
+    updated_global_aliases = global_aliases.copy()
+    progress_bar = st.progress(0, text="Indexing files and building metadata...")
+    for idx, file in enumerate(all_files):
+        file_name = file["name"]
+        ext = file_name.lower().split('.')[-1]
+        file_last_modified = get_file_last_modified(file_name)
+        meta = load_metadata(file_name) or {"source_file": file_name}
+        needs_index = True
+        # --- Efficient re-indexing: skip if file hasn't changed since last_indexed
+        if meta.get("last_indexed") and file_last_modified:
+            try:
+                from dateutil.parser import isoparse
+                if isoparse(file_last_modified) <= isoparse(meta["last_indexed"]):
+                    needs_index = False
+            except Exception:
+                pass
+        if needs_index:
+            try:
                 if ext == "xlsx":
-                    gpt_meta["sheet_names"] = sheet_names
-                    gpt_meta["columns_by_sheet"] = columns_by_sheet
-                    all_columns = []
-                    if columns_by_sheet:
-                        for cols in columns_by_sheet.values():
-                            all_columns.extend(cols)
-                    gpt_meta["columns"] = list(set(all_columns)) if all_columns else []
-                    if gpt_meta["columns"]:
-                        alias_concepts = load_concepts()
-                        column_aliases = map_columns_to_concepts(
-                            gpt_meta["columns"], alias_concepts, use_gpt=True, openai_client=client
-                        )
-                        gpt_meta["column_aliases"] = column_aliases
-                        valid_aliases = {k: v for k, v in column_aliases.items() if v != "ignore"}
-                        updated_global_aliases.update(valid_aliases)
-
-                gpt_meta.update(extract_structural_metadata(text, ext))
-
-                gpt_meta = save_metadata(file_name, gpt_meta) or gpt_meta
-
-                st.write("🧠 save_metadata() returned:", gpt_meta)
-                st.write("🧠 gpt_meta type:", type(gpt_meta))
-
-                file_id = gpt_meta.get("id") if isinstance(gpt_meta, dict) else None
-                st.write("✅ file_id resolved:", file_id)
-
-                if file_id:
-                    chunks = chunk_text(text)
-                    for chunk_text_content, start, end in chunks:
-                        try:
-                            vector = get_embedding(chunk_text_content)
-                            chunk_id = str(uuid4())
-                            token_count = len(chunk_text_content.split())
-                            insert_embedding_chunk(
-                                file_id=file_id,
-                                chunk_id=chunk_id,
-                                chunk_text=chunk_text_content,
-                                embedding=vector.tolist(),
-                                token_count=token_count
-                            )
-                            all_chunks.append((gpt_meta, chunk_text_content))  # Ensure chunk is available for Q&A
-                        except Exception as e:
-                            st.warning(f"⚠️ Embedding failed for a chunk: {e}")
+                    text, sheet_names, columns_by_sheet = extract_text_for_metadata(file_name)
                 else:
-                    st.warning(f"❌ No file_id found for {file_name} — skipping embedding.")
+                    text = extract_text_for_metadata(file_name)
+                    sheet_names, columns_by_sheet = [], {}
+                if isinstance(text, tuple):
+                    text = text[0]
+                if text.strip():
+                    # --- Try safe GPT metadata generation ---
+                    try:
+                        gpt_meta = generate_llm_metadata(text, ext)
+                    except Exception as e:
+                        st.warning(f"⚠️ Metadata generation failed: {e}")
+                        gpt_meta = {
+                            "title": "Untitled",
+                            "summary": "Metadata generation failed.",
+                            "tags": [],
+                            "category": "Unknown"
+                        }
+                    gpt_meta["source_file"] = file_name
+                    gpt_meta["filename"] = os.path.basename(file_name)  # Ensure NOT NULL for Supabase
+                    gpt_meta["last_indexed"] = datetime.now().isoformat()
+                    gpt_meta["author"] = st.secrets.get("user_email", "system")
+                    gpt_meta["file_type"] = ext
+                    gpt_meta["file_size"] = file.get("size", None)
+                    gpt_meta["last_modified"] = file_last_modified
+                    if ext == "xlsx":
+                        gpt_meta["sheet_names"] = sheet_names
+                        gpt_meta["columns_by_sheet"] = columns_by_sheet
+                        all_columns = []
+                        if columns_by_sheet:
+                            for cols in columns_by_sheet.values():
+                                all_columns.extend(cols)
+                        gpt_meta["columns"] = list(set(all_columns)) if all_columns else []
+                        if gpt_meta["columns"]:
+                            alias_concepts = load_concepts()
+                            column_aliases = map_columns_to_concepts(
+                                gpt_meta["columns"], alias_concepts, use_gpt=True, openai_client=client
+                            )
+                            gpt_meta["column_aliases"] = column_aliases
+                            valid_aliases = {k: v for k, v in column_aliases.items() if v != "ignore"}
+                            updated_global_aliases.update(valid_aliases)
+                    gpt_meta.update(extract_structural_metadata(text, ext))
+                    gpt_meta = save_metadata(file_name, gpt_meta) or gpt_meta
+                    file_id = gpt_meta.get("id") if isinstance(gpt_meta, dict) else None
+                    if file_id:
+                        chunks = chunk_text(text)
+                        for chunk_text_content, start, end in chunks:
+                            try:
+                                vector = get_embedding(chunk_text_content)
+                                chunk_id = str(uuid4())
+                                token_count = len(chunk_text_content.split())
+                                insert_embedding_chunk(
+                                    file_id=file_id,
+                                    chunk_id=chunk_id,
+                                    chunk_text=chunk_text_content,
+                                    embedding=vector.tolist(),
+                                    token_count=token_count
+                                )
+                                all_chunks.append((gpt_meta, chunk_text_content))  # Ensure chunk is available for Q&A
+                            except Exception as e:
+                                st.warning(f"⚠️ Embedding failed for a chunk: {e}")
+                    else:
+                        st.warning(f"❌ No file_id found for {file_name} — skipping embedding.")
+            except Exception as e:
+                st.warning(f"⚠️ Failed to process {file_name}: {e}")
+        else:
+            # Use existing metadata and skip re-indexing
+            if "summary" in meta:
+                for chunk in chunk_text(meta["summary"]):
+                    all_chunks.append((meta, chunk))
+            if "embedding" in meta and meta["embedding"]:
+                embedding_cache[file_name] = np.array(meta["embedding"])
+        progress_bar.progress((idx + 1) / len(all_files), text=f"Indexed {idx+1}/{len(all_files)} files")
+    progress_bar.empty()
+    update_global_aliases(updated_global_aliases)
+    return all_chunks
 
-        except Exception as e:
-            st.warning(f"⚠️ Failed to process {file_name}: {e}")
-    else:
-        # Use existing metadata and skip re-indexing
+# --- UI: Re-index Button ---
+if "reindex_trigger" not in st.session_state:
+    st.session_state.reindex_trigger = False
+
+st.header("Ask a question about your knowledge base")
+
+if st.button("🔄 Re-index All Files"):
+    st.session_state.reindex_trigger = True
+
+if st.session_state.reindex_trigger:
+    all_chunks = reindex_all_files()
+    st.session_state.reindex_trigger = False
+    st.success("Re-indexing complete!")
+else:
+    # Default: load files and build all_chunks as before
+    all_files = [
+        f
+        for f in list_supported_files()
+        if not f["name"].startswith("Raw_Data")
+    ]
+    all_chunks = []
+    updated_global_aliases = global_aliases.copy()
+    progress_bar = st.progress(0, text="Indexing files and building metadata...")
+    for idx, file in enumerate(all_files):
+        file_name = file["name"]
+        meta = load_metadata(file_name) or {"source_file": file_name}
         if "summary" in meta:
             for chunk in chunk_text(meta["summary"]):
                 all_chunks.append((meta, chunk))
         if "embedding" in meta and meta["embedding"]:
             embedding_cache[file_name] = np.array(meta["embedding"])
+        progress_bar.progress((idx + 1) / len(all_files), text=f"Indexed {idx+1}/{len(all_files)} files")
+    progress_bar.empty()
+    update_global_aliases(updated_global_aliases)
 
-    progress_bar.progress((idx + 1) / len(all_files), text=f"Indexed {idx+1}/{len(all_files)} files")
-
-progress_bar.empty()
-update_global_aliases(updated_global_aliases)
-
-
-
+# --- Streamlit session state for chat, query, etc. ---
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "last_excel" not in st.session_state:
     st.session_state.last_excel = None
 if "last_query" not in st.session_state:
-    st.session_state.last_query = None
+    st.session_state.last_query = ""
 if "query_log" not in st.session_state:
     st.session_state.query_log = []
 
-st.header("Ask a question about your knowledge base")
+# --- Single input box and Enter/Ask logic ---
+def submit_query():
+    user_query = st.session_state.query_input.strip()
+    if user_query and user_query != st.session_state.get("last_query", ""):
+        run_user_query(user_query, all_chunks)
+        st.session_state.last_query = user_query
 
-user_query = st.text_input("Your question:", value=st.session_state.get("last_query", ""), key="query_input")
+user_query = st.text_input(
+    "Your question:",
+    value=st.session_state.get("last_query", ""),
+    key="query_input",
+    on_change=submit_query
+)
 
-submit = st.button("Ask")
+# Only show a single Ask button, and Enter key works as well
+if st.button("Ask"):
+    submit_query()
 
-
-if submit or (user_query and user_query != st.session_state.get("last_query")):
-    run_user_query(user_query, all_chunks)
-
+# --- Only one set of expanders for Query Log and Chat History ---
 with st.expander("Show Query Log"):
     for entry in st.session_state.query_log:
         st.write(entry)
-
 with st.expander("Show Chat History"):
     for msg in st.session_state.chat_history:
         st.write(f"{msg['role'].capitalize()}: {msg['content']}")
