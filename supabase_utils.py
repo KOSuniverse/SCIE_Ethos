@@ -43,6 +43,7 @@ def save_metadata(filename: str, data: dict):
         return supabase.table("metadata").update(data).eq("filename", filename).execute()
     else:
         return supabase.table("metadata").insert(data).execute()
+    return result.data[0] if result.data else None
 
 # ---------- GLOBAL ALIASES ----------
 
