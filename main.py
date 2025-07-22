@@ -691,16 +691,14 @@ with st.expander("📁 Upload a File to Supabase"):
                         update_global_aliases(valid_aliases)
 
                 gpt_meta.update(extract_structural_metadata(text, ext))
-                save_metadata(path, gpt_meta)
+                # Always use the returned value from save_metadata
+                gpt_meta = save_metadata(path, gpt_meta) or gpt_meta
                 st.success(f"📝 Metadata extracted and saved for `{path}`.")
 
                 # --- Insert chunk-level embeddings into embedding index (robust, both gpt_meta and meta for file_id) ---
                 if text.strip():
                     chunks = chunk_text(text)  # (chunk_text, start_idx, end_idx)
-                    # meta is not defined in this scope, so set to None for safety
-                    meta = None
-                    file_id = gpt_meta.get("id") or (meta.get("id") if meta else None)
-
+                    file_id = gpt_meta.get("id")
                     if file_id:
                         for chunk_text_content, start, end in chunks:
                             try:
