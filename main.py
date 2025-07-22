@@ -825,7 +825,8 @@ for idx, file in enumerate(all_files):
                 gpt_meta.update(extract_structural_metadata(text, ext))
 
                 gpt_meta = save_metadata(file_name, gpt_meta) or gpt_meta
-                st.write("🧠 Saved metadata ID:", gpt_meta.get("id"))
+                st.write("🧠 Raw gpt_meta type:", type(gpt_meta))
+                st.write("🧠 Raw gpt_meta value:", gpt_meta)
                 # Get file_id from saved metadata (you MUST have id in the row)
                 from uuid import uuid4
                 file_id = gpt_meta.get("id") or meta.get("id")

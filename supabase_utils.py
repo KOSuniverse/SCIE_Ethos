@@ -41,13 +41,13 @@ def save_metadata(filename: str, data: dict):
     existing = load_metadata(filename)
 
     if existing:
-        result = supabase.table("metadata").update(data).eq("filename", filename).execute()
-        # Fetch the updated row
-        updated = supabase.table("metadata").select("*").eq("filename", filename).single().execute()
-        return updated.data if updated.data else None
+        supabase.table("metadata").update(data).eq("filename", filename).execute()
     else:
-        result = supabase.table("metadata").insert(data).execute()
-        return result.data[0] if result.data else None
+        supabase.table("metadata").insert(data).execute()
+
+    # Always return a fresh SELECT with ID
+    result = supabase.table("metadata").select("*").eq("filename", filename).single().execute()
+    return result.data if result.data else None
 
 
 # ---------- GLOBAL ALIASES ----------
