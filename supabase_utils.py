@@ -112,3 +112,6 @@ def insert_embedding_chunk(file_id, chunk_id, chunk_text, embedding, token_count
         "token_count": token_count,
         "created_at": datetime.utcnow().isoformat()
     }).execute()
+
+# After saving metadata
+gpt_meta = save_metadata(file_name, gpt_meta) or gpt_meta
