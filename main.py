@@ -841,7 +841,7 @@ for idx, file in enumerate(all_files):
 
                 if file_id:
                     chunks = chunk_text(text)
-                    for idx, (chunk_text_content, start, end) in enumerate(chunks):
+                    for chunk_text_content, start, end in chunks:
                         try:
                             vector = get_embedding(chunk_text_content)
                             chunk_id = str(uuid4())
@@ -853,9 +853,9 @@ for idx, file in enumerate(all_files):
                                 embedding=vector.tolist(),
                                 token_count=token_count
                             )
-                            all_chunks.append((gpt_meta, chunk_text_content))
+                            all_chunks.append((gpt_meta, chunk_text_content))  # Ensure chunk is available for Q&A
                         except Exception as e:
-                            st.warning(f"⚠️ Embedding chunk failed: {e}")
+                            st.warning(f"⚠️ Embedding failed for a chunk: {e}")
                 else:
                     st.warning(f"❌ No file_id found for {file_name} — skipping embedding.")
 
