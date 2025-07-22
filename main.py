@@ -73,6 +73,7 @@ def openai_with_retry(call_fn, max_retries=3, delay=2):
 
 # user query updgrade
 def run_user_query(user_query, all_chunks):
+
     scored_chunks = []
     query_embedding = get_embedding(user_query)
     for meta, chunk in all_chunks:
@@ -92,6 +93,24 @@ def run_user_query(user_query, all_chunks):
 
     scored_chunks.sort(reverse=True, key=lambda x: x[0])
     top_chunks = scored_chunks[:3] if scored_chunks else []
+
+    # --- Inventory Q&A auto-detection ---
+    inventory_keywords = [
+        "inventory", "part number", "part_number", "partno", "part no", "quantity", "qty", "stock", "balance", "value", "location"
+    ]
+    user_query_lower = user_query.lower()
+    is_inventory_query = any(kw in user_query_lower for kw in inventory_keywords)
+
+    top_meta = top_chunks[0][1] if top_chunks else None
+    top_file = top_meta.get("source_file") if top_meta else None
+    top_aliases = top_meta.get("column_aliases", {}) if top_meta else {}
+    # Check if top chunk is Excel with inventory columns
+    inventory_columns = {v for v in top_aliases.values() if v in ["part_number", "quantity", "value", "location"]}
+    if is_inventory_query and top_file and top_file.lower().endswith('.xlsx') and inventory_columns:
+        st.markdown("---")
+        st.markdown(f"**Structured Inventory Q&A:** Using `{top_file}` with columns: {list(inventory_columns)}")
+        excel_qa(top_file, user_query, top_aliases)
+        # Still show the rest of the LLM answer for context
 
     context = "\n\n".join([chunk for _, _, chunk, _, _ in top_chunks])
     sources = [meta.get("source_file", "") for _, meta, _, _, _ in top_chunks]
@@ -158,8 +177,7 @@ def run_user_query(user_query, all_chunks):
     st.markdown("**Root Cause/Data Mining Analysis:**")
     st.write(root_cause_analysis)
 
-    top_meta = top_chunks[0][1] if top_chunks else None
-    top_file = top_meta.get("source_file") if top_meta else None
+    # Keep the manual chart button for Excel
     if top_file and top_file.lower().endswith('.xlsx'):
         st.markdown("---")
         st.markdown("**You can generate a chart from the top Excel file:**")
