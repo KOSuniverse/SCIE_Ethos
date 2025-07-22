@@ -781,90 +781,87 @@ for idx, file in enumerate(all_files):
         except Exception:
             pass
 
-    if needs_index:
-        try:
-            if ext == "xlsx":
-                text, sheet_names, columns_by_sheet = extract_text_for_metadata(file_name)
-            else:
-                text = extract_text_for_metadata(file_name)
-                sheet_names, columns_by_sheet = [], {}
+if needs_index:
+    try:
+        if ext == "xlsx":
+            text, sheet_names, columns_by_sheet = extract_text_for_metadata(file_name)
+        else:
+            text = extract_text_for_metadata(file_name)
+            sheet_names, columns_by_sheet = [], {}
 
-            if isinstance(text, tuple):
-                text = text[0]
+        if isinstance(text, tuple):
+            text = text[0]
 
-            if text.strip():
-
-                # --- Generate LLM metadata and append audit fields ---
+        if text.strip():
+            # --- Try safe GPT metadata generation ---
+            try:
                 gpt_meta = generate_llm_metadata(text, ext)
-                gpt_meta["source_file"] = file_name  # The file name in Supabase
-                gpt_meta["last_indexed"] = datetime.now().isoformat()
-                gpt_meta["author"] = st.secrets.get("user_email", "system")
+            except Exception as e:
+                st.warning(f"⚠️ Metadata generation failed: {e}")
+                gpt_meta = {
+                    "title": "Untitled",
+                    "summary": "Metadata generation failed.",
+                    "tags": [],
+                    "category": "Unknown"
+                }
 
-                # Add additional metadata if needed
-                gpt_meta["file_type"] = ext
-                gpt_meta["file_size"] = file.get("size", None)
-                gpt_meta["last_modified"] = file_last_modified
+            gpt_meta["source_file"] = file_name
+            gpt_meta["last_indexed"] = datetime.now().isoformat()
+            gpt_meta["author"] = st.secrets.get("user_email", "system")
+            gpt_meta["file_type"] = ext
+            gpt_meta["file_size"] = file.get("size", None)
+            gpt_meta["last_modified"] = file_last_modified
 
-                # Excel-specific
-                if ext == "xlsx":
-                    gpt_meta["sheet_names"] = sheet_names
-                    gpt_meta["columns_by_sheet"] = columns_by_sheet
-                    all_columns = []
-                    if columns_by_sheet:
-                        for cols in columns_by_sheet.values():
-                            all_columns.extend(cols)
-                    gpt_meta["columns"] = list(set(all_columns)) if all_columns else []
-                    if gpt_meta["columns"]:
-                        alias_concepts = load_concepts()
-                        column_aliases = map_columns_to_concepts(gpt_meta["columns"], alias_concepts, use_gpt=True, openai_client=client)
-                        gpt_meta["column_aliases"] = column_aliases
-                        valid_aliases = {k: v for k, v in column_aliases.items() if v != "ignore"}
-                        updated_global_aliases.update(valid_aliases)
+            if ext == "xlsx":
+                gpt_meta["sheet_names"] = sheet_names
+                gpt_meta["columns_by_sheet"] = columns_by_sheet
+                all_columns = []
+                if columns_by_sheet:
+                    for cols in columns_by_sheet.values():
+                        all_columns.extend(cols)
+                gpt_meta["columns"] = list(set(all_columns)) if all_columns else []
+                if gpt_meta["columns"]:
+                    alias_concepts = load_concepts()
+                    column_aliases = map_columns_to_concepts(
+                        gpt_meta["columns"], alias_concepts, use_gpt=True, openai_client=client
+                    )
+                    gpt_meta["column_aliases"] = column_aliases
+                    valid_aliases = {k: v for k, v in column_aliases.items() if v != "ignore"}
+                    updated_global_aliases.update(valid_aliases)
 
-                # Structural metadata for all files
-                gpt_meta.update(extract_structural_metadata(text, ext))
+            gpt_meta.update(extract_structural_metadata(text, ext))
 
-                gpt_meta = save_metadata(file_name, gpt_meta) or gpt_meta
+            gpt_meta = save_metadata(file_name, gpt_meta) or gpt_meta
 
-                st.write("🧠 save_metadata() returned:", gpt_meta)
-                st.write("🧠 gpt_meta type:", type(gpt_meta))
-                if isinstance(gpt_meta, dict):
-                    st.write("✅ file_id from metadata:", gpt_meta.get("id"))
-                else:
-                    st.error("❌ gpt_meta is not a dict. Embedding will fail.")
+            st.write("🧠 save_metadata() returned:", gpt_meta)
+            st.write("🧠 gpt_meta type:", type(gpt_meta))
 
+            file_id = gpt_meta.get("id") if isinstance(gpt_meta, dict) else None
+            st.write("✅ file_id resolved:", file_id)
 
-# Safely extract file_id only if gpt_meta is a dict and contains 'id'
-                file_id = gpt_meta.get("id") if isinstance(gpt_meta, dict) else None
-                st.write("✅ file_id resolved:", file_id)
+            if file_id:
+                chunks = chunk_text(text)
+                for idx, (chunk_text_content, start, end) in enumerate(chunks):
+                    try:
+                        vector = get_embedding(chunk_text_content)
+                        chunk_id = str(uuid4())
+                        token_count = len(chunk_text_content.split())
+                        insert_embedding_chunk(
+                            file_id=file_id,
+                            chunk_id=chunk_id,
+                            chunk_text=chunk_text_content,
+                            embedding=vector.tolist(),
+                            token_count=token_count
+                        )
+                        all_chunks.append((gpt_meta, chunk_text_content))
+                    except Exception as e:
+                        st.warning(f"⚠️ Embedding chunk failed: {e}")
+            else:
+                st.warning(f"❌ No file_id found for {file_name} — skipping embedding.")
 
-                # Chunk and embed full text
-                if file_id:
-                    chunks = chunk_text(text)
-                    for idx, (chunk_text_content, start, end) in enumerate(chunks):
-                        try:
-                            vector = get_embedding(chunk_text_content)
-                            chunk_id = str(uuid4())
-                            token_count = len(chunk_text_content.split())
+    except Exception as e:
+        st.warning(f"⚠️ Failed to process {file_name}: {e}")
 
-                            # Add to Supabase
-                            insert_embedding_chunk(
-                                file_id=file_id,
-                                chunk_id=chunk_id,
-                                chunk_text=chunk_text_content,
-                                embedding=vector.tolist(),
-                                token_count=token_count
-                            )
-
-                            # Also add to in-memory chunks
-                            all_chunks.append((gpt_meta, chunk_text_content))
-                        except Exception as e:
-                            st.warning(f"⚠️ Embedding chunk failed: {e}")
-                else:
-                    st.warning(f"❌ No file_id found in metadata for {file_name} — skipping embedding.")
-
-        except Exception as e:
-            st.warning(f"⚠️ Failed to process {file_name}: {e}")
     else:
         # Use existing metadata and skip re-indexing
         if "summary" in meta:
