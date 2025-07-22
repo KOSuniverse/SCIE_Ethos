@@ -218,52 +218,7 @@ def load_concepts(path="alias_concepts.json"):
         return json.load(f)
 
 def extract_text_for_metadata(path, max_ocr_pages=3):
-    # Minimal stub to resolve NameError; replace with real logic as needed
-    return "", [], {}
-
-def fuzzy_match(col, concepts):
-    best_match = None
-    best_score = 0
-    for concept in concepts:
-        score = SequenceMatcher(None, col.lower(), concept.lower()).ratio()
-        if score > best_score:
-            best_match = concept
-            best_score = score
-    return best_match if best_score > 0.8 else None
-
-def gpt_fallback_alias(col, concepts, openai_client):
-    prompt = (
-        f"You're mapping messy Excel headers to standardized data concepts.\n"
-        f'Column: "{col}"\n'
-        f"Concepts: {', '.join(concepts)}.\n"
-        f'Which one best fits? If none, respond "ignore".'
-    )
-    response = openai_client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0
-    )
-    return response.choices[0].message.content.strip().lower()
-
-def map_columns_to_concepts(columns, concepts=None, use_gpt=True, openai_client=None):
-    if concepts is None:
-        concepts = load_concepts()
-    if openai_client is None:
-        raise ValueError("openai_client must be provided for GPT fallback.")
-
-    alias_map = {}
-    for col in columns:
-        # Step 1: Fuzzy match
-        alias = fuzzy_match(col, concepts)
-
-        # Step 2: GPT fallback if fuzzy match fails
-        if not alias and use_gpt:
-            alias = gpt_fallback_alias(col, concepts, openai_client)
-
-        # Step 3: If still nothing, ignore
-        alias_map[col] = alias if alias in concepts else "ignore"
-
-    return alias_map
+    ext = path.split(".")[-1].lower()
     try:
         file_stream = download_file(path)
 
@@ -319,6 +274,50 @@ def map_columns_to_concepts(columns, concepts=None, use_gpt=True, openai_client=
     except Exception as e:
         st.warning(f"Failed to extract text from {path}: {e}")
     return "", [], {}
+
+def fuzzy_match(col, concepts):
+    best_match = None
+    best_score = 0
+    for concept in concepts:
+        score = SequenceMatcher(None, col.lower(), concept.lower()).ratio()
+        if score > best_score:
+            best_match = concept
+            best_score = score
+    return best_match if best_score > 0.8 else None
+
+def gpt_fallback_alias(col, concepts, openai_client):
+    prompt = (
+        f"You're mapping messy Excel headers to standardized data concepts.\n"
+        f'Column: "{col}"\n'
+        f"Concepts: {', '.join(concepts)}.\n"
+        f'Which one best fits? If none, respond "ignore".'
+    )
+    response = openai_client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0
+    )
+    return response.choices[0].message.content.strip().lower()
+
+def map_columns_to_concepts(columns, concepts=None, use_gpt=True, openai_client=None):
+    if concepts is None:
+        concepts = load_concepts()
+    if openai_client is None:
+        raise ValueError("openai_client must be provided for GPT fallback.")
+
+    alias_map = {}
+    for col in columns:
+        # Step 1: Fuzzy match
+        alias = fuzzy_match(col, concepts)
+
+        # Step 2: GPT fallback if fuzzy match fails
+        if not alias and use_gpt:
+            alias = gpt_fallback_alias(col, concepts, openai_client)
+
+        # Step 3: If still nothing, ignore
+        alias_map[col] = alias if alias in concepts else "ignore"
+
+    return alias_map
 
 def chunk_text(text, chunk_size=2000, overlap=200, max_chars=4000):
     """
