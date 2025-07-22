@@ -101,16 +101,31 @@ def run_user_query(user_query, all_chunks):
     user_query_lower = user_query.lower()
     is_inventory_query = any(kw in user_query_lower for kw in inventory_keywords)
 
-    top_meta = top_chunks[0][1] if top_chunks else None
-    top_file = top_meta.get("source_file") if top_meta else None
-    top_aliases = top_meta.get("column_aliases", {}) if top_meta else {}
-    # Check if top chunk is Excel with inventory columns
-    inventory_columns = {v for v in top_aliases.values() if v in ["part_number", "quantity", "value", "location"]}
-    if is_inventory_query and top_file and top_file.lower().endswith('.xlsx') and inventory_columns:
+    # Find all Excel files and their aliases
+    excel_files = []
+    for meta, _ in all_chunks:
+        file = meta.get("source_file", "")
+        if file.lower().endswith('.xlsx'):
+            excel_files.append((file, meta.get("column_aliases", {})))
+
+    # If only one Excel file and inventory query, always use it
+    if is_inventory_query and len(excel_files) == 1:
+        file, aliases = excel_files[0]
         st.markdown("---")
-        st.markdown(f"**Structured Inventory Q&A:** Using `{top_file}` with columns: {list(inventory_columns)}")
-        excel_qa(top_file, user_query, top_aliases)
+        st.markdown(f"**Structured Inventory Q&A:** Using `{file}` (only Excel file indexed)")
+        excel_qa(file, user_query, aliases)
         # Still show the rest of the LLM answer for context
+    else:
+        # Fallback to previous logic: use top chunk if it's Excel with inventory columns
+        top_meta = top_chunks[0][1] if top_chunks else None
+        top_file = top_meta.get("source_file") if top_meta else None
+        top_aliases = top_meta.get("column_aliases", {}) if top_meta else {}
+        inventory_columns = {v for v in top_aliases.values() if v in ["part_number", "quantity", "value", "location"]}
+        if is_inventory_query and top_file and top_file.lower().endswith('.xlsx') and inventory_columns:
+            st.markdown("---")
+            st.markdown(f"**Structured Inventory Q&A:** Using `{top_file}` with columns: {list(inventory_columns)}")
+            excel_qa(top_file, user_query, top_aliases)
+            # Still show the rest of the LLM answer for context
 
     context = "\n\n".join([chunk for _, _, chunk, _, _ in top_chunks])
     sources = [meta.get("source_file", "") for _, meta, _, _, _ in top_chunks]
