@@ -826,8 +826,13 @@ for idx, file in enumerate(all_files):
 
                 gpt_meta = save_metadata(file_name, gpt_meta) or gpt_meta
 
-                st.write("🧠 Raw gpt_meta type:", type(gpt_meta))
-                st.write("🧠 Raw gpt_meta value:", gpt_meta)
+                st.write("🧠 save_metadata() returned:", gpt_meta)
+                st.write("🧠 gpt_meta type:", type(gpt_meta))
+                if isinstance(gpt_meta, dict):
+                    st.write("✅ file_id from metadata:", gpt_meta.get("id"))
+                else:
+                    st.error("❌ gpt_meta is not a dict. Embedding will fail.")
+
 
 # Safely extract file_id only if gpt_meta is a dict and contains 'id'
                 file_id = gpt_meta.get("id") if isinstance(gpt_meta, dict) else None
