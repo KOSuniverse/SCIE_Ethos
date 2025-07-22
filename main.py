@@ -818,22 +818,37 @@ for idx, file in enumerate(all_files):
 
                 # Structural metadata for all files
                 gpt_meta.update(extract_structural_metadata(text, ext))
+
                 save_metadata(file_name, gpt_meta)
 
-                for chunk in chunk_text(text):
-                    all_chunks.append((gpt_meta, chunk))
+                # Get file_id from saved metadata (you MUST have id in the row)
+                from uuid import uuid4
+                file_id = gpt_meta.get("id") or meta.get("id")
 
-                # --- Embedding (based on summary)
-                embedding = None
-                if "embedding" in meta and meta["embedding"]:
-                    embedding = np.array(meta["embedding"])
-                elif meta.get("summary", ""):
-                    try:
-                        embedding = get_embedding(meta["summary"])
-                    except Exception as e:
-                        st.warning(f"Embedding failed for {file_name}: {e}")
-                if embedding is not None:
-                    embedding_cache[file_name] = embedding
+                # Chunk and embed full text
+                if file_id:
+                    chunks = chunk_text(text)
+                    for idx, (chunk_text_content, start, end) in enumerate(chunks):
+                        try:
+                            vector = get_embedding(chunk_text_content)
+                            chunk_id = str(uuid4())
+                            token_count = len(chunk_text_content.split())
+
+                            # Add to Supabase
+                            insert_embedding_chunk(
+                                file_id=file_id,
+                                chunk_id=chunk_id,
+                                chunk_text=chunk_text_content,
+                                embedding=vector.tolist(),
+                                token_count=token_count
+                            )
+
+                            # Also add to in-memory chunks
+                            all_chunks.append((gpt_meta, chunk_text_content))
+                        except Exception as e:
+                            st.warning(f"⚠️ Embedding chunk failed: {e}")
+                else:
+                    st.warning(f"❌ No file_id found in metadata for {file_name} — skipping embedding.")
 
         except Exception as e:
             st.warning(f"⚠️ Failed to process {file_name}: {e}")
