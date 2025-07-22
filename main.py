@@ -53,78 +53,6 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 embedding_cache = {}
 
-
-# --- Load global column aliases from Supabase before upload ---
-global_aliases = load_global_aliases()
-
-
-# ...existing code...
-
-# --- Place the upload expander block here, after all helper functions are defined ---
-# --- Place the upload expander block here, after all helper functions are defined ---
-with st.expander("📁 Upload a File to Supabase"):
-    uploaded_file = st.file_uploader("Choose a file", type=["pdf", "docx", "xlsx", "pptx"])
-    if uploaded_file:
-        file_bytes = uploaded_file.read()
-        filename = uploaded_file.name
-        folder_map = {
-            "xlsx": "02_Excel",
-            "docx": "01_Docs",
-            "pdf": "01_Docs",
-            "pptx": "03_PPT"
-        }
-        ext = filename.split(".")[-1].lower()
-        folder = folder_map.get(ext, "unknown")
-        path = f"{folder}/{filename}"
-        try:
-            upload_file(path, file_bytes)
-            st.success(f"✅ Uploaded to Supabase at `{path}`")
-            # --- Immediately extract and save metadata for the uploaded file ---
-            # Always reload global_aliases in case of concurrent edits
-            global_aliases = load_global_aliases()
-            if ext == "xlsx":
-                text, sheet_names, columns_by_sheet = extract_text_for_metadata(path)
-            else:
-                text = extract_text_for_metadata(path)
-                sheet_names, columns_by_sheet = [], {}
-
-            if isinstance(text, tuple):
-                text = text[0]
-
-            if text and text.strip():
-                gpt_meta = generate_llm_metadata(text, ext)
-                gpt_meta["source_file"] = path
-                gpt_meta["last_indexed"] = datetime.now().isoformat()
-                gpt_meta["author"] = st.secrets.get("user_email", "system")
-                gpt_meta["file_type"] = ext
-                gpt_meta["file_size"] = len(file_bytes)
-                gpt_meta["last_modified"] = datetime.now().isoformat()
-
-                if ext == "xlsx":
-                    gpt_meta["sheet_names"] = sheet_names
-                    gpt_meta["columns_by_sheet"] = columns_by_sheet
-                    all_columns = []
-                    if columns_by_sheet:
-                        for cols in columns_by_sheet.values():
-                            all_columns.extend(cols)
-                    gpt_meta["columns"] = list(set(all_columns)) if all_columns else []
-                    if gpt_meta["columns"]:
-                        # Use current global_aliases for mapping
-                        column_aliases = map_columns_to_concepts(gpt_meta["columns"], global_aliases)
-                        gpt_meta["column_aliases"] = column_aliases
-                        update_global_aliases(column_aliases)
-
-                gpt_meta.update(extract_structural_metadata(text, ext))
-                save_metadata(path, gpt_meta)
-                st.success(f"📝 Metadata extracted and saved for `{path}`.")
-            else:
-                st.warning(f"No extractable text found in `{path}` for metadata generation.")
-                st.info(f"Debug: text extraction result: {text}")
-        except Exception as e:
-            st.error(f"❌ Upload failed: {e}")
-            st.info(f"Debug: Exception details: {traceback.format_exc()}")
-
-
 # --- Retry Logic for OpenAI Calls ---
 def openai_with_retry(call_fn, max_retries=3, delay=2):
     for attempt in range(max_retries):
@@ -729,6 +657,69 @@ def excel_qa(file_path, user_query, column_aliases=None):
 
 # --- Load global column aliases from Supabase ---
 global_aliases = load_global_aliases()
+
+# --- Place the upload expander block here, after all helper functions are defined ---
+with st.expander("📁 Upload a File to Supabase"):
+    uploaded_file = st.file_uploader("Choose a file", type=["pdf", "docx", "xlsx", "pptx"])
+    if uploaded_file:
+        file_bytes = uploaded_file.read()
+        filename = uploaded_file.name
+        folder_map = {
+            "xlsx": "02_Excel",
+            "docx": "01_Docs",
+            "pdf": "01_Docs",
+            "pptx": "03_PPT"
+        }
+        ext = filename.split(".")[-1].lower()
+        folder = folder_map.get(ext, "unknown")
+        path = f"{folder}/{filename}"
+        try:
+            upload_file(path, file_bytes)
+            st.success(f"✅ Uploaded to Supabase at `{path}`")
+            # --- Immediately extract and save metadata for the uploaded file ---
+            # Always reload global_aliases in case of concurrent edits
+            global_aliases = load_global_aliases()
+            if ext == "xlsx":
+                text, sheet_names, columns_by_sheet = extract_text_for_metadata(path)
+            else:
+                text = extract_text_for_metadata(path)
+                sheet_names, columns_by_sheet = [], {}
+
+            if isinstance(text, tuple):
+                text = text[0]
+
+            if text and text.strip():
+                gpt_meta = generate_llm_metadata(text, ext)
+                gpt_meta["source_file"] = path
+                gpt_meta["last_indexed"] = datetime.now().isoformat()
+                gpt_meta["author"] = st.secrets.get("user_email", "system")
+                gpt_meta["file_type"] = ext
+                gpt_meta["file_size"] = len(file_bytes)
+                gpt_meta["last_modified"] = datetime.now().isoformat()
+
+                if ext == "xlsx":
+                    gpt_meta["sheet_names"] = sheet_names
+                    gpt_meta["columns_by_sheet"] = columns_by_sheet
+                    all_columns = []
+                    if columns_by_sheet:
+                        for cols in columns_by_sheet.values():
+                            all_columns.extend(cols)
+                    gpt_meta["columns"] = list(set(all_columns)) if all_columns else []
+                    if gpt_meta["columns"]:
+                        # Use current global_aliases for mapping
+                        column_aliases = map_columns_to_concepts(gpt_meta["columns"], global_aliases)
+                        gpt_meta["column_aliases"] = column_aliases
+                        update_global_aliases(column_aliases)
+
+                gpt_meta.update(extract_structural_metadata(text, ext))
+                save_metadata(path, gpt_meta)
+                st.success(f"📝 Metadata extracted and saved for `{path}`.")
+            else:
+                st.warning(f"No extractable text found in `{path}` for metadata generation.")
+                st.info(f"Debug: text extraction result: {text}")
+        except Exception as e:
+            st.error(f"❌ Upload failed: {e}")
+            st.info(f"Debug: Exception details: {traceback.format_exc()}")
 
 # --- Streamlit UI for editing column aliases ---
 if st.checkbox("🔧 Edit Column Alias Mappings"):
