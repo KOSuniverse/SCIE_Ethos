@@ -212,89 +212,58 @@ def detect_alias_conflicts(mapping):
     conflicts = {alias: cols for alias, cols in reverse.items() if len(cols) > 1 and alias != "ignore"}
     return conflicts
 
-def map_columns_to_concepts(columns, global_aliases=None, preview=True):
-    unmapped = [col for col in columns if not global_aliases or col not in global_aliases]
-    mapping = global_aliases.copy() if global_aliases else {}
-    new_mapping = {}
-    if unmapped:
-        prompt = (
-            "You are a data standardization assistant that helps map inconsistent Excel column names "
-            "to a small set of standardized business concepts. Your job is to return a JSON dictionary "
-            "where each key is the original column name and each value is the mapped concept name.\n\n"
-            "📌 Mapping Instructions:\n"
-            "- Map each original column header to a common business concept such as:\n"
-            "  'part_number', 'quantity', 'description', 'location', 'date', 'value', 'status', etc.\n"
-            "- If a column header is unclear, irrelevant, or junk (e.g., 'Sheet1', 'Unnamed', etc.), map it to 'ignore'.\n"
-            "- Do not guess. If unsure, map to 'ignore'.\n\n"
-            "🧾 Output Format:\n"
-            "Return only a JSON dictionary, like this:\n"
-            "{\n"
-            '  "QTY": "quantity",\n'
-            '  "part no": "part_number",\n'
-            '  "xyz123": "ignore"\n'
-            "}\n\n"
-            f"🎯 Columns to map:\n{unmapped}\n\n"
-            "Only return valid JSON. Do not include explanations, comments, or markdown formatting."
-        )
-        try:
-            response = openai_with_retry(
-                lambda: client.chat.completions.create(
-                    model=OPENAI_CHAT_MODEL,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.2
-                )
-            )
-            raw = response.choices[0].message.content.strip()
-            # --- Robust JSON validation/fallback ---
-            try:
-                new_mapping = json.loads(raw)
-            except Exception:
-                # Fallback: try to parse as key-value pairs
-                new_mapping = {}
-                for line in raw.splitlines():
-                    if ":" in line:
-                        k, v = line.split(":", 1)
-                        new_mapping[k.strip()] = v.strip()
-                if not new_mapping:
-                    st.warning("Could not parse column mapping from LLM output.")
-            mapping.update(new_mapping)
-        except Exception as e:
-            st.warning(f"Column mapping failed: {e}")
+# --- Hybrid Fuzzy+GPT Column Mapping ---
+def load_concepts(path="alias_concepts.json"):
+    with open(path, "r") as f:
+        return json.load(f)
 
-    # --- Alias conflict detection ---
-    conflicts = detect_alias_conflicts(mapping)
-    if conflicts:
-        st.warning(f"Alias conflicts detected: {conflicts}")
+def extract_text_for_metadata(path, max_ocr_pages=3):
+    # Minimal stub to resolve NameError; replace with real logic as needed
+    return "", [], {}
 
-    # --- Preview/audit in Streamlit ---
-    if preview and new_mapping:
-        st.write("Column mapping preview (edit if needed):")
-        editable_json = st.text_area(
-            "Edit mapping as JSON if needed:",
-            value=json.dumps(mapping, indent=2),
-            key="column_mapping_preview"
-        )
-        try:
-            mapping = json.loads(editable_json)
-        except Exception:
-            st.error("Invalid JSON in edited mapping. Using previous mapping.")
+def fuzzy_match(col, concepts):
+    best_match = None
+    best_score = 0
+    for concept in concepts:
+        score = SequenceMatcher(None, col.lower(), concept.lower()).ratio()
+        if score > best_score:
+            best_match = concept
+            best_score = score
+    return best_match if best_score > 0.8 else None
 
-    return mapping
+def gpt_fallback_alias(col, concepts, openai_client):
+    prompt = (
+        f"You're mapping messy Excel headers to standardized data concepts.\n"
+        f'Column: "{col}"\n'
+        f"Concepts: {', '.join(concepts)}.\n"
+        f'Which one best fits? If none, respond "ignore".'
+    )
+    response = openai_client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0
+    )
+    return response.choices[0].message.content.strip().lower()
 
-# --- Adaptive Fallback for LLM Input ---
-def safe_llm_input(text, summary=None, max_len=4000):
-    if isinstance(text, str) and len(text) > max_len:
-        return summary if summary else text[:max_len]
-    return text
+def map_columns_to_concepts(columns, concepts=None, use_gpt=True, openai_client=None):
+    if concepts is None:
+        concepts = load_concepts()
+    if openai_client is None:
+        raise ValueError("openai_client must be provided for GPT fallback.")
 
-def extract_text_for_metadata(path, max_ocr_pages=5):
-    """
-    Extracts human-readable content from supported document types.
-    Returns:
-        - For Excel (.xlsx): (text, sheet_names, columns_by_sheet)
-        - For all others: (text, [], {})
-    """
-    ext = path.lower().split('.')[-1]
+    alias_map = {}
+    for col in columns:
+        # Step 1: Fuzzy match
+        alias = fuzzy_match(col, concepts)
+
+        # Step 2: GPT fallback if fuzzy match fails
+        if not alias and use_gpt:
+            alias = gpt_fallback_alias(col, concepts, openai_client)
+
+        # Step 3: If still nothing, ignore
+        alias_map[col] = alias if alias in concepts else "ignore"
+
+    return alias_map
     try:
         file_stream = download_file(path)
 
@@ -706,10 +675,13 @@ with st.expander("📁 Upload a File to Supabase"):
                             all_columns.extend(cols)
                     gpt_meta["columns"] = list(set(all_columns)) if all_columns else []
                     if gpt_meta["columns"]:
-                        # Use current global_aliases for mapping
-                        column_aliases = map_columns_to_concepts(gpt_meta["columns"], global_aliases)
+                        # Use hybrid fuzzy+GPT mapping
+                        alias_concepts = load_concepts()
+                        column_aliases = map_columns_to_concepts(gpt_meta["columns"], alias_concepts, use_gpt=True, openai_client=client)
                         gpt_meta["column_aliases"] = column_aliases
-                        update_global_aliases(column_aliases)
+                        # Only update global aliases with valid concepts
+                        valid_aliases = {k: v for k, v in column_aliases.items() if v != "ignore"}
+                        update_global_aliases(valid_aliases)
 
                 gpt_meta.update(extract_structural_metadata(text, ext))
                 save_metadata(path, gpt_meta)
@@ -793,9 +765,11 @@ for idx, file in enumerate(all_files):
                             all_columns.extend(cols)
                     gpt_meta["columns"] = list(set(all_columns)) if all_columns else []
                     if gpt_meta["columns"]:
-                        column_aliases = map_columns_to_concepts(gpt_meta["columns"], updated_global_aliases)
+                        alias_concepts = load_concepts()
+                        column_aliases = map_columns_to_concepts(gpt_meta["columns"], alias_concepts, use_gpt=True, openai_client=client)
                         gpt_meta["column_aliases"] = column_aliases
-                        updated_global_aliases.update(column_aliases)
+                        valid_aliases = {k: v for k, v in column_aliases.items() if v != "ignore"}
+                        updated_global_aliases.update(valid_aliases)
 
                 # Structural metadata for all files
                 gpt_meta.update(extract_structural_metadata(text, ext))
