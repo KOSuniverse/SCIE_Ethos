@@ -599,6 +599,13 @@ def excel_qa(file_path, user_query, column_aliases=None):
             st.warning("No column mapped to 'part_number' found in this file. Please check your column aliases.")
         else:
             st.success(f"Found part_number column(s): {part_number_cols}")
+            # Show the first five unique part numbers directly
+            for col in part_number_cols:
+                if col in df.columns:
+                    unique_parts = df[col].dropna().astype(str).unique()[:5]
+                    st.info(f"First five unique part numbers from column '{col}': {list(unique_parts)}")
+                else:
+                    st.warning(f"Column '{col}' not found in DataFrame columns: {list(df.columns)}")
         auto_chart = any (word in user_query.lower() for word in ["trend", "compare", "distribution", "growth", "pattern", "chart", "plot", "visual"])
         # If the user query is about part numbers, make the prompt explicit
         if any(kw in user_query.lower() for kw in ["part number", "part_number", "partno", "part no"]):
