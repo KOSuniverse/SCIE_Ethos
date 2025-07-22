@@ -39,10 +39,12 @@ def load_metadata(filename: str):
 def save_metadata(filename: str, data: dict):
     data['filename'] = filename
     existing = load_metadata(filename)
+
     if existing:
-        return supabase.table("metadata").update(data).eq("filename", filename).execute()
+        result = supabase.table("metadata").update(data).eq("filename", filename).execute()
     else:
-        return supabase.table("metadata").insert(data).execute()
+        result = supabase.table("metadata").insert(data).execute()
+
     return result.data[0] if result.data else None
 
 # ---------- GLOBAL ALIASES ----------
