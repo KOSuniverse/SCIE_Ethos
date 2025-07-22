@@ -12,6 +12,7 @@ from openai import OpenAI
 from docx import Document
 import openpyxl
 from pptx import Presentation
+from supabase_utils import insert_embedding_chunk
 import pdfplumber
 import pytesseract
 import pandas as pd
@@ -686,6 +687,31 @@ with st.expander("📁 Upload a File to Supabase"):
                 gpt_meta.update(extract_structural_metadata(text, ext))
                 save_metadata(path, gpt_meta)
                 st.success(f"📝 Metadata extracted and saved for `{path}`.")
+
+                # --- Insert chunk-level embeddings into embedding index (robust, both gpt_meta and meta for file_id) ---
+                if text.strip():
+                    chunks = chunk_text(text)  # (chunk_text, start_idx, end_idx)
+                    # meta is not defined in this scope, so set to None for safety
+                    meta = None
+                    file_id = gpt_meta.get("id") or (meta.get("id") if meta else None)
+
+                    if file_id:
+                        for chunk_text_content, start, end in chunks:
+                            try:
+                                vector = get_embedding(chunk_text_content)
+                                chunk_id = str(uuid4())
+                                token_count = len(chunk_text_content.split())
+                                insert_embedding_chunk(
+                                    file_id=file_id,
+                                    chunk_id=chunk_id,
+                                    chunk_text=chunk_text_content,
+                                    embedding=vector.tolist(),
+                                    token_count=token_count
+                                )
+                            except Exception as e:
+                                st.warning(f"⚠️ Embedding failed for a chunk: {e}")
+                    else:
+                        st.warning("⚠️ No file_id found for embedding_index insert.")
 
                 # --- Insert chunk-level embeddings into embedding index ---
                 for chunk_text_content, start, end in chunk_text(text):
