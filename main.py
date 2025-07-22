@@ -591,23 +591,45 @@ def excel_qa(file_path, user_query, column_aliases=None):
     try:
         file_stream = download_file(file_path)
         df = pd.read_excel(file_stream)
+        st.info(f"**Debug: Excel columns:** {list(df.columns)}")
+        st.info(f"**Debug: Excel head:**\n{df.head(5).to_string(index=False)}")
+        # Find the part_number column(s) from aliases
+        part_number_cols = [col for col, alias in (column_aliases or {}).items() if alias == "part_number"]
+        if not part_number_cols:
+            st.warning("No column mapped to 'part_number' found in this file. Please check your column aliases.")
+        else:
+            st.success(f"Found part_number column(s): {part_number_cols}")
         auto_chart = any (word in user_query.lower() for word in ["trend", "compare", "distribution", "growth", "pattern", "chart", "plot", "visual"])
-        prompt = (
-            f"Column aliases for this file: {json.dumps(column_aliases or {})}\n"
-            f"You are a data analyst working with the following Excel file.\n"
-            f"Columns: {list(df.columns)}\n"
-            f"Sample data:\n{df.head(5).to_string(index=False)}\n\n"
-            f"User question: {user_query}\n\n"
-            "Follow this reasoning chain:\n"
-            "1. Identify the key data needed to answer the question.\n"
-            "2. Retrieve or summarize the relevant data.\n"
-            f"3. {'Generate a chart if it would help illustrate the answer (use matplotlib/seaborn and show it).' if auto_chart else 'Generate a chart if useful.'}\n"
-            "4. Explain what the result or chart shows.\n"
-            "5. Suggest 1–2 possible causes or business insights that could explain the observed pattern.\n\n"
-            "Return only valid Python code that uses the provided 'df' DataFrame (do NOT reload or create new data). "
-            "Assign any tabular result to a variable named 'result'.\n"
-            "After the code block, provide your explanation and insights."
-        )
+        # If the user query is about part numbers, make the prompt explicit
+        if any(kw in user_query.lower() for kw in ["part number", "part_number", "partno", "part no"]):
+            prompt = (
+                f"Column aliases for this file: {json.dumps(column_aliases or {})}\n"
+                f"You are a data analyst working with the following Excel file.\n"
+                f"Columns: {list(df.columns)}\n"
+                f"Sample data:\n{df.head(5).to_string(index=False)}\n\n"
+                f"User question: {user_query}\n\n"
+                f"Show the first five unique part numbers from the column(s) mapped to 'part_number': {part_number_cols}.\n"
+                "Return only valid Python code that uses the provided 'df' DataFrame (do NOT reload or create new data). "
+                "Assign any tabular result to a variable named 'result'.\n"
+                "After the code block, provide your explanation and insights."
+            )
+        else:
+            prompt = (
+                f"Column aliases for this file: {json.dumps(column_aliases or {})}\n"
+                f"You are a data analyst working with the following Excel file.\n"
+                f"Columns: {list(df.columns)}\n"
+                f"Sample data:\n{df.head(5).to_string(index=False)}\n\n"
+                f"User question: {user_query}\n\n"
+                "Follow this reasoning chain:\n"
+                "1. Identify the key data needed to answer the question.\n"
+                "2. Retrieve or summarize the relevant data.\n"
+                f"3. {'Generate a chart if it would help illustrate the answer (use matplotlib/seaborn and show it).' if auto_chart else 'Generate a chart if useful.'}\n"
+                "4. Explain what the result or chart shows.\n"
+                "5. Suggest 1–2 possible causes or business insights that could explain the observed pattern.\n\n"
+                "Return only valid Python code that uses the provided 'df' DataFrame (do NOT reload or create new data). "
+                "Assign any tabular result to a variable named 'result'.\n"
+                "After the code block, provide your explanation and insights."
+            )
 
         response = client.chat.completions.create(
             model=OPENAI_CHAT_MODEL,
