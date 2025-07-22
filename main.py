@@ -869,6 +869,18 @@ if st.session_state.reindex_trigger:
     all_chunks = reindex_all_files()
     st.session_state.reindex_trigger = False
     st.success("Re-indexing complete!")
+    # Debug: Show what files and columns are indexed
+    st.info("**Debug: Indexed files and columns:**")
+    for meta, chunk in all_chunks:
+        file = meta.get("source_file", "")
+        cols = meta.get("columns", [])
+        st.write(f"File: {file}")
+        if cols:
+            st.write(f"  Columns: {cols}")
+        else:
+            st.write("  No columns found.")
+        if 'part' in ' '.join(cols).lower() or 'number' in ' '.join(cols).lower():
+            st.success(f"  ✅ Inventory/part number data detected in: {file}")
 else:
     # Default: load files and build all_chunks as before
     all_files = [
@@ -1177,6 +1189,12 @@ def run_user_query(user_query, all_chunks):
             st.write(f"- {src}")
         return
 
+
+    # Debug: Show all available chunks and their source files
+    st.info("**Debug: Available chunks for Q&A:**")
+    for meta, chunk in all_chunks:
+        st.write(f"Chunk from {meta.get('source_file','')}: {chunk[:100]}...")
+
     scored_chunks = []
     query_embedding = get_embedding(user_query)
     for meta, chunk in all_chunks:
@@ -1285,11 +1303,15 @@ def run_user_query(user_query, all_chunks):
         "predictive_model_result": predictive_model_result if predictive_model_result else "",
     })
 
-with st.expander("Show Query Log"):
-    for entry in st.session_state.query_log:
-        st.write(entry)
+if 'query_log_expander_shown' not in st.session_state:
+    with st.expander("Show Query Log"):
+        for entry in st.session_state.query_log:
+            st.write(entry)
+    st.session_state['query_log_expander_shown'] = True
 
-with st.expander("Show Chat History"):
-    for msg in st.session_state.chat_history:
-        st.write(f"{msg['role'].capitalize()}: {msg['content']}")
+if 'chat_history_expander_shown' not in st.session_state:
+    with st.expander("Show Chat History"):
+        for msg in st.session_state.chat_history:
+            st.write(f"{msg['role'].capitalize()}: {msg['content']}")
+    st.session_state['chat_history_expander_shown'] = True
 
