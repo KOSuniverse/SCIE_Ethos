@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import json
 import re
+from uuid import uuid4
 import tempfile
 import warnings
 import textwrap
@@ -685,6 +686,25 @@ with st.expander("📁 Upload a File to Supabase"):
                 gpt_meta.update(extract_structural_metadata(text, ext))
                 save_metadata(path, gpt_meta)
                 st.success(f"📝 Metadata extracted and saved for `{path}`.")
+
+                # --- Insert chunk-level embeddings into embedding index ---
+                for chunk_text_content, start, end in chunk_text(text):
+                    try:
+                        vector = get_embedding(chunk_text_content)
+                        file_id = gpt_meta.get("id")  # Must exist in metadata
+                        chunk_id = str(uuid4())
+                        token_count = len(chunk_text_content.split())
+
+                        # Insert into embedding_index table
+                        insert_embedding_chunk(
+                            file_id=file_id,
+                            chunk_id=chunk_id,
+                            chunk_text=chunk_text_content,
+                            embedding=vector.tolist(),
+                            token_count=token_count
+                        )
+                    except Exception as e:
+                        st.warning(f"Embedding chunk failed: {e}")
             else:
                 st.warning(f"No extractable text found in `{path}` for metadata generation.")
                 st.info(f"Debug: text extraction result: {text}")
