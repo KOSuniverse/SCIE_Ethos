@@ -3,6 +3,7 @@ from datetime import datetime
 import json
 import io
 import os
+from uuid import uuid4
 
 # ---------- STORAGE UTILS ----------
 
@@ -94,3 +95,14 @@ def _guess_mime(filename):
         "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
     }.get(ext, "application/octet-stream")
+
+def insert_embedding_chunk(file_id, chunk_id, chunk_text, embedding, token_count):
+    from supabase_config import supabase
+    return supabase.table("embedding_index").insert({
+        "file_id": file_id,
+        "chunk_id": chunk_id,
+        "chunk_text": chunk_text,
+        "embedding": embedding,
+        "token_count": token_count,
+        "created_at": datetime.utcnow().isoformat()
+    }).execute()
