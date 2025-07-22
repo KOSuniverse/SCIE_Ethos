@@ -45,9 +45,10 @@ def save_metadata(filename: str, data: dict):
     else:
         supabase.table("metadata").insert(data).execute()
 
-    # Always return a fresh SELECT with ID
+    # 🧠 This guarantees we return the record with ID
     result = supabase.table("metadata").select("*").eq("filename", filename).single().execute()
     return result.data if result.data else None
+
 
 
 # ---------- GLOBAL ALIASES ----------

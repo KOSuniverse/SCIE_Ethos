@@ -825,11 +825,13 @@ for idx, file in enumerate(all_files):
                 gpt_meta.update(extract_structural_metadata(text, ext))
 
                 gpt_meta = save_metadata(file_name, gpt_meta) or gpt_meta
+
                 st.write("🧠 Raw gpt_meta type:", type(gpt_meta))
                 st.write("🧠 Raw gpt_meta value:", gpt_meta)
-                # Get file_id from saved metadata (you MUST have id in the row)
-                from uuid import uuid4
-                file_id = gpt_meta.get("id") or meta.get("id")
+
+# Safely extract file_id only if gpt_meta is a dict and contains 'id'
+                file_id = gpt_meta.get("id") if isinstance(gpt_meta, dict) else None
+                st.write("✅ file_id resolved:", file_id)
 
                 # Chunk and embed full text
                 if file_id:
