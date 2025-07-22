@@ -12,12 +12,11 @@ from openai import OpenAI
 from docx import Document
 import openpyxl
 from pptx import Presentation
-from supabase_utils import insert_embedding_chunk
+import matplotlib.pyplot as plt
 import pdfplumber
 import pytesseract
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 import seaborn as sns
 from collections import defaultdict
 import joblib  # For loading prebuilt models
@@ -34,6 +33,7 @@ from supabase_utils import (
     load_learned_answers,
     save_learned_answers
 )
+from supabase_utils import insert_embedding_chunk
 import nltk
 from difflib import SequenceMatcher
 import traceback
