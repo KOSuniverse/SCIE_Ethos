@@ -27,6 +27,26 @@ import nltk
 
 nltk.download('punkt')
 
+# --- Debug: Show folders and files in PROJECT_ROOT ---
+st.markdown("## 📁 Project Folder Contents")
+folders = []
+files = []
+for root, dirs, file_list in os.walk(PROJECT_ROOT):
+    for d in dirs:
+        folders.append(os.path.join(root, d))
+    for f in file_list:
+        files.append(os.path.join(root, f))
+st.write(f"**Folders found:** {len(folders)}")
+for folder in folders[:10]:
+    st.write(f"- {folder}")
+if len(folders) > 10:
+    st.write(f"...and {len(folders)-10} more")
+st.write(f"**Files found:** {len(files)}")
+for file in files[:10]:
+    st.write(f"- {file}")
+if len(files) > 10:
+    st.write(f"...and {len(files)-10} more")
+
 # --- Config ---
 PROJECT_ROOT = r"C:\Users\dansk\OneDrive\Project_Root"
 METADATA_FOLDER = os.path.join(PROJECT_ROOT, "01_Project_Plan", "_metadata")
