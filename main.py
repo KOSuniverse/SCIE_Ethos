@@ -1,3 +1,14 @@
+# --- Debug: Environment and Path Diagnostics ---
+import getpass
+import sys
+st.markdown("## 🧑‍💻 Environment & Path Diagnostics")
+st.write(f"**Current user:** {getpass.getuser()}")
+st.write(f"**Python executable:** {sys.executable}")
+st.write(f"**Current working directory:** {os.getcwd()}")
+st.write(f"**PROJECT_ROOT:** {PROJECT_ROOT}")
+st.write(f"**os.path.exists(PROJECT_ROOT):** {os.path.exists(PROJECT_ROOT)}")
+import pathlib
+st.write(f"**pathlib.Path(PROJECT_ROOT).exists():** {pathlib.Path(PROJECT_ROOT).exists()}")
 import streamlit as st
 import os
 import json
