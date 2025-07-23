@@ -28,7 +28,7 @@ import nltk
 nltk.download('punkt')
 
 # --- Config ---
-PROJECT_ROOT = "C:\Users\dansk\OneDrive\Project_Root"
+PROJECT_ROOT = r"C:\Users\dansk\OneDrive\Project_Root"
 METADATA_FOLDER = os.path.join(PROJECT_ROOT, "01_Project_Plan", "_metadata")
 GLOBAL_ALIAS_PATH = os.path.join(METADATA_FOLDER, "global_column_aliases.json")
 LEARNED_ANSWERS_PATH = os.path.join(METADATA_FOLDER, "learned_answers.json")
