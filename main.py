@@ -28,7 +28,7 @@ import nltk
 nltk.download('punkt')
 
 # --- Config ---
-PROJECT_ROOT = "./Project_Root"
+PROJECT_ROOT = "C:\Users\dansk\OneDrive\Project_Root"
 METADATA_FOLDER = os.path.join(PROJECT_ROOT, "01_Project_Plan", "_metadata")
 GLOBAL_ALIAS_PATH = os.path.join(METADATA_FOLDER, "global_column_aliases.json")
 LEARNED_ANSWERS_PATH = os.path.join(METADATA_FOLDER, "learned_answers.json")
@@ -53,9 +53,12 @@ def find_all_supported_files(base_dir=PROJECT_ROOT):
     ]
 
 def get_metadata_path(file_path):
-    # Metadata file is always /Project_Root/01_Project_Plan/_metadata/{basename}.json
+    # Metadata file is always <document_folder>/_metadata/{basename}.json
+    folder = os.path.dirname(file_path)
+    metadata_folder = os.path.join(folder, "_metadata")
+    os.makedirs(metadata_folder, exist_ok=True)
     base = os.path.basename(file_path)
-    return os.path.join(METADATA_FOLDER, f"{base}.json")
+    return os.path.join(metadata_folder, f"{base}.json")
 
 def load_metadata(file_path):
     meta_path = get_metadata_path(file_path)
