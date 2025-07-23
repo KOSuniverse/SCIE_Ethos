@@ -66,8 +66,13 @@ def load_metadata(file_path):
 
 def save_metadata(file_path, meta):
     meta_path = get_metadata_path(file_path)
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2)
+    os.makedirs(os.path.dirname(meta_path), exist_ok=True)  # Ensure folder exists
+    try:
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+        st.info(f"Metadata saved to {meta_path}")
+    except Exception as e:
+        st.error(f"Failed to save metadata to {meta_path}: {e}")
 
 def load_global_aliases():
     if os.path.exists(GLOBAL_ALIAS_PATH):
@@ -196,7 +201,7 @@ def map_columns_to_concepts(columns, global_aliases=None, preview=True):
         editable_json = st.text_area(
             "Edit mapping as JSON if needed:",
             value=json.dumps(mapping, indent=2),
-            key="column_mapping_preview"
+            key=f"column_mapping_preview_{hash(str(columns))}"
         )
         try:
             mapping = json.loads(editable_json)
@@ -383,7 +388,7 @@ Return your analysis in this format (JSON only):
 Do not include markdown, comments, or speculative guesses without data support.
 """
     all_context = "\n\n".join([chunk for _, chunk in all_chunks])
-    top_context = "\n\n".join([chunk for _, chunk in top_chunks])
+    top_context = "\n\n".join([chunk for _, _, chunk, _, _ in top_chunks])
     try:
         response = client.chat.completions.create(
             model=OPENAI_CHAT_MODEL,
@@ -643,7 +648,8 @@ for idx, file_path in enumerate(all_files):
                     for cols in columns_by_sheet.values():
                         all_columns.extend(cols)
                     meta["columns"] = list(set(all_columns))
-                    column_aliases = map_columns_to_concepts(meta["columns"], updated_global_aliases)
+                    # Only show mapping preview and warnings when re-indexing
+                    column_aliases = map_columns_to_concepts(meta["columns"], updated_global_aliases, preview=True)
                     meta["column_aliases"] = column_aliases
                     updated_global_aliases.update(column_aliases)
                 llm_meta = generate_llm_metadata(text, ext)
@@ -664,6 +670,7 @@ for idx, file_path in enumerate(all_files):
         except Exception as e:
             st.warning(f"Failed to process {file_path}: {e}")
     else:
+        # Only load mapping, skip preview UI and warnings
         if "summary" in meta:
             for chunk in chunk_text(meta["summary"]):
                 all_chunks.append((meta, chunk[0]))
