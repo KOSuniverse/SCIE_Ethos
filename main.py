@@ -175,6 +175,11 @@ def map_columns_to_concepts(columns, global_aliases=None, preview=True):
                 )
             )
             raw = response.choices[0].message.content.strip()
+            # Clean up LLM output if it has extra quotes or trailing commas
+            if raw.startswith("```json") or raw.startswith("```"):
+                raw = raw.strip("`").replace("json", "").strip()
+            # Remove trailing commas inside JSON
+            raw = re.sub(r',\s*}', '}', raw)
             try:
                 new_mapping = json.loads(raw)
             except Exception:
@@ -183,7 +188,10 @@ def map_columns_to_concepts(columns, global_aliases=None, preview=True):
                 for line in raw.splitlines():
                     if ":" in line:
                         k, v = line.split(":", 1)
-                        new_mapping[k.strip()] = v.strip()
+                        # Remove extra quotes and commas
+                        k = k.strip().strip('"').strip(',')
+                        v = v.strip().strip('"').strip(',')
+                        new_mapping[k] = v
                 if not new_mapping:
                     st.warning("Could not parse column mapping from LLM output.")
             mapping.update(new_mapping)
@@ -198,9 +206,11 @@ def map_columns_to_concepts(columns, global_aliases=None, preview=True):
     # --- Preview/audit in Streamlit ---
     if preview and new_mapping:
         st.write("Column mapping preview (edit if needed):")
+        # Clean mapping for display
+        display_mapping = {k: v for k, v in mapping.items()}
         editable_json = st.text_area(
             "Edit mapping as JSON if needed:",
-            value=json.dumps(mapping, indent=2),
+            value=json.dumps(display_mapping, indent=2),
             key=f"column_mapping_preview_{hash(str(columns))}"
         )
         try:
