@@ -51,16 +51,15 @@ for root, dirs, file_list in os.walk(PROJECT_ROOT):
         folders.append(os.path.join(root, d))
     for f in file_list:
         files.append(os.path.join(root, f))
-st.write(f"**Folders found:** {len(folders)}")
-for folder in folders[:10]:
-    st.write(f"- {folder}")
-if len(folders) > 10:
-    st.write(f"...and {len(folders)-10} more")
-st.write(f"**Files found:** {len(files)}")
-for file in files[:10]:
-    st.write(f"- {file}")
-if len(files) > 10:
-    st.write(f"...and {len(files)-10} more")
+if not folders and not files:
+    st.warning(f"No folders or files found in {PROJECT_ROOT}. Check OneDrive sync and permissions.")
+else:
+    st.write(f"**Folders found:** {len(folders)}")
+    for folder in folders:
+        st.write(f"- {folder}")
+    st.write(f"**Files found:** {len(files)}")
+    for file in files:
+        st.write(f"- {file}")
 
 # --- Config ---
 PROJECT_ROOT = r"C:\Users\dansk\OneDrive\Project_Root"
