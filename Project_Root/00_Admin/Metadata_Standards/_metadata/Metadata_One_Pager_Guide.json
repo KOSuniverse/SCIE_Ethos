@@ -1,0 +1,17 @@
+{
+  "title": "Forecast Accuracy Review\nAuthor: Dan\nDate: 2024-06-14\nCategory: Meeting Notes\nTags: forecasting, demand-planning, accuracy",
+  "author": "",
+  "date": "2025-07-14",
+  "category": "Documentation",
+  "tags": [
+    "metadata",
+    "indexing",
+    "best practices",
+    "document management",
+    "LLM",
+    "JSON",
+    "guidelines"
+  ],
+  "summary": "This guide provides instructions on how to apply metadata to project documents for LLM indexing. It includes details on where to place metadata in Word, Excel, or PDF files, and offers best practices for maintaining consistent naming and tag formats. The guide also advises saving JSON metadata in a designated subfolder and updating the Metadata Reference Sheet for new categories or tags.",
+  "source_file": "Metadata_One_Pager_Guide.docx"
+}

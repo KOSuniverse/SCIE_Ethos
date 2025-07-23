@@ -1,0 +1,17 @@
+{
+  "title": "LLM Integration Roadmap for SharePoint",
+  "author": "",
+  "date": "2025-07-14",
+  "category": "Roadmap",
+  "tags": [
+    "LLM",
+    "SharePoint",
+    "metadata",
+    "integration",
+    "document management",
+    "automation",
+    "file structure"
+  ],
+  "summary": "This document provides a comprehensive roadmap for integrating a Large Language Model (LLM) into SharePoint-driven data projects. It details the steps required to create a functional LLM-powered assistant, initially focusing on searchable access to internal documentation and later supporting direct querying of structured data. Key components include the establishment of a SharePoint folder structure, file naming conventions, metadata guidance, tool selection, and integration architecture. The roadmap outlines project phases, starting with the foundation phase that sets up a well-structured SharePoint environment, standardizes file naming and metadata, and prepares for LLM ingestion of documents. It also describes the use of Python or Power Automate scripts to generate JSON sidecar files for metadata tagging.",
+  "source_file": "Llm Data Roadmap.docx"
+}
