@@ -25,7 +25,22 @@ import pickle
 import io
 import nltk
 
-nltk.download('punkt')
+
+# --- Config ---
+PROJECT_ROOT = r"C:\Users\dansk\OneDrive\Project_Root"
+METADATA_FOLDER = os.path.join(PROJECT_ROOT, "01_Project_Plan", "_metadata")
+GLOBAL_ALIAS_PATH = os.path.join(METADATA_FOLDER, "global_column_aliases.json")
+LEARNED_ANSWERS_PATH = os.path.join(METADATA_FOLDER, "learned_answers.json")
+
+SUPPORTED_EXTS = (".xlsx", ".docx", ".pdf", ".pptx")
+OPENAI_EMBEDDING_MODEL = "text-embedding-ada-002"
+OPENAI_CHAT_MODEL = "gpt-4o"
+
+os.makedirs(METADATA_FOLDER, exist_ok=True)
+
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+
+embedding_cache = {}
 
 # --- Debug: Show folders and files in PROJECT_ROOT ---
 st.markdown("## 📁 Project Folder Contents")
