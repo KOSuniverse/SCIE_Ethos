@@ -557,6 +557,15 @@ def excel_qa(file_path, user_query, column_aliases=None):
     import seaborn as sns
     import re
     df = pd.read_excel(file_path)
+    df = remap_columns(df, column_aliases)
+def remap_columns(df, column_aliases):
+    mapping = {}
+    if column_aliases:
+        for col in df.columns:
+            std = column_aliases.get(col)
+            if std and std != "ignore":
+                mapping[col] = std
+    return df.rename(columns=mapping)
     auto_chart = any(word in user_query.lower() for word in ["trend", "compare", "distribution", "growth", "pattern", "chart", "plot", "visual"])
     # Show first five unique part numbers if query is about part numbers/inventory
     inventory_keywords = ["part number", "part_number", "partno", "part no", "inventory", "qty", "quantity", "stock", "balance", "value", "location"]
