@@ -145,34 +145,52 @@ def cosine_similarity(a, b):
 # --- Metadata and Column Alias Mapping ---
 
 def detect_alias_conflicts(mapping):
+    """
+    Detect conflicts where multiple columns map to the same alias.
+    Returns a dict of alias -> [columns] for conflicts (excluding 'ignore').
+    """
     reverse = defaultdict(list)
     for col, alias in mapping.items():
         reverse[alias].append(col)
-    conflicts = {alias: cols for alias, cols in reverse.items() if len(cols) > 1 and alias != "ignore"}
+    conflicts = {
+        alias: cols for alias, cols in reverse.items()
+        if len(cols) > 1 and alias != "ignore"
+    }
     return conflicts
 
+def fuzzy_match_score(word, text, threshold=0.85):
+    """
+    Calculate fuzzy match score for keyword matching.
+    Returns True if any token in text matches word above threshold.
+    """
+    from difflib import SequenceMatcher
+    return any(
+        SequenceMatcher(None, word, token).ratio() >= threshold
+        for token in text.split()
+    )
+
 def map_columns_to_concepts(columns, global_aliases=None, preview=True):
+    """
+    Map Excel column headers to standardized business concepts using LLM.
+    Args:
+        columns: List of column names to map
+        global_aliases: Existing global alias mappings
+        preview: Whether to show preview/editing interface
+    Returns:
+        Dictionary mapping column names to concepts
+    """
+    if not columns:
+        return {}
     unmapped = [col for col in columns if not global_aliases or col not in global_aliases]
     mapping = global_aliases.copy() if global_aliases else {}
     new_mapping = {}
     if unmapped:
         prompt = (
-            "You are a data standardization assistant that helps map inconsistent Excel column names "
-            "to a small set of standardized business concepts. Your job is to return a JSON dictionary "
-            "where each key is the original column name and each value is the mapped concept name.\n\n"
-            "📌 Mapping Instructions:\n"
-            "- Map each original column header to a common business concept such as:\n"
-            "  'part_number', 'quantity', 'description', 'location', 'date', 'value', 'status', etc.\n"
-            "- If a column header is unclear, irrelevant, or junk (e.g., 'Sheet1', 'Unnamed', etc.), map it to 'ignore'.\n"
-            "- Do not guess. If unsure, map to 'ignore'.\n\n"
-            "🧾 Output Format:\n"
-            "Return only a JSON dictionary, like this:\n"
-            "{\n"
-            '  "QTY": "quantity",\n'
-            '  "part no": "part_number",\n'
-            '  "xyz123": "ignore"\n'
-            "}\n\n"
-            f"🎯 Columns to map:\n{unmapped}\n\n"
+            "You are a business data normalization assistant. Given spreadsheet column headers, map each to the best business alias from these choices: "
+            "['part_number', 'description', 'category', 'location', 'unit_of_measure', 'quantity', 'value', 'price', 'date', 'period', 'order_number', 'customer', 'supplier', 'account_number', 'manager', 'owner', 'line_number', 'status', 'activity', 'reference_number', 'variance', 'cost_center', 'invoice', 'receipt', 'burden', 'labor_cost', 'labor_hours', 'forecast', 'lead_time', 'inventory_turns', 'sales', 'project', 'budget', 'actual', 'plan', 'balance', 'period_label', 'cost', 'currency', 'company']. "
+            "If none apply, return 'ignore'. Only return a JSON dictionary, no explanation.\n\n"
+            "Example output:\n{\n  'QTY': 'quantity',\n  'part no': 'part_number',\n  'xyz123': 'ignore'\n}\n\n"
+            f"Columns to map: {unmapped}\n"
             "Only return valid JSON. Do not include explanations, comments, or markdown formatting."
         )
         try:
@@ -184,11 +202,10 @@ def map_columns_to_concepts(columns, global_aliases=None, preview=True):
                 )
             )
             raw = response.choices[0].message.content.strip()
-            # Clean up LLM output if it has extra quotes or trailing commas
+            # Remove markdown wrapper if present
             if raw.startswith("```json") or raw.startswith("```"):
                 raw = raw.strip("`").replace("json", "").strip()
-            # Remove trailing commas inside JSON
-            raw = re.sub(r',\s*}', '}', raw)
+            # Try to parse JSON
             try:
                 new_mapping = json.loads(raw)
             except Exception:
@@ -197,36 +214,28 @@ def map_columns_to_concepts(columns, global_aliases=None, preview=True):
                 for line in raw.splitlines():
                     if ":" in line:
                         k, v = line.split(":", 1)
-                        # Remove extra quotes and commas
-                        k = k.strip().strip('"').strip(',')
-                        v = v.strip().strip('"').strip(',')
-                        new_mapping[k] = v
+                        new_mapping[k.strip().strip('"')] = v.strip().strip('"').rstrip(',')
                 if not new_mapping:
                     st.warning("Could not parse column mapping from LLM output.")
             mapping.update(new_mapping)
         except Exception as e:
             st.warning(f"Column mapping failed: {e}")
-
-    # --- Alias conflict detection ---
+    # Detect alias conflicts
     conflicts = detect_alias_conflicts(mapping)
     if conflicts:
         st.warning(f"Alias conflicts detected: {conflicts}")
-
-    # --- Preview/audit in Streamlit ---
+    # Preview/audit in Streamlit
     if preview and new_mapping:
         st.write("Column mapping preview (edit if needed):")
-        # Clean mapping for display
-        display_mapping = {k: v for k, v in mapping.items()}
         editable_json = st.text_area(
             "Edit mapping as JSON if needed:",
-            value=json.dumps(display_mapping, indent=2),
+            value=json.dumps(mapping, indent=2),
             key=f"column_mapping_preview_{hash(str(columns))}"
         )
         try:
             mapping = json.loads(editable_json)
         except Exception:
             st.error("Invalid JSON in edited mapping. Using previous mapping.")
-
     return mapping
 
 def safe_llm_input(text, summary=None, max_len=4000):
@@ -635,6 +644,9 @@ global_aliases = load_global_aliases()
 updated_global_aliases = global_aliases.copy()
 progress_bar = st.progress(0, text="Indexing files and building metadata...")
 
+
+# --- Optimization: Only show alias review UI if new columns were mapped ---
+new_columns_mapped = False
 for idx, file_path in enumerate(all_files):
     ext = file_path.lower().split('.')[-1]
     meta = load_metadata(file_path) or {"source_file": file_path}
@@ -668,9 +680,13 @@ for idx, file_path in enumerate(all_files):
                         all_columns.extend(cols)
                     meta["columns"] = list(set(all_columns))
                     # Only show mapping preview and warnings when re-indexing
+                    prev_aliases = set(updated_global_aliases.keys())
                     column_aliases = map_columns_to_concepts(meta["columns"], updated_global_aliases, preview=True)
                     meta["column_aliases"] = column_aliases
                     updated_global_aliases.update(column_aliases)
+                    # If any new columns were mapped, set flag
+                    if set(meta["columns"]) - prev_aliases:
+                        new_columns_mapped = True
                 llm_meta = generate_llm_metadata(text, ext)
                 meta.update(llm_meta)
                 save_metadata(file_path, meta)
@@ -699,19 +715,21 @@ for idx, file_path in enumerate(all_files):
 progress_bar.empty()
 save_global_aliases(updated_global_aliases)
 
-if st.checkbox("🔧 Edit Column Alias Mappings"):
-    editable_aliases = st.text_area(
-        "Edit mapping as JSON if needed:",
-        value=json.dumps(updated_global_aliases, indent=2),
-        key="alias_editor"
-    )
-    if st.button("💾 Save Updated Aliases"):
-        try:
-            aliases = json.loads(editable_aliases)
-            save_global_aliases(aliases)
-            st.success("Aliases updated successfully.")
-        except Exception:
-            st.warning("Failed to parse and save aliases.")
+# Only show alias review UI if new columns were mapped
+if new_columns_mapped:
+    if st.checkbox("🔧 Edit Column Alias Mappings"):
+        editable_aliases = st.text_area(
+            "Edit mapping as JSON if needed:",
+            value=json.dumps(updated_global_aliases, indent=2),
+            key="alias_editor"
+        )
+        if st.button("💾 Save Updated Aliases"):
+            try:
+                aliases = json.loads(editable_aliases)
+                save_global_aliases(aliases)
+                st.success("Aliases updated successfully.")
+            except Exception:
+                st.warning("Failed to parse and save aliases.")
 
 with st.form("question_form", clear_on_submit=False):
     user_query = st.text_input("Your question:", value=st.session_state.get("last_query", ""))
