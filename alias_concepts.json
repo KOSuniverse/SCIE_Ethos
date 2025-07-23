@@ -1,5 +1,0 @@
-[
-  "part_number", "description", "quantity", "value", "date",
-  "location", "customer", "inventory_status", "order_type",
-  "product_family", "cost", "lead_time", "usage", "project"
-]
