@@ -1,3 +1,23 @@
+# --- Debug: Check existence and type of expected folders in PROJECT_ROOT ---
+st.markdown("## 🕵️ Folder Existence Check")
+expected_folders = [
+    "00_Admin",
+    "01_Project_Plan",
+    "02_Client_Docs",
+    "03_Internal_Knowledge",
+    "04_Data",
+    "05_Deliverables",
+    "99_Archive"
+]
+for folder_name in expected_folders:
+    folder_path = os.path.join(PROJECT_ROOT, folder_name)
+    if os.path.exists(folder_path):
+        if os.path.isdir(folder_path):
+            st.success(f"Folder exists: {folder_path}")
+        else:
+            st.warning(f"Exists but is not a directory: {folder_path}")
+    else:
+        st.error(f"Missing or not synced: {folder_path}")
 import streamlit as st
 import os
 import json
