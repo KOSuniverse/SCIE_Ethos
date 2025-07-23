@@ -1,0 +1,15 @@
+{
+  "title": "Aged WIP and Inventory Data",
+  "author": "",
+  "date": "2025-07-14",
+  "category": "Spreadsheet",
+  "tags": [
+    "WIP",
+    "inventory",
+    "financial",
+    "Germany",
+    "lookup"
+  ],
+  "summary": "This spreadsheet contains multiple sheets with financial and inventory data. The 'Aged WIP' sheet tracks work in progress with references to account 1095, including columns for Buchungsmandant and Buchblatt details. The 'Finished Goods' sheet calculates the current inventory value as of April 10, 2025. The 'Lookups' sheet provides reference data for overdue types and countries, listing payment statuses and associated countries like Algeria and Angola.",
+  "source_file": "GMBH - G509 - Inventory & Aged WIP - EUR.xlsx"
+}

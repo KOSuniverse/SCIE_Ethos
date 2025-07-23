@@ -1,0 +1,17 @@
+{
+  "title": "Aged Work in Progress and Customer Orders",
+  "author": "",
+  "date": "2025-07-14",
+  "category": "Spreadsheet",
+  "tags": [
+    "work orders",
+    "customer orders",
+    "cost analysis",
+    "project management",
+    "inventory",
+    "aged WIP",
+    "fleet management"
+  ],
+  "summary": "This document contains data on aged work in progress (WIP) and customer orders across three sheets: Aged WIP, Customer, and Fleet. The Aged WIP sheet includes columns such as Work Order, Prod Receipt, Master Order, Sales Order, Order Type, Commodity, Customer, Project Manager, Site, Department, Part No, Part Description, Total Cost, and various aging categories. The Customer sheet provides details on customer-specific orders with similar columns, focusing on customer names and project managers. The Fleet sheet appears to track fleet-related work orders, though specific details are truncated. The document is used for tracking costs, labor hours, and material usage across different projects and orders.",
+  "source_file": "LT UK - R401 - Inventory & Aged WIP GBP.xlsx"
+}

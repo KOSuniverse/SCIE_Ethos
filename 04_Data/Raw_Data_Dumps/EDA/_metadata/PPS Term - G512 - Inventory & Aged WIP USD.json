@@ -1,0 +1,16 @@
+{
+  "title": "Aged WIP and Finished Goods Inventory",
+  "author": "",
+  "date": "2025-07-14",
+  "category": "Spreadsheet",
+  "tags": [
+    "inventory",
+    "WIP",
+    "finished goods",
+    "costing",
+    "job status",
+    "aging"
+  ],
+  "summary": "This document contains two sheets: 'Aged WIP' and 'Finished Goods'. The 'Aged WIP' sheet tracks work-in-progress jobs with columns such as LOB, Job No., Job Name, Job Status, Job Ending Date, and age categories ranging from 0-30 Days to Over 180 Days. The 'Finished Goods' sheet details inventory items with columns including No., Description, Location, Base Unit Of Measure, Costing Method, Remaining Quantity, Unit Cost, and Inventory Value. The data provides insights into the status and financials of ongoing projects and available inventory.",
+  "source_file": "PPS Term - G512 - Inventory & Aged WIP USD.xlsx"
+}
