@@ -552,12 +552,8 @@ def build_and_run_model(user_query, top_chunks, target_column=None):
 
 # --- Excel Q&A and Charting ---
 
-def excel_qa(file_path, user_query, column_aliases=None):
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-    import re
-    df = pd.read_excel(file_path)
-    df = remap_columns(df, column_aliases)
+
+# --- Enhanced Excel Q&A Workflow ---
 def remap_columns(df, column_aliases):
     mapping = {}
     if column_aliases:
@@ -566,73 +562,89 @@ def remap_columns(df, column_aliases):
             if std and std != "ignore":
                 mapping[col] = std
     return df.rename(columns=mapping)
-    auto_chart = any(word in user_query.lower() for word in ["trend", "compare", "distribution", "growth", "pattern", "chart", "plot", "visual"])
-    # Show first five unique part numbers if query is about part numbers/inventory
-    inventory_keywords = ["part number", "part_number", "partno", "part no", "inventory", "qty", "quantity", "stock", "balance", "value", "location"]
-    if any(kw in user_query.lower() for kw in inventory_keywords):
-        part_number_cols = [col for col, alias in (column_aliases or {}).items() if alias == "part_number"]
-        if part_number_cols:
-            for col in part_number_cols:
-                if col in df.columns:
-                    unique_parts = df[col].dropna().astype(str).unique()[:5]
-                    st.info(f"First five unique part numbers from column '{col}': {list(unique_parts)}")
-                else:
-                    st.warning(f"Column '{col}' not found in DataFrame columns: {list(df.columns)}")
-        else:
-            st.warning("No column mapped to 'part_number' found in this file. Please check your column aliases.")
-    prompt = (
-        f"Column aliases for this file: {json.dumps(column_aliases or {})}\n"
-        f"You are a data analyst working with the following Excel file.\n"
-        f"Columns: {list(df.columns)}\n"
-        f"Sample data:\n{df.head(5).to_string(index=False)}\n\n"
-        f"User question: {user_query}\n\n"
-        "Follow this reasoning chain:\n"
-        "1. Identify the key data needed to answer the question.\n"
-        "2. Retrieve or summarize the relevant data.\n"
-        f"3. {'Generate a chart if it would help illustrate the answer (use matplotlib/seaborn and show it).' if auto_chart else 'Generate a chart if useful.'}\n"
-        "4. Explain what the result or chart shows.\n"
-        "5. Suggest 1–2 possible causes or business insights that could explain the observed pattern.\n\n"
-        "Return only valid Python code that uses the provided 'df' DataFrame (do NOT reload or create new data). "
-        "Assign any tabular result to a variable named 'result'.\n"
-        "After the code block, provide your explanation and insights."
-    )
 
+def llm_direct_answer(df, user_query, n=5):
+    """
+    Sends prompt to LLM, gets direct answer as a table (not code or explanation).
+    """
+    region_col = None
+    for col in ["region", "location", "site", "warehouse"]:
+        if col in df.columns:
+            region_col = col
+            break
+    table_head = df.head(10).to_string(index=False)
+    prompt = (
+        f"You are a data analyst working with the following data from an Excel file.\n"
+        f"Columns: {list(df.columns)}\n"
+        f"Sample data:\n{table_head}\n\n"
+        f"User question: {user_query}\n\n"
+        f"Return ONLY the direct answer as a markdown table. "
+        f"If a region column is present, break out the result by region. "
+        f"Limit to the top {n} results if appropriate. "
+        f"Do NOT include code, explanations, or commentary."
+    )
     response = client.chat.completions.create(
         model=OPENAI_CHAT_MODEL,
-        messages=[
-            {"role": "system", "content": "You are a helpful data analyst."},
-            {"role": "user", "content": prompt}
-        ],
+        messages=[{"role": "user", "content": prompt}],
         temperature=0.2
     )
+    return response.choices[0].message.content.strip()
 
-    answer = response.choices[0].message.content.strip()
-    code_match = re.search(r"```(?:python)?(.*?)```", answer, re.DOTALL)
-    code = code_match.group(1).strip() if code_match else answer.strip()
+def llm_button_insight(df, user_query, insight_type, context_table=None):
+    base = (
+        f"Columns: {list(df.columns)}\n"
+        f"User question: {user_query}\n\n"
+    )
+    if context_table:
+        base += f"Table data:\n{context_table}\n\n"
+    prompt_map = {
+        "chart": "Suggest the most effective chart to visualize this result. Do NOT provide code—just describe the chart type, axes, and what it will show.",
+        "explain": "Explain what this result means for the business. Focus on the practical significance of the findings.",
+        "causes": "Suggest 1–2 possible business causes or drivers for the observed pattern in this result.",
+        "root_cause": "Analyze the data and result to identify possible root causes, anomalies, or business drivers. Provide a concise summary."
+    }
+    prompt = base + prompt_map[insight_type]
+    response = client.chat.completions.create(
+        model=OPENAI_CHAT_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2
+    )
+    return response.choices[0].message.content.strip()
 
-    explanation = ""
-    if code_match:
-        explanation = answer[code_match.end():].strip()
+def excel_qa(file_path, user_query, column_aliases=None, n=5):
+    # --- 1. Load and alias DataFrame
+    df = pd.read_excel(file_path)
+    df = remap_columns(df, column_aliases)
 
-    local_vars = {"df": df.copy(), "pd": pd, "plt": plt, "sns": sns}
-    plt.clf()
+    # --- 2. Get direct answer as markdown table from LLM
+    direct_answer_md = llm_direct_answer(df, user_query, n=n)
+    st.markdown("### Answer")
+    st.markdown(direct_answer_md)
 
-    try:
-        exec(code, {}, local_vars)
-        if "result" in local_vars:
-            st.write("✅ Result:")
-            if isinstance(local_vars["result"], pd.DataFrame):
-                st.dataframe(local_vars["result"].astype(str))
-            else:
-                st.write(local_vars["result"])
-        st.pyplot(plt)
-    except Exception as e:
-        st.warning("⚠️ GPT-generated code did not execute successfully.")
-        st.text(code)
-        st.error(str(e))
+    # Store table context for followup analysis
+    st.session_state["last_answer_table"] = direct_answer_md
+    st.session_state["last_qa_df"] = df
+    st.session_state["last_qa_query"] = user_query
 
-    if explanation:
-        st.markdown(f"**Explanation:** {explanation}")
+    # --- 3. Layered insights via buttons
+    st.markdown("---")
+    st.markdown("#### Drill Down:")
+
+    if st.button("📊 Show Chart"):
+        chart_desc = llm_button_insight(df, user_query, "chart", context_table=direct_answer_md)
+        st.markdown(f"**Chart Recommendation:**\n{chart_desc}")
+
+    if st.button("💡 Explain Result"):
+        explanation = llm_button_insight(df, user_query, "explain", context_table=direct_answer_md)
+        st.markdown(f"**Explanation:**\n{explanation}")
+
+    if st.button("🧐 Suggest Causes"):
+        causes = llm_button_insight(df, user_query, "causes", context_table=direct_answer_md)
+        st.markdown(f"**Suggested Causes:**\n{causes}")
+
+    if st.button("🔍 Root Cause/Data Mining"):
+        root_cause = llm_button_insight(df, user_query, "root_cause", context_table=direct_answer_md)
+        st.markdown(f"**Root Cause Analysis:**\n{root_cause}")
 
 # --- Streamlit UI and App Main Loop ---
 
