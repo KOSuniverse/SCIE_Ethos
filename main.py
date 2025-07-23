@@ -901,6 +901,7 @@ if new_columns_mapped:
                 st.warning("Failed to parse and save aliases.")
 
 with st.form("question_form", clear_on_submit=False):
+
     user_query = st.text_input("Your question:", value=st.session_state.get("last_query", ""))
     submit = st.form_submit_button("Ask")
 
@@ -931,77 +932,79 @@ if submit and user_query.strip():
     scores = [{"file": meta.get("source_file", ""), "score": score, "keyword": kw, "semantic": sem}
               for score, meta, _, kw, sem in top_chunks]
 
-    system_prompt = (
-        "You are a business analyst answering questions using internal documents (Excel, Word, PDF, PPTX). "
-        "For each question, follow this reasoning chain:\n"
-        "1. Identify the key data needed to answer the question.\n"
-        "2. Retrieve or summarize the relevant information from the provided context.\n"
-        "3. If the answer is quantitative and a chart would help, describe the chart (or provide code for matplotlib/seaborn if possible).\n"
-        "4. Explain what the result or chart shows.\n"
-        "5. Suggest possible causes or business insights that could explain the observed pattern, using supporting evidence from other loaded data if possible.\n"
-        "6. Cite the source file(s) used for the answer.\n"
-        "7. Rate your confidence in the answer (0-100) based on relevance scores and verification.\n"
-        "Use only the provided context and cite sources."
-    )
-
-    try:
-        response = client.chat.completions.create(
-            model=OPENAI_CHAT_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {user_query}"}
-            ],
-            temperature=0.3
+    # --- Enhanced Excel Q&A for initial question ---
+    top_meta = top_chunks[0][1] if top_chunks else None
+    top_file = top_meta.get("source_file") if top_meta else None
+    if top_file and top_file.lower().endswith('.xlsx'):
+        column_aliases = top_meta.get("column_aliases", {})
+        excel_qa(top_file, user_query, column_aliases)
+    else:
+        # Fallback: original LLM reasoning answer for non-Excel files
+        system_prompt = (
+            "You are a business analyst answering questions using internal documents (Excel, Word, PDF, PPTX). "
+            "For each question, follow this reasoning chain:\n"
+            "1. Identify the key data needed to answer the question.\n"
+            "2. Retrieve or summarize the relevant information from the provided context.\n"
+            "3. If the answer is quantitative and a chart would help, describe the chart (or provide code for matplotlib/seaborn if possible).\n"
+            "4. Explain what the result or chart shows.\n"
+            "5. Suggest possible causes or business insights that could explain the observed pattern, using supporting evidence from other loaded data if possible.\n"
+            "6. Cite the source file(s) used for the answer.\n"
+            "7. Rate your confidence in the answer (0-100) based on relevance scores and verification.\n"
+            "Use only the provided context and cite sources."
         )
-        answer = response.choices[0].message.content.strip()
-    except Exception as e:
-        answer = f"LLM answer failed: {e}"
+        try:
+            response = client.chat.completions.create(
+                model=OPENAI_CHAT_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {user_query}"}
+                ],
+                temperature=0.3
+            )
+            answer = response.choices[0].message.content.strip()
+        except Exception as e:
+            answer = f"LLM answer failed: {e}"
+        st.markdown(f"**Answer:**\n\n{answer}")
+        st.markdown("**Sources used:**")
+        for src in sources:
+            st.write(f"- {src}")
+        st.markdown("**Relevance scores:**")
+        for s in scores:
+            st.write(f"{s['file']}: hybrid={s['score']:.2f}, keyword={s['keyword']}, semantic={s['semantic']:.2f}")
 
-    verification = verify_answer(answer, context, user_query)
+    verification = verify_answer(
+        st.session_state.get("last_answer_table", "") if top_file and top_file.lower().endswith('.xlsx') else answer,
+        context,
+        user_query
+    )
     root_cause_analysis = mine_for_root_causes(user_query, all_chunks, top_chunks)
 
-    st.markdown("### 📊 Predictive Modeling Options")
+    st.markdown("### \U0001F4CA Predictive Modeling Options")
     predictive_model_result = None
 
-    if st.button("⚙️ Run Prebuilt Model"):
+    if st.button("\u2699\ufe0f Run Prebuilt Model"):
         predictive_model_result = predictive_modeling_prebuilt(user_query, top_chunks)
         st.write(predictive_model_result)
 
-    if st.button("🛠 Build and Train Model (LLM-guided)"):
+    if st.button("\U0001F6E0 Build and Train Model (LLM-guided)"):
         with st.spinner("Generating and training your model..."):
             result = build_and_run_model(user_query, top_chunks)
             st.write(result)
 
-    st.markdown(f"**Answer:**\n\n{answer}")
-    st.markdown("**Sources used:**")
-    for src in sources:
-        st.write(f"- {src}")
-    st.markdown("**Relevance scores:**")
-    for s in scores:
-        st.write(f"{s['file']}: hybrid={s['score']:.2f}, keyword={s['keyword']}, semantic={s['semantic']:.2f}")
     st.markdown("**Verification:**")
     st.write(verification)
     st.markdown("**Root Cause/Data Mining Analysis:**")
     st.write(root_cause_analysis)
 
-    top_meta = top_chunks[0][1] if top_chunks else None
-    top_file = top_meta.get("source_file") if top_meta else None
-    if top_file and top_file.lower().endswith('.xlsx'):
-        st.markdown("---")
-        st.markdown("**You can generate a chart from the top Excel file:**")
-        if st.button("Show chart for top Excel file"):
-            column_aliases = top_meta.get("column_aliases", {})
-            excel_qa(top_file, user_query, column_aliases)
-
     st.session_state.last_query = user_query
     st.session_state.chat_history.append({"role": "user", "content": user_query})
-    st.session_state.chat_history.append({"role": "assistant", "content": answer})
+    st.session_state.chat_history.append({"role": "assistant", "content": st.session_state.get("last_answer_table", answer)})
     st.session_state.query_log.append({
         "timestamp": datetime.now().isoformat(),
         "question": user_query,
         "files_used": sources,
         "scores": scores,
-        "answer": answer,
+        "answer": st.session_state.get("last_answer_table", answer),
         "verification": verification,
         "root_cause_analysis": root_cause_analysis,
         "predictive_model_result": predictive_model_result if predictive_model_result else "",
