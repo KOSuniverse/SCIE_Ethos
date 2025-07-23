@@ -42,23 +42,33 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 embedding_cache = {}
 
-# --- Debug: Show folders and files in PROJECT_ROOT ---
+
+# --- Debug: Show all immediate subfolders and files in PROJECT_ROOT ---
 st.markdown("## 📁 Project Folder Contents")
-folders = []
-files = []
-for root, dirs, file_list in os.walk(PROJECT_ROOT):
-    for d in dirs:
-        folders.append(os.path.join(root, d))
-    for f in file_list:
-        files.append(os.path.join(root, f))
-if not folders and not files:
+import pathlib
+root_path = pathlib.Path(PROJECT_ROOT)
+top_folders = [f for f in root_path.iterdir() if f.is_dir()]
+top_files = [f for f in root_path.iterdir() if f.is_file()]
+
+if not top_folders and not top_files:
     st.warning(f"No folders or files found in {PROJECT_ROOT}. Check OneDrive sync and permissions.")
 else:
-    st.write(f"**Folders found:** {len(folders)}")
-    for folder in folders:
+    st.write(f"**Top-level folders found:** {len(top_folders)}")
+    for folder in top_folders:
         st.write(f"- {folder}")
-    st.write(f"**Files found:** {len(files)}")
-    for file in files:
+    st.write(f"**Top-level files found:** {len(top_files)}")
+    for file in top_files:
+        st.write(f"- {file}")
+
+# Optionally, show all files in all subfolders
+all_files = []
+for subfolder in top_folders:
+    for path, dirs, files in os.walk(str(subfolder)):
+        for f in files:
+            all_files.append(os.path.join(path, f))
+if all_files:
+    st.write(f"**All files in subfolders:** {len(all_files)}")
+    for file in all_files:
         st.write(f"- {file}")
 
 # --- Config ---
