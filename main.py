@@ -28,7 +28,10 @@ import base64
 import pickle
 import io
 import nltk
-nltk.download('punkt')
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
 
 # --- Config ---
 PROJECT_ROOT = r"C:\Users\dansk\OneDrive\Project_Root"
