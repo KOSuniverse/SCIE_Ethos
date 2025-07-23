@@ -636,22 +636,174 @@ if "last_query" not in st.session_state:
 if "query_log" not in st.session_state:
     st.session_state.query_log = []
 
-st.header("Ask a question about your knowledge base")
 
+# --- Robust Multi-Alias Mapping ---
+def map_columns_to_multi_aliases(columns, concept_alias_dict=None, preview=True):
+    """
+    Map Excel column headers to standardized business concepts, supporting multiple aliases per concept.
+    Args:
+        columns: List of column names to map
+        concept_alias_dict: Existing concept->aliases dict
+        preview: Whether to show preview/editing interface
+    Returns:
+        Dictionary mapping concept to list of aliases
+    """
+    if not columns:
+        return {}
+    # Build reverse lookup: alias->concept
+    concept_alias_dict = concept_alias_dict or {}
+    # Flatten all known aliases
+    known_aliases = set()
+    for alias_list in concept_alias_dict.values():
+        if isinstance(alias_list, list):
+            known_aliases.update(alias_list)
+        elif isinstance(alias_list, str):
+            known_aliases.add(alias_list)
+    # Find new columns not already mapped
+    unmapped = [col for col in columns if col not in known_aliases]
+    concept_to_aliases = {k: v if isinstance(v, list) else [v] for k, v in concept_alias_dict.items()}
+    new_aliases = defaultdict(list)
+    if unmapped:
+        # Use LLM to map each column to a concept and collect robust aliases
+        prompt = (
+            "You are a business data normalization assistant. Given spreadsheet column headers, map each to the best business concept from these choices: "
+            "['part_number', 'description', 'category', 'location', 'unit_of_measure', 'quantity', 'value', 'price', 'date', 'period', 'order_number', 'customer', 'supplier', 'account_number', 'manager', 'owner', 'line_number', 'status', 'activity', 'reference_number', 'variance', 'cost_center', 'invoice', 'receipt', 'burden', 'labor_cost', 'labor_hours', 'forecast', 'lead_time', 'inventory_turns', 'sales', 'project', 'budget', 'actual', 'plan', 'balance', 'period_label', 'cost', 'currency', 'company']. "
+            "For each concept, return a list of all possible header variants (synonyms, abbreviations, alternate spellings, etc). If none apply, return 'ignore'. Only return a JSON dictionary mapping concept to list of aliases."
+            "Example output:\n{\n  'part_number': ['part_no', 'part number', 'pn', 'item_no', ...],\n  'description': ['description', 'desc', 'details'],\n  ...\n}\n"
+            f"Columns to map: {unmapped}\n"
+            "Only return valid JSON. Do not include explanations, comments, or markdown formatting."
+        )
+        try:
+            response = openai_with_retry(
+                lambda: client.chat.completions.create(
+                    model=OPENAI_CHAT_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.2
+                )
+            )
+            raw = response.choices[0].message.content.strip()
+            if raw.startswith("```json") or raw.startswith("```"):
+                raw = raw.strip("`").replace("json", "").strip()
+            try:
+                new_aliases = json.loads(raw)
+            except Exception:
+                # Fallback: try to parse as key-value pairs
+                new_aliases = defaultdict(list)
+                for line in raw.splitlines():
+                    if ":" in line:
+                        k, v = line.split(":", 1)
+                        k = k.strip().strip('"')
+                        v = v.strip().strip('"').rstrip(',')
+                        if v.startswith("[") and v.endswith("]"):
+                            try:
+                                v_list = json.loads(v)
+                                new_aliases[k] = v_list
+                            except Exception:
+                                new_aliases[k] = [v]
+                        else:
+                            new_aliases[k] = [v]
+                if not new_aliases:
+                    st.warning("Could not parse multi-alias mapping from LLM output.")
+            # Merge new aliases into concept_to_aliases
+            for concept, aliases in new_aliases.items():
+                if concept in concept_to_aliases:
+                    # Merge, avoid duplicates
+                    concept_to_aliases[concept] = list(set(concept_to_aliases[concept]) | set(aliases))
+                else:
+                    concept_to_aliases[concept] = aliases
+        except Exception as e:
+            st.warning(f"Multi-alias mapping failed: {e}")
+    # Preview/audit in Streamlit
+    if preview and new_aliases:
+        st.write("Multi-alias mapping preview (edit if needed):")
+        editable_json = st.text_area(
+            "Edit mapping as JSON if needed:",
+            value=json.dumps(concept_to_aliases, indent=2),
+            key=f"multi_alias_mapping_preview_{hash(str(columns))}"
+        )
+        try:
+            concept_to_aliases = json.loads(editable_json)
+        except Exception:
+            st.error("Invalid JSON in edited mapping. Using previous mapping.")
+    return concept_to_aliases
+
+# --- Reindex Logic ---
+def reindex_all_files():
+    """
+    Full reindex: scan all files, remap columns with multi-alias support, refresh metadata, update alias file.
+    """
+    all_files = find_all_supported_files(PROJECT_ROOT)
+    all_chunks = []
+    global_aliases = load_global_aliases()
+    updated_global_aliases = global_aliases.copy() if global_aliases else {}
+    progress_bar = st.progress(0, text="Reindexing files and building metadata...")
+    for idx, file_path in enumerate(all_files):
+        ext = file_path.lower().split('.')[-1]
+        meta = load_metadata(file_path) or {"source_file": file_path}
+        try:
+            if ext == "xlsx":
+                text, sheet_names, columns_by_sheet = extract_text_for_metadata(file_path)
+            else:
+                text = extract_text_for_metadata(file_path)[0]
+                sheet_names, columns_by_sheet = [], {}
+            if text.strip():
+                meta["file_type"] = ext
+                meta["file_size"] = os.path.getsize(file_path) if os.path.exists(file_path) else None
+                meta["last_modified"] = datetime.fromtimestamp(os.path.getmtime(file_path)).isoformat() if os.path.exists(file_path) else None
+                meta["last_indexed"] = datetime.now().isoformat()
+                if ext == "xlsx":
+                    meta["sheet_names"] = sheet_names
+                    meta["columns_by_sheet"] = columns_by_sheet
+                    all_columns = []
+                    for cols in columns_by_sheet.values():
+                        all_columns.extend(cols)
+                    meta["columns"] = list(set(all_columns))
+                    # Multi-alias mapping
+                    column_aliases = map_columns_to_multi_aliases(meta["columns"], updated_global_aliases, preview=False)
+                    meta["column_aliases"] = column_aliases
+                    updated_global_aliases = column_aliases
+                llm_meta = generate_llm_metadata(text, ext)
+                meta.update(llm_meta)
+                save_metadata(file_path, meta)
+                for chunk in chunk_text(text):
+                    all_chunks.append((meta, chunk[0]))
+                embedding = None
+                if "embedding" in meta and meta["embedding"]:
+                    embedding = np.array(meta["embedding"])
+                elif meta.get("summary", ""):
+                    try:
+                        embedding = get_embedding(meta["summary"])
+                    except Exception as e:
+                        st.warning(f"Embedding failed for {file_path}: {e}")
+                if embedding is not None:
+                    embedding_cache[file_path] = embedding
+        except Exception as e:
+            st.warning(f"Failed to process {file_path}: {e}")
+        progress_bar.progress((idx + 1) / len(all_files), text=f"Reindexed {idx+1}/{len(all_files)} files")
+    progress_bar.empty()
+    save_global_aliases(updated_global_aliases)
+    st.success("Reindex complete! All mappings and metadata have been refreshed.")
+
+# --- UI: Title + Reindex Button ---
+col1, col2 = st.columns([4,1])
+with col1:
+    st.header("Ask a question about your knowledge base")
+with col2:
+    if st.button("🔄 Reindex All Files"):
+        reindex_all_files()
+
+# --- Main App Logic (unchanged, but use multi-alias mapping for new files) ---
 all_files = find_all_supported_files(PROJECT_ROOT)
 all_chunks = []
 global_aliases = load_global_aliases()
-updated_global_aliases = global_aliases.copy()
+updated_global_aliases = global_aliases.copy() if global_aliases else {}
 progress_bar = st.progress(0, text="Indexing files and building metadata...")
 
-
-# --- Optimization: Only show alias review UI if new columns were mapped ---
 new_columns_mapped = False
 for idx, file_path in enumerate(all_files):
     ext = file_path.lower().split('.')[-1]
     meta = load_metadata(file_path) or {"source_file": file_path}
     needs_index = True
-
     file_last_modified = os.path.getmtime(file_path) if os.path.exists(file_path) else None
     if meta and meta.get("last_indexed") and file_last_modified:
         try:
@@ -659,7 +811,6 @@ for idx, file_path in enumerate(all_files):
                 needs_index = False
         except Exception:
             pass
-
     if needs_index:
         try:
             if ext == "xlsx":
@@ -679,12 +830,10 @@ for idx, file_path in enumerate(all_files):
                     for cols in columns_by_sheet.values():
                         all_columns.extend(cols)
                     meta["columns"] = list(set(all_columns))
-                    # Only show mapping preview and warnings when re-indexing
                     prev_aliases = set(updated_global_aliases.keys())
-                    column_aliases = map_columns_to_concepts(meta["columns"], updated_global_aliases, preview=True)
+                    column_aliases = map_columns_to_multi_aliases(meta["columns"], updated_global_aliases, preview=True)
                     meta["column_aliases"] = column_aliases
-                    updated_global_aliases.update(column_aliases)
-                    # If any new columns were mapped, set flag
+                    updated_global_aliases = column_aliases
                     if set(meta["columns"]) - prev_aliases:
                         new_columns_mapped = True
                 llm_meta = generate_llm_metadata(text, ext)
@@ -705,7 +854,6 @@ for idx, file_path in enumerate(all_files):
         except Exception as e:
             st.warning(f"Failed to process {file_path}: {e}")
     else:
-        # Only load mapping, skip preview UI and warnings
         if "summary" in meta:
             for chunk in chunk_text(meta["summary"]):
                 all_chunks.append((meta, chunk[0]))
