@@ -1,0 +1,17 @@
+streamlit
+pandas
+openai
+python-dotenv
+matplotlib
+pytesseract
+pdfplumber
+PyMuPDF
+faiss-cpu
+tiktoken
+python-docx
+python-pptx
+openpyxl
+pillow
+numpy
+tqdm
+
