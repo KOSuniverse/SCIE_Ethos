@@ -10,6 +10,7 @@ from file_utils import list_cleaned_files, get_metadata_path, ensure_folder_stru
 from loader import load_excel_file
 from session import SessionState
 from constants import SESSION_LOG_FILE
+from pathlib import Path
 
 # Phase-4 KB imports
 from phase4_knowledge.knowledgebase_builder import status as kb_status, build_or_update_knowledgebase
@@ -17,7 +18,7 @@ from phase4_knowledge.knowledgebase_retriever import search_topk, pack_context
 from phase4_knowledge.response_composer import compose_response
 
 # --- INITIAL SETUP ---
-PROJECT_ROOT = "Project_Root"
+PROJECT_ROOT = st.secrets.get("PROJECT_ROOT", str(Path(__file__).resolve().parent))
 ensure_folder_structure(PROJECT_ROOT)
 
 st.set_page_config(page_title="LLM Inventory Assistant", layout="wide")
@@ -119,5 +120,4 @@ if file_selection:
 
         # Save session log
         session.save_log_to_file(os.path.join(PROJECT_ROOT, SESSION_LOG_FILE))
-
 
