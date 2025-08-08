@@ -1,5 +1,5 @@
 # scripts/dropbox_sync.py
-import os, json, hashlib, tempfile
+import os, json, hashlib, tempfile, mimetypes
 from datetime import datetime
 from typing import List, Tuple
 
@@ -44,6 +44,7 @@ DBX_REFRESH_TOKEN = must("DROPBOX_REFRESH_TOKEN")
 
 # Optional
 DROPBOX_ROOT = get_optional("DROPBOX_ROOT", "")  # e.g. "/Project_Root" or "" for root
+OPENAI_MODEL = get_optional("OPENAI_MODEL", "gpt-4o")
 
 # Init OpenAI client (reads OPENAI_API_KEY from env OR set explicitly)
 os.environ.setdefault("OPENAI_API_KEY", OPENAI_API_KEY)
@@ -92,66 +93,56 @@ def list_dropbox_files(dbx: dropbox.Dropbox, path: str):
         files.extend(result.entries)
     return [f for f in files if isinstance(f, dropbox.files.FileMetadata)]
 
-# --- Vector store (new OpenAI SDK) ---
+# --- Vector store (new OpenAI SDK: beta namespace) ---
 def get_or_create_vector_store() -> str:
     meta = load_json(VECTOR_STORE_META_PATH, {})
     vs_id = meta.get("vector_store_id")
     if vs_id:
         try:
-            client.vector_stores.retrieve(vs_id)
+            client.beta.vector_stores.retrieve(vs_id)
             return vs_id
         except Exception:
             pass  # recreate if deleted
-    vs = client.vector_stores.create(name="SCIE Ethos Source Docs")
+    vs = client.beta.vector_stores.create(name="SCIE Ethos Source Docs")
     save_json(VECTOR_STORE_META_PATH, {"vector_store_id": vs.id})
     return vs.id
 
 def attach_vector_store_to_assistant(assistant_id: str, vs_id: str):
-    a = client.assistants.retrieve(assistant_id)
-    tr = a.tool_resources or {}
+    # Ensure assistant exists and attach file_search tool with the vector store
+    a = client.beta.assistants.retrieve(assistant_id)
     existing_ids = []
     try:
-        existing_ids = tr.get("file_search", {}).get("vector_store_ids", [])
+        tr = a.tool_resources or {}
+        existing_ids = (tr.get("file_search") or {}).get("vector_store_ids", []) or []
     except Exception:
-        pass
-    if vs_id not in (existing_ids or []):
-        new_ids = (existing_ids or []) + [vs_id]
-        client.assistants.update(
-            assistant_id=assistant_id,
-            tools=[{"type": "file_search"}, {"type": "code_interpreter"}],
-            tool_resources={"file_search": {"vector_store_ids": new_ids}},
-        )
+        existing_ids = []
 
-def batch_upload_files_to_vector_store(vs_id: str, file_tuples: List[Tuple[str, bytes]]):
-    """file_tuples: list of (filename, content_bytes)."""
-    temp_paths, handles = [], []
-    try:
-        for name, data in file_tuples:
-            fd, tmp = tempfile.mkstemp()
-            with os.fdopen(fd, "wb") as w:
-                w.write(data)
-            base, ext = os.path.splitext(name)
-            final_p = tmp + ext
-            os.rename(tmp, final_p)
-            temp_paths.append(final_p)
+    new_ids = list(dict.fromkeys(existing_ids + [vs_id]))
+    client.beta.assistants.update(
+        assistant_id=assistant_id,
+        model=OPENAI_MODEL,
+        tools=[{"type": "file_search"}, {"type": "code_interpreter"}],
+        tool_resources={"file_search": {"vector_store_ids": new_ids}},
+    )
 
-        for p in temp_paths:
-            handles.append(open(p, "rb"))
+def _upload_batch_to_vector_store(vs_id: str, file_tuples: List[Tuple[str, bytes]]):
+    """
+    file_tuples: list of (filename, content_bytes)
+    """
+    # SDK accepts list of file-like objects or (name, BytesIO, mime) tuples.
+    import io as _io
+    files = []
+    for name, data in file_tuples:
+        mime, _ = mimetypes.guess_type(name)
+        files.append((name, _io.BytesIO(data), mime or "application/octet-stream"))
 
-        batch = client.vector_stores.file_batches.upload_and_poll(
-            vector_store_id=vs_id,
-            files=handles,
-        )
-        # batch.status should be "completed" here
-    finally:
-        for h in handles:
-            try: h.close()
-            except: pass
-        for p in temp_paths:
-            try: os.remove(p)
-            except: pass
+    batch = client.beta.vector_stores.file_batches.upload_and_poll(
+        vector_store_id=vs_id,
+        files=files,
+    )
+    return batch.status  # usually "completed"
 
-def sync_dropbox_to_assistant():
+def sync_dropbox_to_assistant(batch_size: int = 10):
     assistant_id = resolve_assistant_id()
     dbx = init_dropbox()
     manifest = load_json(MANIFEST_PATH, {})
@@ -161,7 +152,7 @@ def sync_dropbox_to_assistant():
     attach_vector_store_to_assistant(assistant_id, vs_id)
 
     uploaded, skipped = 0, 0
-    buffer: List[Tuple[str, bytes]] = []
+    buffer: List[Tuple[str, bytes, str, str]] = []  # (name, content, key, hash)
 
     for fmeta in dropbox_files:
         ext = os.path.splitext(fmeta.name)[1].lower()
@@ -177,19 +168,22 @@ def sync_dropbox_to_assistant():
             skipped += 1
             continue
 
-        buffer.append((fmeta.name, content))
+        buffer.append((fmeta.name, content, key, h))
 
-        if len(buffer) >= 10:
-            batch_upload_files_to_vector_store(vs_id, buffer)
-            for name, data in buffer:
-                manifest[key] = {"hash": h, "last_sync": datetime.utcnow().isoformat()}
+        if len(buffer) >= batch_size:
+            _upload_batch_to_vector_store(vs_id, [(n, c) for (n, c, _, _) in buffer])
+            # ✅ per-file manifest updates (was bugged before)
+            now = datetime.utcnow().isoformat()
+            for _, _, k, hh in buffer:
+                manifest[k] = {"hash": hh, "last_sync": now}
                 uploaded += 1
             buffer = []
 
     if buffer:
-        batch_upload_files_to_vector_store(vs_id, buffer)
-        for name, data in buffer:
-            manifest[key] = {"hash": h, "last_sync": datetime.utcnow().isoformat()}
+        _upload_batch_to_vector_store(vs_id, [(n, c) for (n, c, _, _) in buffer])
+        now = datetime.utcnow().isoformat()
+        for _, _, k, hh in buffer:
+            manifest[k] = {"hash": hh, "last_sync": now}
             uploaded += 1
 
     save_json(MANIFEST_PATH, manifest)
