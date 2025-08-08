@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import os
+import sys
+sys.path.append("PY Files")
 
 from llm_client import get_openai_client
 from orchestrator import run_query_pipeline
@@ -117,4 +119,5 @@ if file_selection:
 
         # Save session log
         session.save_log_to_file(os.path.join(PROJECT_ROOT, SESSION_LOG_FILE))
+
 
