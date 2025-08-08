@@ -1,26 +1,46 @@
 # scripts/dropbox_sync.py
 import os
 import json
-import dropbox
 import hashlib
 from datetime import datetime
+
+import dropbox
 from openai import OpenAI
+
+# --- Resolve repo root regardless of current working dir ---
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_DIR = os.path.abspath(os.path.join(HERE, ".."))
 
 # --- CONFIG ---
 DROPBOX_ROOT = ""   # e.g., "/SCIE_Ethos_Source" or "" for root
 ALLOWED_EXTS = {".pdf", ".docx", ".xlsx", ".csv", ".txt"}
-MANIFEST_PATH = "config/dropbox_manifest.json"
-ASSISTANT_META_PATH = "config/assistant.json"
+MANIFEST_PATH = os.path.join(REPO_DIR, "config", "dropbox_manifest.json")
+ASSISTANT_META_PATH = os.path.join(REPO_DIR, "config", "assistant.json")
 
-# --- INIT ---
+# --- ENV ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DROPBOX_TOKEN = os.getenv("DROPBOX_TOKEN")
+ASSISTANT_ID_ENV = os.getenv("ASSISTANT_ID")  # optional fallback
 
 if not OPENAI_API_KEY:
     raise EnvironmentError("OPENAI_API_KEY not set")
 if not DROPBOX_TOKEN:
     raise EnvironmentError("DROPBOX_TOKEN not set")
 
+# --- Resolve assistant_id from env first, else file ---
+def resolve_assistant_id():
+    if ASSISTANT_ID_ENV:
+        return ASSISTANT_ID_ENV
+    if os.path.exists(ASSISTANT_META_PATH):
+        with open(ASSISTANT_META_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)["assistant_id"]
+    raise FileNotFoundError(
+        f"No assistant ID found. Set ASSISTANT_ID env var or provide {ASSISTANT_META_PATH}."
+    )
+
+assistant_id = resolve_assistant_id()
+
+# --- INIT ---
 client = OpenAI()
 dbx = dropbox.Dropbox(DROPBOX_TOKEN)
 
@@ -48,7 +68,7 @@ def list_dropbox_files(path):
         files.extend(result.entries)
     return [f for f in files if isinstance(f, dropbox.files.FileMetadata)]
 
-def upload_to_assistant(file_name, file_bytes, assistant_id):
+def upload_to_assistant(file_name, file_bytes):
     uploaded_file = client.files.create(
         file=(file_name, file_bytes),
         purpose="assistants"
@@ -61,10 +81,6 @@ def upload_to_assistant(file_name, file_bytes, assistant_id):
 
 # --- MAIN SYNC ---
 def sync_dropbox_to_assistant():
-    with open(ASSISTANT_META_PATH, "r", encoding="utf-8") as f:
-        assistant_meta = json.load(f)
-    assistant_id = assistant_meta["assistant_id"]
-
     manifest = load_manifest()
     dropbox_files = list_dropbox_files(DROPBOX_ROOT)
 
@@ -76,18 +92,16 @@ def sync_dropbox_to_assistant():
         if ext not in ALLOWED_EXTS:
             continue
 
-        # Download
         _, resp = dbx.files_download(fmeta.path_lower)
         content = resp.content
         h = file_hash(content)
 
-        # Skip if unchanged
+        # Skip unchanged
         if fmeta.path_lower in manifest and manifest[fmeta.path_lower]["hash"] == h:
             skipped_count += 1
             continue
 
-        # Upload to Assistant
-        file_id = upload_to_assistant(fmeta.name, content, assistant_id)
+        file_id = upload_to_assistant(fmeta.name, content)
 
         manifest[fmeta.path_lower] = {
             "hash": h,
@@ -102,3 +116,4 @@ def sync_dropbox_to_assistant():
 
 if __name__ == "__main__":
     sync_dropbox_to_assistant()
+
