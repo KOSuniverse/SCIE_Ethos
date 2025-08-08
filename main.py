@@ -53,7 +53,36 @@ cleaned_files = list_cleaned_files(PROJECT_ROOT)
 file_selection = st.selectbox("📂 Choose a cleansed Excel file:", cleaned_files)
 
 if file_selection:
-    df_dict = load_excel_file(file_selection)
+    raw_obj = load_excel_file(file_selection)
+
+    # --- Normalize to {sheet_name: DataFrame} ---
+    def _normalize_excel(obj):
+        if obj is None:
+            return {}
+        if isinstance(obj, dict):
+            return obj
+        if isinstance(obj, pd.DataFrame):
+            return {"Sheet1": obj}
+        # Pandas ExcelFile or path-like
+        try:
+            if hasattr(obj, "sheet_names"):
+                return {name: obj.parse(name) for name in obj.sheet_names}
+        except Exception:
+            pass
+        try:
+            xls = pd.ExcelFile(obj)  # obj might be a filepath
+            return {name: xls.parse(name) for name in xls.sheet_names}
+        except Exception:
+            return {}
+
+    df_dict = _normalize_excel(raw_obj)
+
+    if not df_dict:
+        st.error("❌ Could not read any sheets from the selected Excel file.")
+    else:
+        st.success(f"Loaded file: `{os.path.basename(file_selection)}`")
+        st.write(f"Available sheets: {list(df_dict.keys())}")
+
 
     # Show sheets loaded
     st.success(f"Loaded file: `{os.path.basename(file_selection)}`")
