@@ -1,5 +1,3 @@
-# main.py
-
 import streamlit as st
 import pandas as pd
 import os
@@ -11,18 +9,41 @@ from loader import load_excel_file
 from session import SessionState
 from constants import SESSION_LOG_FILE
 
+# Phase-4 KB imports
+from phase4_knowledge.knowledgebase_builder import status as kb_status, build_or_update_knowledgebase
+from phase4_knowledge.knowledgebase_retriever import search_topk, pack_context
+from phase4_knowledge.response_composer import compose_response
+
 # --- INITIAL SETUP ---
 PROJECT_ROOT = "Project_Root"
 ensure_folder_structure(PROJECT_ROOT)
 
 st.set_page_config(page_title="LLM Inventory Assistant", layout="wide")
-st.title("📊 LLM Inventory & RCA Assistant")
+st.title("📊 LLM Inventory + KB-Enhanced Assistant")
 
 # --- SESSION STATE ---
 if "session" not in st.session_state:
     st.session_state.session = SessionState()
 
 session = st.session_state.session
+
+# --- SIDEBAR: KB CONTROLS ---
+st.sidebar.header("Knowledge Base")
+kb_stat = kb_status(PROJECT_ROOT)
+st.sidebar.json(kb_stat)
+
+include_text = st.sidebar.checkbox("Include .txt/.md", value=True)
+force_rebuild = st.sidebar.checkbox("Force full rebuild", value=False)
+if st.sidebar.button("🔧 Build / Update KB"):
+    with st.spinner("Building knowledge base..."):
+        res = build_or_update_knowledgebase(
+            project_root=PROJECT_ROOT,
+            scan_folders=None,
+            force_rebuild=force_rebuild,
+            include_text_files=include_text
+        )
+    st.sidebar.success("KB build complete")
+    st.sidebar.json(res)
 
 # --- FILE SELECTION ---
 cleaned_files = list_cleaned_files(PROJECT_ROOT)
@@ -40,25 +61,60 @@ if file_selection:
 
     if st.button("Run Query") and user_query:
         with st.spinner("Thinking..."):
-            metadata_path = get_metadata_path(PROJECT_ROOT)
-            result = run_query_pipeline(user_query, df_dict, metadata_path)
 
-            session.add_entry(user_query, result)
+            # 1. Run your existing EDA/data pipeline
+            metadata_path = get_metadata_path(PROJECT_ROOT)
+            eda_result = run_query_pipeline(user_query, df_dict, metadata_path)
+
+            # 2. KB retrieval
+            hits = search_topk(PROJECT_ROOT, user_query, k=5)
+            kb_context = pack_context(hits, max_tokens=1000)
+
+            # 3. Merge EDA reasoning + KB context
+            combined_context = ""
+            if "reasoning" in eda_result:
+                combined_context += f"### Data Reasoning:\n{eda_result['reasoning']}\n\n"
+            if kb_context.strip():
+                combined_context += f"### Knowledge Base Context:\n{kb_context}"
+
+            # 4. Get final LLM answer
+            final_answer = compose_response(
+                query=user_query,
+                context=combined_context,
+                model="gpt-4o-mini",
+                temperature=0.2,
+                max_tokens=800
+            )
+
+            # Save to session
+            session.add_entry(user_query, {
+                "output": final_answer,
+                "eda_result": eda_result,
+                "kb_hits": hits
+            })
 
         # --- OUTPUT ---
-        st.subheader("💡 Answer")
-        st.write(result.get("output", {}))
+        st.subheader("💡 Final Answer")
+        st.write(final_answer)
 
-        if "reasoning" in result:
-            with st.expander("🧠 Reasoning"):
-                st.markdown(result["reasoning"])
+        # --- Expanders ---
+        if "reasoning" in eda_result:
+            with st.expander("🧠 Data Reasoning"):
+                st.markdown(eda_result["reasoning"])
 
-        with st.expander("📄 Matched Context"):
+        with st.expander("📄 Matched File/Sheet"):
             st.json({
-                "intent": result.get("intent"),
-                "file": result.get("matched_file"),
-                "sheet": result.get("matched_sheet")
+                "intent": eda_result.get("intent"),
+                "file": eda_result.get("matched_file"),
+                "sheet": eda_result.get("matched_sheet")
             })
+
+        with st.expander("📚 KB Sources"):
+            st.write(f"Retrieved {len(hits)} chunks")
+            for h in hits:
+                st.markdown(f"**Score:** {h.score:.3f} — `{h.meta.get('file_path', '')}`")
+                st.write(h.text[:500] + ("..." if len(h.text) > 500 else ""))
 
         # Save session log
         session.save_log_to_file(os.path.join(PROJECT_ROOT, SESSION_LOG_FILE))
+
