@@ -30,6 +30,7 @@ intents:
     subskills:
       - multi_ERP_country_aware_root_cause
       - tie root cause to operational or policy drivers
+      - income_stream_decrement_mapping
       - recommend specific corrective actions
   eo_analysis:
     description: Perform Excess & Obsolete (E&O) analysis.
@@ -152,3 +153,4 @@ logging:
     - retrieved_chunks
     - output
     - confidence_score
+
