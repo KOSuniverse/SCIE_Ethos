@@ -6,7 +6,7 @@ from typing import List, Optional, Dict, Any
 import boto3
 from botocore.exceptions import ClientError
 
-AWS_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+AWS_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-2")
 S3_BUCKET = os.getenv("S3_BUCKET")
 S3_PREFIX = os.getenv("S3_PREFIX", "").strip("/")
 
