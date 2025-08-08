@@ -1,4 +1,4 @@
-import os
+import os, json
 import re
 import pandas as pd
 
@@ -37,6 +37,29 @@ def load_excel_file(file_path, file_type=None):
         data.append(record)
 
     return data
+
+# --- metadata index loader (used by orchestrator) ---
+
+def load_master_metadata_index(metadata_dir: str) -> dict:
+    """
+    Reads the master metadata index JSON from the given directory.
+    Returns {} if not found or unreadable.
+    """
+    # If your filename differs, add it here.
+    candidates = [
+        "master_metadata_index.json",
+        "metadata_index.json",
+        "master_metadata.json",
+    ]
+    for name in candidates:
+        path = os.path.join(metadata_dir, name)
+        if os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+    return {}
 
 
 def load_files_from_folder(folder_path, include=None, exclude=None):
