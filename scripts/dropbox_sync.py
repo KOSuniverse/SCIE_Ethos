@@ -45,8 +45,7 @@ assistant_id = resolve_assistant_id()
 # --- Dropbox init + probe ---
 def init_dropbox():
     dbx = dropbox.Dropbox(DROPBOX_TOKEN)
-    # fail fast on bad token/path
-    dbx.files_list_folder(DROPBOX_ROOT, recursive=False)
+    dbx.files_list_folder(DROPBOX_ROOT, recursive=False)  # fail fast
     return dbx
 
 dbx = init_dropbox()
@@ -75,70 +74,73 @@ def list_dropbox_files(path):
         files.extend(result.entries)
     return [f for f in files if isinstance(f, dropbox.files.FileMetadata)]
 
-# --- Vector store helpers ---
+# --- Vector store helpers (new API in 1.99.x) ---
 def get_or_create_vector_store() -> str:
     meta = load_json(VECTOR_STORE_META_PATH, {})
     vs_id = meta.get("vector_store_id")
 
     if vs_id:
-        # sanity check it exists
         try:
-            client.beta.vector_stores.retrieve(vs_id)
+            client.vector_stores.retrieve(vs_id)
             return vs_id
         except Exception:
-            pass  # recreate if missing
+            pass  # recreate if it was deleted
 
-    vs = client.beta.vector_stores.create(name="SCIE Ethos Source Docs")
+    vs = client.vector_stores.create(name="SCIE Ethos Source Docs")
     save_json(VECTOR_STORE_META_PATH, {"vector_store_id": vs.id})
     return vs.id
 
 def attach_vector_store_to_assistant(vs_id: str):
-    # Retrieve current assistant to avoid nuking other tool settings
-    a = client.beta.assistants.retrieve(assistant_id)
+    # Fetch assistant to preserve existing tool resources
+    a = client.assistants.retrieve(assistant_id)
     tr = a.tool_resources or {}
-
-    # Merge this vector store ID with any existing ones
     existing_ids = []
     try:
         existing_ids = tr.get("file_search", {}).get("vector_store_ids", [])
     except Exception:
         pass
 
-    # Avoid duplicates
-    if vs_id not in existing_ids:
-        new_ids = existing_ids + [vs_id]
-        client.beta.assistants.update(
+    if vs_id not in (existing_ids or []):
+        new_ids = (existing_ids or []) + [vs_id]
+        client.assistants.update(
             assistant_id=assistant_id,
-            tool_resources={
-                "file_search": {"vector_store_ids": new_ids}
-            },
             tools=[{"type": "file_search"}, {"type": "code_interpreter"}],
+            tool_resources={"file_search": {"vector_store_ids": new_ids}},
         )
 
 def batch_upload_files_to_vector_store(vs_id: str, file_tuples: List[Tuple[str, bytes]]):
     """
     file_tuples: list of (filename, content_bytes)
-    Writes to temp files to satisfy SDK, then upload as a batch and wait.
+    Writes to temp files to satisfy SDK; uploads as a batch and blocks until complete.
     """
     temp_paths = []
+    handles = []
     try:
         for name, data in file_tuples:
             fd, p = tempfile.mkstemp()
             with os.fdopen(fd, "wb") as w:
                 w.write(data)
-            # rename to keep original extension for better parsing
             base, ext = os.path.splitext(name)
             final_p = p + ext
             os.rename(p, final_p)
             temp_paths.append(final_p)
 
-        with client.beta.vector_stores.file_batches.upload_and_poll(
+        # Open all files
+        for p in temp_paths:
+            handles.append(open(p, "rb"))
+
+        # New API: not under beta
+        batch = client.vector_stores.file_batches.upload_and_poll(
             vector_store_id=vs_id,
-            files=[open(p, "rb") for p in temp_paths],
-        ) as batch:  # context manager ensures file handles close
-            # .upload_and_poll returns a FileBatch; wait until it completes internally
-            pass
+            files=handles,
+        )
+        # batch.status should be "completed" here
     finally:
+        for h in handles:
+            try:
+                h.close()
+            except Exception:
+                pass
         for p in temp_paths:
             try:
                 os.remove(p)
@@ -154,7 +156,7 @@ def sync_dropbox_to_assistant():
     attach_vector_store_to_assistant(vs_id)
 
     uploaded, skipped = 0, 0
-    upload_buffer: List[Tuple[str, bytes]] = []
+    buffer: List[Tuple[str, bytes]] = []
 
     for fmeta in dropbox_files:
         ext = os.path.splitext(fmeta.name)[1].lower()
@@ -165,31 +167,25 @@ def sync_dropbox_to_assistant():
         content = resp.content
         h = file_hash(content)
 
-        if fmeta.path_lower in manifest and manifest[fmeta.path_lower]["hash"] == h:
+        key = fmeta.path_lower  # stable key in manifest
+        if key in manifest and manifest[key]["hash"] == h:
             skipped += 1
             continue
 
-        upload_buffer.append((fmeta.name, content))
+        buffer.append((fmeta.name, content))
 
-        # Upload in chunks to avoid huge batches; tune as needed
-        if len(upload_buffer) >= 10:
-            batch_upload_files_to_vector_store(vs_id, upload_buffer)
-            for name, data in upload_buffer:
-                manifest[f"{DROPBOX_ROOT}/{name}".replace("//", "/").lower()] = {
-                    "hash": file_hash(data),
-                    "last_sync": datetime.utcnow().isoformat(),
-                }
+        if len(buffer) >= 10:  # tune batch size as you like
+            batch_upload_files_to_vector_store(vs_id, buffer)
+            for name, data in buffer:
+                # store by dropbox path if available (here we just use name)
+                manifest[key] = {"hash": h, "last_sync": datetime.utcnow().isoformat()}
                 uploaded += 1
-            upload_buffer = []
+            buffer = []
 
-    # Flush remaining
-    if upload_buffer:
-        batch_upload_files_to_vector_store(vs_id, upload_buffer)
-        for name, data in upload_buffer:
-            manifest[f"{DROPBOX_ROOT}/{name}".replace("//", "/").lower()] = {
-                "hash": file_hash(data),
-                "last_sync": datetime.utcnow().isoformat(),
-            }
+    if buffer:
+        batch_upload_files_to_vector_store(vs_id, buffer)
+        for name, data in buffer:
+            manifest[key] = {"hash": h, "last_sync": datetime.utcnow().isoformat()}
             uploaded += 1
 
     save_json(MANIFEST_PATH, manifest)
@@ -198,5 +194,6 @@ def sync_dropbox_to_assistant():
 
 if __name__ == "__main__":
     sync_dropbox_to_assistant()
+
 
 
