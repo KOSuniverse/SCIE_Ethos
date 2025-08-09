@@ -44,7 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_DIR = os.path.abspath(os.path.join(HERE, ".."))
 
 # Config
-ALLOWED_EXTS = {".pdf", ".docx", ".xlsx", ".csv", ".txt"}
+ALLOWED_EXTS = {".pdf", ".docx", ".pptx", ".txt", ".md", ".csv"}
 MANIFEST_PATH = os.path.join(REPO_DIR, "config", "dropbox_manifest.json")
 VECTOR_STORE_META_PATH = os.path.join(REPO_DIR, "config", "vector_store.json")
 ASSISTANT_META_PATH = os.path.join(REPO_DIR, "config", "assistant.json")  # optional fallback
@@ -232,12 +232,13 @@ def sync_dropbox_to_assistant(batch_size: int = 10):
     vs_id = get_or_create_vector_store()
     attach_vector_store_to_assistant(assistant_id, vs_id)
 
-    uploaded, skipped = 0, 0
+    uploaded, skipped, unsupported = 0, 0, 0
     buffer: List[Tuple[str, bytes, str, str]] = []  # (name, content, key, hash)
 
     for fmeta in dropbox_files:
         ext = os.path.splitext(fmeta.name)[1].lower()
         if ext not in ALLOWED_EXTS:
+            unsupported += 1
             continue
 
         _, resp = dbx.files_download(fmeta.path_lower)
@@ -267,7 +268,7 @@ def sync_dropbox_to_assistant(batch_size: int = 10):
             uploaded += 1
 
     save_json(MANIFEST_PATH, manifest)
-    print(f"✅ Sync complete. Uploaded: {uploaded}, Skipped: {skipped}")
+    print(f"✅ Sync complete. Uploaded: {uploaded}, Skipped unchanged: {skipped}, Unsupported skipped: {unsupported}")
     print(f"Vector store: {vs_id} (saved in {VECTOR_STORE_META_PATH})")
 
 if __name__ == "__main__":
