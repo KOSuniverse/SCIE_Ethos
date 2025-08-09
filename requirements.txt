@@ -1,6 +1,7 @@
 streamlit>=1.36
 pandas>=2.2
 openai>=1.54.0
+packaging>=24.1
 python-dotenv>=1.0
 matplotlib>=3.8
 pytesseract>=0.3.10
