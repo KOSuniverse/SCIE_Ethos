@@ -206,3 +206,70 @@ st.caption("This will be enabled after we switch the orchestrator/metadata loade
 st.text_input("Your question", value="", disabled=True)
 st.button("Run Query", disabled=True)
 
+# ===== Project Manifest (diagnostic) =====
+import ast, os, json, time
+from pathlib import Path
+import streamlit as st
+
+def scan_python_public_api(root: str):
+    root_path = Path(root)
+    manifest = {"scanned_at": time.time(), "root": str(root_path), "files": []}
+    for p in root_path.rglob("*.py"):
+        try:
+            src = p.read_text(encoding="utf-8", errors="ignore")
+            tree = ast.parse(src)
+            funcs = []
+            classes = []
+            for node in tree.body:
+                if isinstance(node, ast.FunctionDef) and not node.name.startswith("_"):
+                    args = [a.arg for a in node.args.args]
+                    funcs.append({"name": node.name, "args": args})
+                if isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
+                    methods = []
+                    for b in node.body:
+                        if isinstance(b, ast.FunctionDef) and not b.name.startswith("_"):
+                            margs = [a.arg for a in b.args.args]
+                            methods.append({"name": b.name, "args": margs})
+                    classes.append({"name": node.name, "methods": methods})
+            manifest["files"].append({
+                "path": str(p.relative_to(root_path)),
+                "functions": funcs,
+                "classes": classes
+            })
+        except Exception as e:
+            manifest["files"].append({"path": str(p.relative_to(root_path)), "error": str(e)})
+    return manifest
+
+with st.expander("🧭 Project manifest (repo snapshot)"):
+    code_root = str(Path(__file__).resolve().parent / "PY Files")
+    st.caption(f"Scanning: {code_root}")
+    if st.button("Generate manifest"):
+        mf = scan_python_public_api(code_root)
+        st.success("Manifest generated.")
+        st.json(mf)
+
+        # Save to Dropbox & S3 for shared truth
+        try:
+            from dbx_utils import upload_json
+            from path_utils import get_project_paths
+            paths = get_project_paths()
+            dbx_manifest_path = f"{paths.metadata_folder}/project_manifest.json"
+            upload_json(dbx_manifest_path, mf)
+            st.caption(f"Saved to Dropbox: {dbx_manifest_path}")
+        except Exception as e:
+            st.warning(f"Dropbox save failed: {e}")
+
+        try:
+            import boto3, uuid
+            s3 = boto3.client(
+                "s3",
+                region_name=st.secrets["AWS_DEFAULT_REGION"],
+                aws_access_key_id=st.secrets["AWS_ACCESS_KEY_ID"],
+                aws_secret_access_key=st.secrets["AWS_SECRET_ACCESS_KEY"],
+            )
+            bucket = st.secrets["S3_BUCKET"]; prefix = st.secrets["S3_PREFIX"].rstrip("/")
+            key = f"{prefix}/04_Data/04_Metadata/project_manifest.json"
+            s3.put_object(Bucket=bucket, Key=key, Body=json.dumps(mf).encode("utf-8"))
+            st.caption(f"Saved to S3: s3://{bucket}/{key}")
+        except Exception as e:
+            st.warning(f"S3 save failed: {e}")
