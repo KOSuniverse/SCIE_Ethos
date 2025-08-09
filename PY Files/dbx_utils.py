@@ -1,5 +1,5 @@
 # PY Files/dbx_utils.py
-import io
+import io, json
 import os
 from typing import List, Dict, Optional
 
@@ -29,14 +29,30 @@ def _get_dbx_client():
     )
 
 def list_xlsx(folder_path: str) -> List[Dict]:
-    """List .xlsx files in a Dropbox folder."""
+    """List .xlsx files in a Dropbox folder (handles pagination)."""
     import dropbox
     dbx = _get_dbx_client()
+    files: List[Dict] = []
+
+    # Initial page
     resp = dbx.files_list_folder(folder_path)
-    files = []
-    for e in resp.entries:
+    entries = list(resp.entries)
+
+    # Follow pagination
+    while resp.has_more:
+        resp = dbx.files_list_folder_continue(resp.cursor)
+        entries.extend(resp.entries)
+
+    for e in entries:
         if isinstance(e, dropbox.files.FileMetadata) and e.name.lower().endswith(".xlsx"):
-            files.append({"name": e.name, "path_lower": e.path_lower})
+            files.append({
+                "name": e.name,
+                "path_lower": e.path_lower,
+                "server_modified": getattr(e, "server_modified", None)
+            })
+
+    # Newest first if we have timestamps
+    files.sort(key=lambda d: d.get("server_modified") or 0, reverse=True)
     return files
 
 def read_file_bytes(path_lower: str) -> bytes:
@@ -44,3 +60,25 @@ def read_file_bytes(path_lower: str) -> bytes:
     dbx = _get_dbx_client()
     md, res = dbx.files_download(path_lower)
     return res.content
+
+def upload_bytes(path_lower: str, data: bytes, mode: str = "overwrite"):
+    """Upload arbitrary bytes to Dropbox at path_lower."""
+    import dropbox
+    dbx = _get_dbx_client()
+    write_mode = dropbox.files.WriteMode.overwrite if mode == "overwrite" else dropbox.files.WriteMode.add
+    dbx.files_upload(data, path_lower, mode=write_mode, mute=True)
+
+def save_xlsx_bytes(sheets: dict[str, "pd.DataFrame"]) -> bytes:
+    """Given {sheet_name: df}, return an in‑memory .xlsx bytes object."""
+    import pandas as pd
+    bio = io.BytesIO()
+    with pd.ExcelWriter(bio, engine="xlsxwriter") as writer:
+        for sheet, df in sheets.items():
+            safe = (sheet or "Sheet1")[:31]
+            df.to_excel(writer, index=False, sheet_name=safe)
+    return bio.getvalue()
+
+def upload_json(path_lower: str, obj: dict, mode: str = "overwrite"):
+    """Upload a JSON object to Dropbox."""
+    data = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
+    upload_bytes(path_lower, data, mode=mode)
