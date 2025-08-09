@@ -1,4 +1,4 @@
-## pipeline.py
+# PY Files/phase1_ingest/pipeline.py
 
 import os
 import json
@@ -7,19 +7,58 @@ import pandas as pd
 from datetime import datetime
 from typing import Dict, Tuple, Union, Optional
 
-# ✅ make sibling imports package-relative
-from column_alias import load_alias_group, build_reverse_alias_map, remap_columns
+# ---- Imports from PY Files root (absolute, since main.py adds PY Files to sys.path)
+from column_alias import load_alias_group, remap_columns
 from metadata_utils import save_master_metadata_index
 from summarizer import summarize_data_context
 from eda import generate_eda_summary
 from file_utils import list_cleaned_files
 from constants import *
 
-def clean_and_standardize_sheet(sheet_df, alias_path):
-    alias_group = load_alias_group(alias_path)
-    reverse_map = build_reverse_alias_map(alias_group)
-    cleaned = remap_columns(sheet_df.copy(), reverse_map)
-    return cleaned
+# ---- Get build_reverse_alias_map from wherever it exists, with a safe fallback
+try:
+    # some versions put it here
+    from column_alias import build_reverse_alias_map  # type: ignore
+except Exception:
+    try:
+        # your tree shows alias_utils.py — most likely it’s here
+        from alias_utils import build_reverse_alias_map  # type: ignore
+    except Exception:
+        def build_reverse_alias_map(alias_group: dict) -> dict:
+            """
+            Fallback: build reverse map like {"qty on hand": "on_hand_qty", "qoh": "on_hand_qty", ...}
+            from alias_group shaped like {"on_hand_qty": ["qty on hand", "qoh", ...], ...}
+            """
+            rev = {}
+            for canonical, synonyms in (alias_group or {}).items():
+                key = str(canonical).strip()
+                rev[key] = key
+                if isinstance(synonyms, (list, tuple, set)):
+                    for s in synonyms:
+                        rev[str(s).strip()] = key
+                elif synonyms is not None:
+                    rev[str(synonyms).strip()] = key
+            return rev
+
+# ---------- core helpers ----------
+
+def clean_and_standardize_sheet(sheet_df: pd.DataFrame, alias_path: Optional[str]) -> pd.DataFrame:
+    """
+    Remap columns using alias map if available; otherwise return a copy unchanged.
+    """
+    df = sheet_df.copy()
+    if not alias_path or not os.path.basename(alias_path):
+        return df
+    try:
+        alias_group = load_alias_group(alias_path)
+        reverse_map = build_reverse_alias_map(alias_group)
+        df = remap_columns(df, reverse_map)
+    except Exception:
+        # If alias load/remap fails, proceed with original columns
+        pass
+    return df
+
+# ---------- legacy disk-writing entrypoint (kept intact) ----------
 
 def run_pipeline_on_file(xls_path, alias_path, output_prefix, output_folder):
     xls = pd.ExcelFile(xls_path)
@@ -59,7 +98,8 @@ def run_pipeline_on_file(xls_path, alias_path, output_prefix, output_folder):
 
     return cleaned_file_path, metadata_path
 
-# ---------- ✅ NEW: thin in‑memory wrapper for Streamlit/Dropbox ----------
+# ---------- in‑memory wrapper for Streamlit/Dropbox ----------
+
 BytesLike = Union[bytes, bytearray, io.BytesIO]
 
 def _resolve_alias_path(paths) -> Optional[str]:
@@ -90,9 +130,6 @@ def run_pipeline(source: Union[str, BytesLike], filename: Optional[str] = None, 
         raise TypeError("Unsupported source type for run_pipeline")
 
     alias_path = _resolve_alias_path(paths)
-    if not alias_path or not os.path.basename(alias_path):
-        # We’ll still run, just without remap if alias map can’t be found
-        pass
 
     cleaned_sheets: Dict[str, pd.DataFrame] = {}
     per_sheet_meta = []
@@ -100,8 +137,7 @@ def run_pipeline(source: Union[str, BytesLike], filename: Optional[str] = None, 
     for sheet in xls.sheet_names:
         try:
             df = pd.read_excel(xls, sheet_name=sheet)
-            if alias_path:
-                df = clean_and_standardize_sheet(df, alias_path)
+            df = clean_and_standardize_sheet(df, alias_path)
             df["source_sheet"] = sheet
 
             eda_text = generate_eda_summary(df)
@@ -132,4 +168,5 @@ def run_pipeline(source: Union[str, BytesLike], filename: Optional[str] = None, 
         "sheets": per_sheet_meta,
     }
     return cleaned_sheets, metadata
+
 
