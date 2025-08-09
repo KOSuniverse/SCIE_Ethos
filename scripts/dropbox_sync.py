@@ -1,7 +1,31 @@
-# scripts/dropbox_sync.py
 import os, json, hashlib, tempfile, mimetypes
 from datetime import datetime
 from typing import List, Tuple
+
+# --- SDK version guard (no client instantiation) ---
+import openai as _openai
+try:
+    from packaging import version as _v
+except Exception:
+    _v = None  # fallback if packaging not available
+
+MIN_VER = "1.52.0"
+_current = getattr(_openai, "__version__", "0")
+
+def _too_old(vstr: str, minv: str) -> bool:
+    if _v:
+        try:
+            return _v.parse(vstr) < _v.parse(minv)
+        except Exception:
+            pass
+    # fallback: naive compare on dotted version strings
+    def _parts(s): return [int(p) for p in s.split(".") if p.isdigit()]
+    return _parts(vstr) < _parts(minv)
+
+if _too_old(_current, MIN_VER):
+    raise RuntimeError(
+        f"OpenAI SDK too old ({_current}). Please set openai>={MIN_VER} in requirements.txt and redeploy."
+    )
 
 # Secrets loader (Streamlit or env/.env)
 try:
@@ -14,14 +38,6 @@ except Exception:
 
 import dropbox
 from openai import OpenAI
-from packaging import version as _v
-
-MIN_VER = "1.52.0"
-if not hasattr(OpenAI().beta, "vector_stores") or _v.parse(getattr(_openai, "__version__", "0")) < _v.parse(MIN_VER):
-    raise RuntimeError(
-        f"OpenAI SDK too old ({getattr(_openai, '__version__', 'unknown')}). "
-        f"Please set openai>={MIN_VER} in requirements.txt and redeploy."
-    )
 
 
 # Resolve repo root regardless of CWD
