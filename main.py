@@ -9,7 +9,16 @@ import streamlit as st
 
 # Make local modules importable
 import sys
-sys.path.append("PY Files")
+from pathlib import Path
+sys.path.append(str((Path(__file__).resolve().parent / "PY Files").resolve()))
+try:
+    import column_alias
+    import phase1_ingest.pipeline as _pcheck
+    import importlib; importlib.reload(column_alias); importlib.reload(_pcheck)
+    st.sidebar.success("Imports OK: column_alias & phase1_ingest.pipeline")
+except Exception as e:
+    st.sidebar.error(f"Import check failed: {e}")
+
 
 # --- Cloud helpers & paths ---
 from path_utils import get_project_paths
