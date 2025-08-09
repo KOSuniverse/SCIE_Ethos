@@ -1,5 +1,6 @@
 import streamlit as st
-import pandas as pd
+import io, pandas as pd 
+from dbx_utils import list_xlsx as dbx_list_xlsx, read_file_bytes as dbx_read_bytes
 import os
 import sys
 sys.path.append("PY Files")
@@ -84,6 +85,33 @@ with st.sidebar:
                 st.warning("No .xlsx files found in that folder.")
         except Exception as e:
             st.error(f"Dropbox check failed: {e}")
+
+with st.sidebar:
+    st.subheader("RAW file → preview")
+    raw_path = f"{st.secrets.get('DROPBOX_ROOT','/Project_Root')}/04_Data/00_Raw_Files"
+    raw_files = dbx_list_xlsx(raw_path)
+
+    if not raw_files:
+        st.info("No RAW files found. Move a source file into 00_Raw_Files to proceed.")
+    else:
+        labels = [f'{f["name"]}  ·  {f["path_lower"]}' for f in raw_files]
+        choice = st.selectbox("Pick a RAW workbook", options=labels, index=0)
+
+        if st.button("Load workbook"):
+            sel = raw_files[labels.index(choice)]["path_lower"]
+            b = dbx_read_bytes(sel)
+            xls = pd.ExcelFile(io.BytesIO(b))
+            st.success(f"Loaded: {sel}")
+            st.write("Sheets:", xls.sheet_names)
+
+            # optional: quick peek at first sheet
+            try:
+                first_sheet = xls.sheet_names[0]
+                df_preview = pd.read_excel(io.BytesIO(b), sheet_name=first_sheet, nrows=5)
+                st.caption(f"Preview: {first_sheet}")
+                st.dataframe(df_preview)
+            except Exception as e:
+                st.warning(f"Preview failed: {e}")
 
 
 # --- SESSION STATE ---
