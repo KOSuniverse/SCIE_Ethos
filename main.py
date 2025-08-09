@@ -23,7 +23,7 @@ from dbx_utils import (
 
 # --- Optional: your pipeline entrypoint (uses your 30-file logic) ---
 # TODO: if your function name or module differs, adjust this import line only.
-from pipeline import run_pipeline
+from pipeline_adapter import run_pipeline_cloud as run_pipeline
 
 # --- (Optional) Knowledge Base modules (unchanged) ---
 from phase4_knowledge.knowledgebase_builder import status as kb_status, build_or_update_knowledgebase
