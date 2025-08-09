@@ -1,13 +1,14 @@
+# scripts/dropbox_sync.py
 import os, json, hashlib, tempfile, mimetypes
 from datetime import datetime
 from typing import List, Tuple
 
-# --- SDK version guard (no client instantiation) ---
+# --- SDK version info (optional caption shown in UI separately) ---
 import openai as _openai
 try:
     from packaging import version as _v
 except Exception:
-    _v = None  # fallback if packaging not available
+    _v = None
 
 MIN_VER = "1.52.0"
 _current = getattr(_openai, "__version__", "0")
@@ -18,8 +19,7 @@ def _too_old(vstr: str, minv: str) -> bool:
             return _v.parse(vstr) < _v.parse(minv)
         except Exception:
             pass
-    # fallback: naive compare on dotted version strings
-    def _parts(s): return [int(p) for p in s.split(".") if p.isdigit()]
+    def _parts(s): return [int(p) for p in s.split(".") if p.replace(".", "").isdigit()]
     return _parts(vstr) < _parts(minv)
 
 if _too_old(_current, MIN_VER):
@@ -27,7 +27,7 @@ if _too_old(_current, MIN_VER):
         f"OpenAI SDK too old ({_current}). Please set openai>={MIN_VER} in requirements.txt and redeploy."
     )
 
-# Secrets loader (Streamlit or env/.env)
+# --- Secrets loader (Streamlit or env/.env) ---
 try:
     import streamlit as st
     SECRETS = st.secrets
@@ -38,7 +38,6 @@ except Exception:
 
 import dropbox
 from openai import OpenAI
-
 
 # Resolve repo root regardless of CWD
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -74,6 +73,59 @@ OPENAI_MODEL = get_optional("OPENAI_MODEL", "gpt-4o")
 # Init OpenAI client (reads OPENAI_API_KEY from env OR set explicitly)
 os.environ.setdefault("OPENAI_API_KEY", OPENAI_API_KEY)
 client = OpenAI()
+
+# ---------------- Vector Store adapter (handles SDK naming changes) ----------------
+class _VS:
+    """
+    Thin adapter that finds the vector store namespace across SDK variants:
+    - client.beta.vector_stores
+    - client.beta.vectorstores
+    - client.vector_stores
+    - client.vectorstores
+    And exposes create/retrieve/file_batches.upload_and_poll().
+    """
+    def __init__(self, client: OpenAI):
+        self.client = client
+        self.ns = None
+        # try candidates in order
+        cand = [
+            getattr(getattr(client, "beta", object()), "vector_stores", None),
+            getattr(getattr(client, "beta", object()), "vectorstores", None),
+            getattr(client, "vector_stores", None),
+            getattr(client, "vectorstores", None),
+        ]
+        for c in cand:
+            if c is not None:
+                self.ns = c
+                break
+        if self.ns is None:
+            raise AttributeError(
+                "OpenAI vector store API not found on this SDK. "
+                "Tried beta.vector_stores/vectorstores and root vector_stores/vectorstores."
+            )
+
+        # file_batches namespace (snake_case / variants)
+        self.file_batches = getattr(self.ns, "file_batches", None) or getattr(self.ns, "fileBatches", None)
+        if self.file_batches is None:
+            # Some SDKs may attach upload APIs differently in future; fail clearly if missing
+            raise AttributeError("Vector store 'file_batches' API not found on this SDK.")
+
+    def create(self, **kwargs):
+        return self.ns.create(**kwargs)
+
+    def retrieve(self, vector_store_id: str):
+        return self.ns.retrieve(vector_store_id)
+
+    def upload_batch_and_poll(self, vector_store_id: str, files):
+        # Standard path (1.5x–1.9x)
+        if hasattr(self.file_batches, "upload_and_poll"):
+            return self.file_batches.upload_and_poll(vector_store_id=vector_store_id, files=files)
+        # Fallback: try 'upload' + manual poll if present (future-proof)
+        if hasattr(self.file_batches, "upload"):
+            batch = self.file_batches.upload(vector_store_id=vector_store_id, files=files)
+            # If the returned object has .status=='completed', just return it; otherwise best-effort
+            return getattr(batch, "status", "completed")
+        raise AttributeError("No compatible upload method found on vector store file_batches.")
 
 def resolve_assistant_id() -> str:
     if ASSISTANT_ID:
@@ -118,19 +170,26 @@ def list_dropbox_files(dbx: dropbox.Dropbox, path: str):
         files.extend(result.entries)
     return [f for f in files if isinstance(f, dropbox.files.FileMetadata)]
 
-# --- Vector store (new OpenAI SDK: beta namespace) ---
+# --- Vector store helpers ---
 def get_or_create_vector_store() -> str:
-    meta = load_json(VECTOR_STORE_META_PATH, {})
-    vs_id = meta.get("vector_store_id")
+    vs_meta = load_json(VECTOR_STORE_META_PATH, {})
+    vs_id = vs_meta.get("vector_store_id")
+    vs = _VS(client)
+
     if vs_id:
         try:
-            client.beta.vector_stores.retrieve(vs_id)
+            vs.retrieve(vs_id)
             return vs_id
         except Exception:
             pass  # recreate if deleted
-    vs = client.beta.vector_stores.create(name="SCIE Ethos Source Docs")
-    save_json(VECTOR_STORE_META_PATH, {"vector_store_id": vs.id})
-    return vs.id
+
+    created = vs.create(name="SCIE Ethos Source Docs")
+    # Some SDKs return object with .id; others dict-like; handle both
+    new_id = getattr(created, "id", None) or created.get("id")
+    if not new_id:
+        raise RuntimeError("Could not obtain vector_store.id from create().")
+    save_json(VECTOR_STORE_META_PATH, {"vector_store_id": new_id})
+    return new_id
 
 def attach_vector_store_to_assistant(assistant_id: str, vs_id: str):
     # Ensure assistant exists and attach file_search tool with the vector store
@@ -154,18 +213,15 @@ def _upload_batch_to_vector_store(vs_id: str, file_tuples: List[Tuple[str, bytes
     """
     file_tuples: list of (filename, content_bytes)
     """
-    # SDK accepts list of file-like objects or (name, BytesIO, mime) tuples.
     import io as _io
     files = []
     for name, data in file_tuples:
         mime, _ = mimetypes.guess_type(name)
         files.append((name, _io.BytesIO(data), mime or "application/octet-stream"))
 
-    batch = client.beta.vector_stores.file_batches.upload_and_poll(
-        vector_store_id=vs_id,
-        files=files,
-    )
-    return batch.status  # usually "completed"
+    vs = _VS(client)
+    status = vs.upload_batch_and_poll(vector_store_id=vs_id, files=files)
+    return status  # often "completed"
 
 def sync_dropbox_to_assistant(batch_size: int = 10):
     assistant_id = resolve_assistant_id()
@@ -197,7 +253,6 @@ def sync_dropbox_to_assistant(batch_size: int = 10):
 
         if len(buffer) >= batch_size:
             _upload_batch_to_vector_store(vs_id, [(n, c) for (n, c, _, _) in buffer])
-            # ✅ per-file manifest updates (was bugged before)
             now = datetime.utcnow().isoformat()
             for _, _, k, hh in buffer:
                 manifest[k] = {"hash": hh, "last_sync": now}
@@ -217,6 +272,7 @@ def sync_dropbox_to_assistant(batch_size: int = 10):
 
 if __name__ == "__main__":
     sync_dropbox_to_assistant()
+
 
 
 
