@@ -14,6 +14,15 @@ except Exception:
 
 import dropbox
 from openai import OpenAI
+from packaging import version as _v
+
+MIN_VER = "1.52.0"
+if not hasattr(OpenAI().beta, "vector_stores") or _v.parse(getattr(_openai, "__version__", "0")) < _v.parse(MIN_VER):
+    raise RuntimeError(
+        f"OpenAI SDK too old ({getattr(_openai, '__version__', 'unknown')}). "
+        f"Please set openai>={MIN_VER} in requirements.txt and redeploy."
+    )
+
 
 # Resolve repo root regardless of CWD
 HERE = os.path.dirname(os.path.abspath(__file__))
