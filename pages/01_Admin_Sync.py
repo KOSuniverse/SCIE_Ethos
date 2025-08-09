@@ -5,21 +5,35 @@ import sys
 import json
 import traceback
 import streamlit as st
-import openai as _openai
-st.caption(f"OpenAI SDK: {_openai.__version__}")
 
 st.set_page_config(page_title="Admin: Dropbox Sync", page_icon="🛠️", layout="centered")
 st.title("🛠️ Admin — Dropbox → Assistant File Sync")
 st.info("Sync files from Dropbox into the Assistant’s vector store (File Search).")
 
-# ---- Imports from our sync utilities
-from scripts.dropbox_sync import (
-    sync_dropbox_to_assistant,   # main entry point
-    init_dropbox,                # to validate Dropbox auth/root
-    resolve_assistant_id,        # to verify Assistant availability
-)
+# --- Show current OpenAI SDK (helps verify the right version is running)
+import openai as _openai
+st.caption(f"OpenAI SDK: {_openai.__version__}")
 
-# ---- Small helper to capture printed output from the sync so we can show progress
+# --- One-time inline upgrade button (useful on Streamlit Cloud if caching blocks requirements)
+import subprocess
+if st.button("Force-upgrade OpenAI SDK (one-time)"):
+    with st.spinner("Upgrading openai…"):
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "openai==1.56.0", "packaging>=24.1"])
+    st.success("Upgraded. Reloading…")
+    st.rerun()
+
+# --- Imports from our sync utilities
+try:
+    from scripts.dropbox_sync import (
+        sync_dropbox_to_assistant,   # main entry point
+        init_dropbox,                # to validate Dropbox auth/root
+        resolve_assistant_id,        # to verify Assistant availability
+    )
+except Exception as _imp_err:
+    st.error(f"Import error: {_imp_err}")
+    st.stop()
+
+# --- Capture prints helper (to surface sync progress)
 class CapturePrints:
     def __enter__(self):
         self._stdout = sys.stdout
@@ -29,29 +43,26 @@ class CapturePrints:
     def __exit__(self, exc_type, exc, tb):
         sys.stdout = self._stdout
 
-# ---- Secrets & config helpers
+# --- Secrets & config quick check
 REQUIRED_SECRETS = [
     "OPENAI_API_KEY",
     "DROPBOX_APP_KEY",
     "DROPBOX_APP_SECRET",
     "DROPBOX_REFRESH_TOKEN",
 ]
-OPTIONAL_SECRETS = [
-    "ASSISTANT_ID",
-    "DROPBOX_ROOT",   # e.g., "/Project_Root"
-]
+OPTIONAL_SECRETS = ["ASSISTANT_ID", "DROPBOX_ROOT"]
 
 CONFIG_DIR = "config"
 MANIFEST_PATH = os.path.join(CONFIG_DIR, "dropbox_manifest.json")
 VECTOR_META_PATH = os.path.join(CONFIG_DIR, "vector_store.json")
 
-def has_secret(k: str) -> bool:
+def _has_secret(key: str) -> bool:
     try:
-        return bool(st.secrets.get(k))
+        return bool(st.secrets.get(key))
     except Exception:
         return False
 
-def read_json_if_exists(path: str):
+def _read_json(path: str):
     try:
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
@@ -60,71 +71,66 @@ def read_json_if_exists(path: str):
         pass
     return None
 
-# ---- UI: Preflight status
+# --- Preflight
 st.subheader("Preflight")
-cols = st.columns(2)
-with cols[0]:
+c1, c2 = st.columns(2)
+with c1:
     st.markdown("**Secrets**")
     for k in REQUIRED_SECRETS:
-        st.write(("✅" if has_secret(k) else "❌"), k)
+        st.write(("✅" if _has_secret(k) else "❌"), k)
     for k in OPTIONAL_SECRETS:
-        st.write(("ℹ️" if has_secret(k) else "—"), k)
-
-with cols[1]:
+        st.write(("ℹ️" if _has_secret(k) else "—"), k)
+with c2:
     st.markdown("**Config Folder**")
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    manifest = read_json_if_exists(MANIFEST_PATH)
-    vector_meta = read_json_if_exists(VECTOR_META_PATH)
-    st.write("📄", MANIFEST_PATH, "(exists)" if manifest is not None else "(missing)")
-    st.write("📄", VECTOR_META_PATH, f"(exists: id={vector_meta.get('vector_store_id')})" if vector_meta else "(missing)")
+    mf = _read_json(MANIFEST_PATH)
+    vm = _read_json(VECTOR_META_PATH)
+    st.write("📄", MANIFEST_PATH, "(exists)" if mf is not None else "(missing)")
+    st.write("📄", VECTOR_META_PATH, f"(exists: id={vm.get('vector_store_id')})" if vm else "(missing)")
 
-# ---- Controls
+# --- Controls
 st.subheader("Controls")
 override_root = st.text_input("Override Dropbox root (optional)", value="", placeholder="/Project_Root")
 batch_size = st.number_input("Batch size", min_value=5, max_value=50, value=10, step=5)
 dry_run = st.checkbox("Dry run (list only)", value=False, help="Show what would be synced without uploading (not implemented in script).")
 
-colA, colB = st.columns(2)
+left, right = st.columns(2)
 
-# ---- Validate button
-with colA:
+# --- Validate
+with left:
     if st.button("✅ Validate Setup"):
-        with st.spinner("Validating Dropbox auth, root path, and Assistant…"):
+        with st.spinner("Validating Assistant + Dropbox…"):
             try:
-                # 1) Assistant resolution
+                # Assistant
                 a_id = resolve_assistant_id()
                 st.success(f"Assistant OK: {a_id}")
 
-                # 2) Dropbox auth + root
+                # Dropbox auth + root
                 if override_root:
-                    os.environ["DROPBOX_ROOT"] = override_root  # the sync module reads env/secrets
-                dbx = init_dropbox()  # will raise if creds/root invalid
+                    os.environ["DROPBOX_ROOT"] = override_root
+                dbx = init_dropbox()  # raises if creds/root invalid
                 root = os.getenv("DROPBOX_ROOT", st.secrets.get("DROPBOX_ROOT", ""))
                 st.success(f"Dropbox OK. Root: {root or '(account root)'}")
 
-                # 3) List a handful of files (sanity)
+                # List a few entries
                 res = dbx.files_list_folder(root or "", recursive=False)
                 names = [e.name for e in res.entries[:10] if hasattr(e, "name")]
-                if names:
-                    st.write("Found entries:", names)
-                else:
-                    st.write("No entries found at the specified root (this can still be OK).")
-
+                st.write("Found entries:" if names else "No entries at root.", names or [])
             except Exception as e:
                 st.error(f"Validation failed: {e}")
                 st.code(traceback.format_exc())
 
-# ---- Sync button
-with colB:
+# --- Sync
+with right:
     if st.button("🔄 Sync Dropbox → Assistant", type="primary"):
         with st.spinner("Sync in progress…"):
             logs = ""
             ok = False
             try:
-                # Support runtime override for root
                 if override_root:
                     os.environ["DROPBOX_ROOT"] = override_root
-                # (dry_run is not implemented in the sync script; we call live path regardless)
+                if dry_run:
+                    st.warning("Dry run not implemented; running live sync.")
                 with CapturePrints() as cap:
                     sync_dropbox_to_assistant(batch_size=int(batch_size))
                 logs = cap.buffer.getvalue()
@@ -134,10 +140,11 @@ with colB:
             finally:
                 st.text_area("Sync logs", logs or "(no logs)", height=300)
                 if ok:
-                    st.success("Sync completed. Check config files for manifest & vector store id.")
+                    st.success("Sync completed. Check /config for manifest & vector store id.")
                 else:
                     st.error("Sync failed. See logs above.")
 
 st.divider()
 st.caption("Uses Dropbox refresh-token auth and attaches files to the Assistant’s vector store for File Search.")
+
 
