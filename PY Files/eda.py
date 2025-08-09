@@ -1,6 +1,7 @@
 # eda.py
 
 import pandas as pd
+import numpy as np  
 
 def generate_eda_summary(df: pd.DataFrame) -> dict:
     """
@@ -29,7 +30,7 @@ def generate_eda_summary(df: pd.DataFrame) -> dict:
     if not numeric_cols.empty:
         corr_matrix = numeric_cols.corr().abs()
         upper_triangle = corr_matrix.where(
-            ~pd.np.tril(pd.np.ones(corr_matrix.shape)).astype(bool))
+            ~np.tril(np.ones(corr_matrix.shape)).astype(bool))
         correlated_pairs = (
             upper_triangle.stack()
             .sort_values(ascending=False)
