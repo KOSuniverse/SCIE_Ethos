@@ -24,6 +24,69 @@ ensure_folder_structure(PROJECT_ROOT)
 st.set_page_config(page_title="LLM Inventory Assistant", layout="wide")
 st.title("📊 LLM Inventory + KB-Enhanced Assistant")
 
+# --- S3 health check (sidebar) ---
+import boto3, uuid, datetime
+
+with st.sidebar:
+    st.subheader("S3 (health check)")
+    if st.button("Run S3 check"):
+        try:
+            s3 = boto3.client(
+                "s3",
+                region_name=st.secrets["AWS_DEFAULT_REGION"],
+                aws_access_key_id=st.secrets["AWS_ACCESS_KEY_ID"],
+                aws_secret_access_key=st.secrets["AWS_SECRET_ACCESS_KEY"],
+            )
+            bucket = st.secrets["S3_BUCKET"]
+            prefix = st.secrets["S3_PREFIX"].rstrip("/")
+            run_id = str(uuid.uuid4())[:8]
+            key = f"{prefix}/_healthcheck/{st.secrets.get('ENV_NAME','prod')}/{run_id}.txt"
+
+            # write + read
+            body = f"ok {datetime.datetime.utcnow().isoformat()}Z".encode()
+            s3.put_object(Bucket=bucket, Key=key, Body=body)
+            got = s3.get_object(Bucket=bucket, Key=key)["Body"].read().decode()
+
+            st.success(f"S3 OK → wrote & read {key}")
+            st.caption(got)
+        except Exception as e:
+            st.error(f"S3 check failed: {e}")
+
+# --- Dropbox path sanity check (sidebar) ---
+from typing import Optional
+import dropbox
+
+def _dbx_client() -> dropbox.Dropbox:
+    return dropbox.Dropbox(
+        oauth2_refresh_token=st.secrets["DROPBOX_REFRESH_TOKEN"],
+        app_key=st.secrets["DROPBOX_APP_KEY"],
+        app_secret=st.secrets["DROPBOX_APP_SECRET"],
+    )
+
+with st.sidebar:
+    st.subheader("Dropbox (path check)")
+    # Build the canonical Raw folder from your secrets
+    root = st.secrets.get("DROPBOX_ROOT", "/Project_Root")
+    ns = st.secrets.get("DROPBOX_NAMESPACE", "Apps/Ethos LLM")
+    raw_path = f"/{ns}{root}/04_Data/00_Raw_Files"
+
+    st.code(raw_path, language="text")
+
+    if st.button("List RAW files"):
+        try:
+            dbx = _dbx_client()
+            resp = dbx.files_list_folder(raw_path)
+            xlsx = [e.name for e in resp.entries if isinstance(e, dropbox.files.FileMetadata) and e.name.lower().endswith(".xlsx")]
+            if xlsx:
+                st.success(f"Found {len(xlsx)} .xlsx files")
+                for name in xlsx[:25]:
+                    st.write("•", name)
+            else:
+                st.warning("No .xlsx files found in that folder.")
+        except Exception as e:
+            st.error(f"Dropbox check failed: {e}")
+
+
 # --- SESSION STATE ---
 if "session" not in st.session_state:
     st.session_state.session = SessionState()
