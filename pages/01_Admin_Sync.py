@@ -5,6 +5,8 @@ import sys
 import json
 import traceback
 import streamlit as st
+import openai as _openai
+st.caption(f"OpenAI SDK: {_openai.__version__}")
 
 st.set_page_config(page_title="Admin: Dropbox Sync", page_icon="🛠️", layout="centered")
 st.title("🛠️ Admin — Dropbox → Assistant File Sync")
