@@ -66,9 +66,8 @@ def _dbx_client() -> dropbox.Dropbox:
 with st.sidebar:
     st.subheader("Dropbox (path check)")
     # Build the canonical Raw folder from your secrets
-    root = st.secrets.get("DROPBOX_ROOT", "/Project_Root")
-    ns = st.secrets.get("DROPBOX_NAMESPACE", "Apps/Ethos LLM")
-    raw_path = f"/{ns}{root}/04_Data/00_Raw_Files"
+    raw_path = f"{st.secrets.get('DROPBOX_ROOT','/Project_Root')}/04_Data/00_Raw_Files"
+
 
     st.code(raw_path, language="text")
 
