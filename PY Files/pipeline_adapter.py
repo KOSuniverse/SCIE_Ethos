@@ -2,42 +2,69 @@
 import io
 import os
 import tempfile
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Any, Optional
 
 # Import your real pipeline module
 from phase1_ingest import pipeline as pl
 
-# Reuse your cloud helpers
-from path_utils import get_project_paths  # not used here but OK to keep symmetry
+# Reuse your cloud/helpers
+from path_utils import get_project_paths  # OK to keep for symmetry
 from dbx_utils import read_file_bytes as dbx_read_bytes
 
-def run_pipeline_cloud(filename: str, paths) -> Tuple[Dict[str, "pd.DataFrame"], dict]:
-    """
-    Adapter so main.py can call: cleaned_sheets, metadata = run_pipeline_cloud(filename, paths)
-    - Downloads RAW/<filename> from Dropbox
-    - Calls your underlying pipeline with either bytes or a temp local path (tries both)
-    - Returns (cleaned_sheets: dict[str, DataFrame], metadata: dict)
-    """
-    # 1) Read source bytes from Dropbox RAW folder
-    raw_path = f"{paths.raw_folder}/{filename}"
-    file_bytes = dbx_read_bytes(raw_path)
 
-    # 2) Try most common signatures FIRST
-    #    A) run_pipeline(file_bytes: BytesIO, filename=..., paths=...)
-    #    B) run_pipeline(file_path: str, filename=..., paths=...)
-    #    C) run_pipeline(file_path: str)  or run_pipeline(file_bytes: BytesIO)
-    # Normalize return to (cleaned_sheets, metadata)
+def run_pipeline_cloud(
+    filename: str,
+    paths: Any,
+    storage: str = "dropbox",
+    *,
+    file_bytes: Optional[bytes] = None
+) -> Tuple[Dict[str, "pd.DataFrame"], dict]:
+    """
+    Adapter so main.py can call in multiple ways without breaking:
+      cleaned_sheets, metadata = run_pipeline_cloud(filename, paths)
+      cleaned_sheets, metadata = run_pipeline_cloud(filename, paths, "dropbox")
+      cleaned_sheets, metadata = run_pipeline_cloud(filename, paths, storage="local")
+      cleaned_sheets, metadata = run_pipeline_cloud(filename, paths, file_bytes=b"...")
 
-    # Try bytes-based first
+    Behavior
+    - If file_bytes provided, use those.
+    - Else if storage == "dropbox", download RAW/<filename> via dbx_read_bytes.
+    - Else if storage == "local", read from os.path.join(paths.raw_folder, filename).
+    - Calls pl.run_pipeline with best-guess signatures:
+        A) run_pipeline(BytesIO, filename=..., paths=...)
+        B) run_pipeline(file_path_str, filename=..., paths=...)
+        C) run_pipeline(file_path_str)
+        D) run_pipeline(BytesIO)
+    - Always returns (cleaned_sheets: dict[str, DataFrame], metadata: dict)
+    """
+
+    # --- 1) Acquire file bytes
+    if file_bytes is None:
+        if storage.lower() == "dropbox":
+            raw_path = f"{paths.raw_folder}/{filename}"
+            file_bytes = dbx_read_bytes(raw_path)
+        elif storage.lower() == "local":
+            local_path = os.path.join(paths.raw_folder, filename)
+            with open(local_path, "rb") as f:
+                file_bytes = f.read()
+        else:
+            # Fallback to dropbox if unknown storage
+            raw_path = f"{paths.raw_folder}/{filename}"
+            file_bytes = dbx_read_bytes(raw_path)
+
+    # Safety check
+    if not file_bytes:
+        raise FileNotFoundError(f"Could not load bytes for '{filename}' (storage={storage}).")
+
+    # --- 2) Try BytesIO-based call first
+    bio = io.BytesIO(file_bytes)
     try:
-        bio = io.BytesIO(file_bytes)
         out = pl.run_pipeline(bio, filename=filename, paths=paths)  # type: ignore
-        cleaned_sheets, metadata = _normalize_pipeline_output(out, filename)
-        return cleaned_sheets, metadata
+        return _normalize_pipeline_output(out, filename)
     except Exception:
         pass
 
-    # Try local path with full args
+    # --- 3) Try temp file path variants
     with tempfile.TemporaryDirectory() as td:
         tmp_path = os.path.join(td, filename)
         with open(tmp_path, "wb") as f:
@@ -46,22 +73,35 @@ def run_pipeline_cloud(filename: str, paths) -> Tuple[Dict[str, "pd.DataFrame"],
         # B) full args
         try:
             out = pl.run_pipeline(tmp_path, filename=filename, paths=paths)  # type: ignore
-            cleaned_sheets, metadata = _normalize_pipeline_output(out, filename)
-            return cleaned_sheets, metadata
+            return _normalize_pipeline_output(out, filename)
         except Exception:
-            # C) minimal args
+            pass
+
+        # C) minimal args (path only)
+        try:
             out = pl.run_pipeline(tmp_path)  # type: ignore
-            cleaned_sheets, metadata = _normalize_pipeline_output(out, filename)
-            return cleaned_sheets, metadata
+            return _normalize_pipeline_output(out, filename)
+        except Exception:
+            pass
+
+        # D) minimal args (BytesIO only)
+        try:
+            out = pl.run_pipeline(bio)  # type: ignore
+            return _normalize_pipeline_output(out, filename)
+        except Exception as e:
+            raise RuntimeError(
+                f"run_pipeline failed for '{filename}' using all known signatures."
+            ) from e
 
 
-def _normalize_pipeline_output(out, filename: str):
+def _normalize_pipeline_output(out: Any, filename: str) -> Tuple[Dict[str, "pd.DataFrame"], dict]:
     """
     Accepts several shapes:
       - (dict[str, DataFrame], dict)
       - {"sheets": dict[str, DataFrame], "metadata": dict}
       - {"cleaned_sheets": ..., "metadata": ...}
-    Returns (cleaned_sheets, metadata) always.
+      - dict[str, DataFrame]  (no metadata)
+    Returns (cleaned_sheets, metadata).
     """
     # Tuple already
     if isinstance(out, tuple) and len(out) == 2:
@@ -69,10 +109,17 @@ def _normalize_pipeline_output(out, filename: str):
 
     # Dict shapes
     if isinstance(out, dict):
+        # Explicit keys
         if "cleaned_sheets" in out and "metadata" in out:
             return out["cleaned_sheets"], out["metadata"]
         if "sheets" in out and "metadata" in out:
             return out["sheets"], out["metadata"]
 
-    # Fallback minimal metadata if pipeline only wrote files
+        # Heuristic: dictionary of DataFrames without metadata
+        if out and all(isinstance(k, str) for k in out.keys()):
+            # Assume it's the cleaned_sheets dict
+            return out, {"source_filename": filename, "note": "Metadata synthesized by adapter"}
+
+    # Fallback: unknown shape
     return out, {"source_filename": filename, "note": "Metadata synthesized by adapter"}
+
