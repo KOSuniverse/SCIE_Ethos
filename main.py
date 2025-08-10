@@ -317,9 +317,9 @@ if raw_files:
             st.success(f"✅ Cleansed workbook saved to: {out_path}")
 
             # 4) Update master metadata on Dropbox
-            meta_path = getattr(app_paths, "dbx_master_metadata_path", None)
+            meta_path = getattr(app_paths, "dbx_master_metadata_path", None) or getattr(app_paths, "master_metadata_path", None)
             if not meta_path:
-                raise RuntimeError("Dropbox metadata path not set.")
+                raise RuntimeError("No metadata path available (neither Dropbox nor local).")
             try:
                 existing = json.loads(dbx_read_bytes(meta_path).decode("utf-8"))
                 if not isinstance(existing, list):
