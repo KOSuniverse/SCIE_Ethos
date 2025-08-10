@@ -536,6 +536,31 @@ def run_pipeline(
     if gpt_err:
         metadata["gpt_client_error"] = gpt_err
 
+    # --- Executive summary for the whole file (top-level metadata) ---
+    try:
+        lines = []
+        lines.append(f"File: {metadata.get('source_filename', os.path.basename(str(filename)))} • Sheets: {metadata.get('sheet_count', len(per_sheet_meta))}")
+        # type counts
+        type_counts = {}
+        for s in per_sheet_meta:
+            t = (s.get("normalized_sheet_type") or "unclassified").lower()
+            type_counts[t] = type_counts.get(t, 0) + 1
+        if type_counts:
+            lines.append("Detected sheet types: " + ", ".join([f"{k}={v}" for k, v in type_counts.items()]))
+
+        # one-liners per sheet
+        for s in per_sheet_meta:
+            sn = s.get("sheet_name")
+            stxt = (s.get("summary_text") or "").strip()
+            if stxt:
+                # keep it compact
+                stxt = stxt.splitlines()[0][:240]
+            lines.append(f"- {sn}: {stxt}")
+
+        metadata["executive_summary"] = "\n".join(lines)
+    except Exception as _e:
+        metadata["executive_summary"] = "Summary unavailable."
+
     return cleaned_sheets, metadata
 
 
