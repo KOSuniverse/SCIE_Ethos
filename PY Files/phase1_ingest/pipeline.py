@@ -166,17 +166,50 @@ def _resolve_alias_path(paths: Optional[Any]) -> Optional[str]:
 
 
 
+# --- DROP-IN: cloud-only alias loader ---
 def _resolve_sheet_aliases(paths: Optional[Any]) -> Optional[dict]:
-    """Try loading sheet_aliases.json once; ok if missing."""
+    """Load sheet_aliases.json from Dropbox metadata folder only (cloud mode)."""
+    if paths is None:
+        return None
+    dbx_meta = getattr(paths, "dbx_metadata_folder", None)
+    if not dbx_meta:
+        return None
     try:
-        meta_dir = getattr(paths, "metadata_folder", None)
-        if not meta_dir:
-            return None
-        sa_path = os.path.join(meta_dir, "sheet_aliases.json")
-        return load_sheet_aliases(sa_path)
+        from dbx_utils import read_file_bytes as dbx_read_bytes
+        dbx_path = f"{dbx_meta.rstrip('/')}/sheet_aliases.json"
+        data = dbx_read_bytes(dbx_path)
+        return json.loads(data.decode("utf-8"))
     except Exception:
         return None
 
+
+# --- NEW: constrained GPT classifier as first step ---
+def _gpt_type_backfill(client, filename: str, sheet_name: str, df: pd.DataFrame) -> str:
+    """
+    Ask GPT to classify into one of:
+    ['inventory','wip','mrb','mrp','planning','finance','unclassified'].
+    Returns the label or 'unclassified' on error.
+    """
+    if client is None or chat_completion is None:
+        return "unclassified"
+    try:
+        sample_cols = list(map(str, df.columns))[:25]
+        prompt = (
+            "Classify the sheet into ONE exact label from:\n"
+            "['inventory','wip','mrb','mrp','planning','finance','unclassified']\n\n"
+            f"Filename: {filename}\n"
+            f"Sheet name: {sheet_name}\n"
+            f"Columns (sample): {json.dumps(sample_cols, ensure_ascii=False)}\n\n"
+            "Return only the label."
+        )
+        messages = [
+            {"role": "system", "content": "You classify supply-chain spreadsheet sheets with high precision."},
+            {"role": "user", "content": prompt},
+        ]
+        label = str(chat_completion(client, messages, model="gpt-4o-mini")).strip().lower().strip(" '\"\n")
+        return label if label in {"inventory","wip","mrb","mrp","planning","finance","unclassified"} else "unclassified"
+    except Exception:
+        return "unclassified"
 
 def _clean_and_standardize_sheet(sheet_df: pd.DataFrame, alias_path: Optional[str]) -> pd.DataFrame:
     """
@@ -255,6 +288,7 @@ def _gpt_summary_for_sheet(client, sheet_type: str, filename: str, df: pd.DataFr
 
 
 
+# --- DROP-IN: GPT-first + MRB/MRP-aware single-sheet processor ---
 def _process_single_sheet(
     filename: str,
     sheet_name: str,
@@ -266,89 +300,92 @@ def _process_single_sheet(
     # 1) Clean / remap columns
     df = _clean_and_standardize_sheet(raw_df, alias_path)
 
-    # ------------ Robust name/feature hints (JSON optional) ------------
+    # 2) Name & feature hints (independent backstops)
     sheet_name_clean = (sheet_name or "").strip().lower()
-
-    # Name hint: prefer JSON aliases; otherwise simple substring rules
     name_hint = "unclassified"
     try:
+        # Substring match against alias map: {"aged wip":"wip","mrb":"mrb",...}
         if sheet_aliases:
-            for alias, norm in (sheet_aliases or {}).items():
-                if alias.lower() in sheet_name_clean:
+            for alias, norm in sheet_aliases.items():
+                if alias and alias.lower() in sheet_name_clean:
                     name_hint = (norm or "unclassified").strip().lower()
                     break
+        # Acronyms / common variants
         if name_hint == "unclassified":
-            if "wip" in sheet_name_clean or "work in progress" in sheet_name_clean:
+            if any(tok in sheet_name_clean for tok in [" mrb", "mrb ", "(mrb)", "_mrb", "-mrb"]) or sheet_name_clean.endswith("mrb"):
+                name_hint = "mrb"
+            elif any(tok in sheet_name_clean for tok in [" mrp", "mrp ", "(mrp)", "_mrp", "-mrp"]) or sheet_name_clean.endswith("mrp"):
+                name_hint = "mrp"
+            elif "wip" in sheet_name_clean or "work in progress" in sheet_name_clean:
                 name_hint = "wip"
             elif any(k in sheet_name_clean for k in ["inventory", "finished goods", "fg", "raw materials", "raw"]):
                 name_hint = "inventory"
     except Exception:
-        # if alias logic fails, keep best-effort substring rules
-        if "wip" in sheet_name_clean or "work in progress" in sheet_name_clean:
-            name_hint = "wip"
-        elif any(k in sheet_name_clean for k in ["inventory", "finished goods", "fg", "raw materials", "raw"]):
-            name_hint = "inventory"
+        pass
 
-    # Feature hint from columns (independent of JSON)
     cols_lower = [str(c).lower() for c in df.columns]
-    part_cols = [c for c in cols_lower if "part" in c and ("no" in c or "number" in c or "id" in c)]
-    qty_cols  = [c for c in cols_lower if any(k in c for k in ["qty", "quantity", "on_hand", "remaining"])]
-    val_cols  = [c for c in cols_lower if any(k in c for k in ["value", "extended_cost", "inventory_value", "total_cost"])]
-    job_cols  = [c for c in cols_lower if ("job" in c) or ("work_order" in c) or c in ("wo", "wo_no", "wo_number")]
+    part_cols  = [c for c in cols_lower if "part" in c and ("no" in c or "number" in c or "id" in c)]
+    qty_cols   = [c for c in cols_lower if any(k in c for k in ["qty", "quantity", "on_hand", "remaining"])]
+    val_cols   = [c for c in cols_lower if any(k in c for k in ["value", "extended_cost", "inventory_value", "total_cost", "ytd balance", "variance"])]
+    job_cols   = [c for c in cols_lower if ("job" in c) or ("work_order" in c) or c in ("wo", "wo_no", "wo_number")]
     aging_cols = [c for c in cols_lower if ("days" in c) or ("aging" in c) or re.search(r"\b\d{1,3}\s*-\s*\d{1,3}\b", c)]
+    mrb_cols   = [c for c in cols_lower if "mrb" in c or "nonconform" in c or "dispo" in c]
 
     if part_cols and (qty_cols or val_cols):
         feature_hint = "inventory"
     elif job_cols and aging_cols:
         feature_hint = "wip"
+    elif mrb_cols:
+        feature_hint = "mrb"
     else:
         feature_hint = "unclassified"
 
-    # Base type via normalize (if available), else unclassified
-    try:
-        norm_type = normalize_sheet_type(sheet_name, df, sheet_aliases) if sheet_aliases else "unclassified"
-    except Exception:
-        norm_type = "unclassified"
+    # 3) GPT-first classification
+    norm_type = _gpt_type_backfill(client, filename, sheet_name, df)
+    type_resolution = "gpt_classifier" if norm_type != "unclassified" else "unknown"
 
-    # Upgrade unclassified using feature/name hints
+    # 4) If GPT is unsure, fall back to alias normalize + hints
     if norm_type == "unclassified":
-        if feature_hint != "unclassified":
+        try:
+            base = normalize_sheet_type(sheet_name, df, sheet_aliases) if sheet_aliases else "unclassified"
+        except Exception:
+            base = "unclassified"
+
+        if base != "unclassified":
+            norm_type = base
+            type_resolution = "alias_normalize"
+        elif feature_hint != "unclassified":
             norm_type = feature_hint
+            type_resolution = "feature_hint"
         elif name_hint != "unclassified":
             norm_type = name_hint
+            type_resolution = "name_hint"
 
-    # Final rule: if name=WIP but features=inventory, inventory wins
+    # Final tie-breaker: clear inventory signals beat name=WIP
     if name_hint == "wip" and feature_hint == "inventory":
         norm_type = "inventory"
         type_resolution = "feature_override_name"
-    elif norm_type == feature_hint and feature_hint != "unclassified":
-        type_resolution = "feature_hint"
-    elif norm_type == name_hint and name_hint != "unclassified":
-        type_resolution = "name_hint"
-    else:
-        type_resolution = "unknown"
 
-    # 3) Add metadata columns (non-destructive)
+    # 5) Non-destructive metadata columns
     if "source_sheet" not in df.columns:
         df["source_sheet"] = sheet_name
     df["normalized_sheet_type"] = norm_type
 
-    # 4) EDA (best-effort)
+    # 6) EDA (best-effort)
     try:
         eda_text = generate_eda_summary(df)
     except Exception as e_eda:
         eda_text = f"(EDA error: {type(e_eda).__name__}: {e_eda})"
 
-    # 5) Summary (GPT if available, then fallback)
+    # 7) GPT summary (fallback allowed)
     summary_text = ""
     try:
         if client is not None and chat_completion is not None:
             summary_text = _gpt_summary_for_sheet(client, norm_type, filename, df, str(eda_text)).strip()
     except Exception as e:
         summary_text = f"⚠️ GPT summary failed: {e}"
-
     if not summary_text:
-        summary_text = _summarize_inventory_fallback(df) if norm_type == "inventory" \
+        summary_text = _summarize_inventory_fallback(df) if norm_type in ("inventory","mrb") \
             else f"{norm_type.title()} sheet. Rows={len(df)}. Cols={len(df.columns)}."
 
     meta = {
@@ -360,7 +397,8 @@ def _process_single_sheet(
         "type_resolution": type_resolution,
         "columns": list(map(str, df.columns)),
         "record_count": int(len(df)),
-        "summary_text": summary_text
+        "summary_text": summary_text,
+        "eda_text": str(eda_text),
     }
     return df, meta
 def _hardened_process_excel(
