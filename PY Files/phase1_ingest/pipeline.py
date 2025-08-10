@@ -372,6 +372,10 @@ def _hardened_process_excel(
 
     sheet_aliases = _resolve_sheet_aliases(paths)
 
+    if not sheet_aliases:
+    # Optional debug breadcrumb in run metadata later, not a crash
+       pass  # or set run_meta["sheet_alias_warning"] = "No sheet_aliases.json found"
+
     # Init GPT client safely (only once)
     client = None
     if get_openai_client is not None and chat_completion is not None:
