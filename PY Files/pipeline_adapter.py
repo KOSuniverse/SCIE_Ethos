@@ -15,7 +15,7 @@ from dbx_utils import read_file_bytes as dbx_read_bytes
 def run_pipeline_cloud(
     filename: str,
     paths: Any,
-    storage: str = "dropbox",
+    storage: Any = "dropbox",
     *,
     file_bytes: Optional[bytes] = None
 ) -> Tuple[Dict[str, "pd.DataFrame"], dict]:
@@ -25,6 +25,7 @@ def run_pipeline_cloud(
       cleaned_sheets, metadata = run_pipeline_cloud(filename, paths, "dropbox")
       cleaned_sheets, metadata = run_pipeline_cloud(filename, paths, storage="local")
       cleaned_sheets, metadata = run_pipeline_cloud(filename, paths, file_bytes=b"...")
+      (defensive) run_pipeline_cloud(filename, paths, paths)  # mistakenly passing paths twice
 
     Behavior
     - If file_bytes provided, use those.
@@ -38,23 +39,26 @@ def run_pipeline_cloud(
     - Always returns (cleaned_sheets: dict[str, DataFrame], metadata: dict)
     """
 
+    # --- 0) Normalize storage in case the caller passed `paths` as the 3rd arg by mistake
+    storage_name = _normalize_storage(storage)
+
     # --- 1) Acquire file bytes
     if file_bytes is None:
-        if storage.lower() == "dropbox":
-            raw_path = f"{paths.raw_folder}/{filename}"
+        if storage_name == "dropbox":
+            # Ensure consistent path join for Dropbox
+            raw_path = f"{paths.raw_folder.rstrip('/')}/{filename}"
             file_bytes = dbx_read_bytes(raw_path)
-        elif storage.lower() == "local":
+        elif storage_name == "local":
             local_path = os.path.join(paths.raw_folder, filename)
             with open(local_path, "rb") as f:
                 file_bytes = f.read()
         else:
-            # Fallback to dropbox if unknown storage
-            raw_path = f"{paths.raw_folder}/{filename}"
+            # Unknown storage → fall back to Dropbox
+            raw_path = f"{paths.raw_folder.rstrip('/')}/{filename}"
             file_bytes = dbx_read_bytes(raw_path)
 
-    # Safety check
     if not file_bytes:
-        raise FileNotFoundError(f"Could not load bytes for '{filename}' (storage={storage}).")
+        raise FileNotFoundError(f"Could not load bytes for '{filename}' (storage={storage_name}).")
 
     # --- 2) Try BytesIO-based call first
     bio = io.BytesIO(file_bytes)
@@ -94,6 +98,21 @@ def run_pipeline_cloud(
             ) from e
 
 
+def _normalize_storage(storage: Any) -> str:
+    """
+    Return a safe storage name.
+    - Strings → lowercased ('dropbox'/'local')
+    - If the caller accidentally passed a paths-like object (has .raw_folder), default to 'dropbox'
+    - Anything else defaults to 'dropbox'
+    """
+    if isinstance(storage, str):
+        return storage.lower().strip() or "dropbox"
+    # Treat objects with raw_folder as 'paths' accidentally passed in
+    if hasattr(storage, "raw_folder"):
+        return "dropbox"
+    return "dropbox"
+
+
 def _normalize_pipeline_output(out: Any, filename: str) -> Tuple[Dict[str, "pd.DataFrame"], dict]:
     """
     Accepts several shapes:
@@ -109,7 +128,6 @@ def _normalize_pipeline_output(out: Any, filename: str) -> Tuple[Dict[str, "pd.D
 
     # Dict shapes
     if isinstance(out, dict):
-        # Explicit keys
         if "cleaned_sheets" in out and "metadata" in out:
             return out["cleaned_sheets"], out["metadata"]
         if "sheets" in out and "metadata" in out:
@@ -117,9 +135,9 @@ def _normalize_pipeline_output(out: Any, filename: str) -> Tuple[Dict[str, "pd.D
 
         # Heuristic: dictionary of DataFrames without metadata
         if out and all(isinstance(k, str) for k in out.keys()):
-            # Assume it's the cleaned_sheets dict
             return out, {"source_filename": filename, "note": "Metadata synthesized by adapter"}
 
     # Fallback: unknown shape
     return out, {"source_filename": filename, "note": "Metadata synthesized by adapter"}
+
 
