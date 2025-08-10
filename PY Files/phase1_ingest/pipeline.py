@@ -220,13 +220,21 @@ def _gpt_summary_for_sheet(client, sheet_type: str, filename: str, df: pd.DataFr
     except Exception:
         sample = []
 
+    # Coerce EDA text safely
+    try:
+        eda_snippet = str(eda_text)
+    except Exception:
+        eda_snippet = ""
+    if len(eda_snippet) > 600:
+        eda_snippet = eda_snippet[:600]
+
     prompt = (
         "You are a precise data analyst. Briefly summarize this sheet for a run log.\n"
         f"- Sheet type guess: {sheet_type}\n"
         f"- Filename: {filename}\n"
         "- Focus on: row count, notable columns, and any obvious metrics (e.g., total value if present).\n"
         "- Keep it under 120 words.\n"
-        f"\nEDA notes (may be empty): {eda_text[:600]}\n"
+        f"\nEDA notes (may be empty): {eda_snippet}\n"
         f"\nSample rows (JSON): {json.dumps(sample, default=str)[:3500]}"
     )
     messages = [
@@ -234,6 +242,7 @@ def _gpt_summary_for_sheet(client, sheet_type: str, filename: str, df: pd.DataFr
         {"role": "user", "content": prompt}
     ]
     return chat_completion(client, messages, model="gpt-4o-mini")
+
 
 
 def _process_single_sheet(
