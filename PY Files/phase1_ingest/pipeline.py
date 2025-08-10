@@ -2,6 +2,7 @@
 
 import os
 import io
+import json
 import pandas as pd
 from datetime import datetime
 from typing import Dict, Tuple, Union, Optional, Any
@@ -10,10 +11,10 @@ from typing import Dict, Tuple, Union, Optional, Any
 
 # load_alias_group
 try:
-    from column_alias import load_alias_group  # preferred location in your tree
+    from column_alias import load_alias_group  # preferred
 except Exception:
     try:
-        from alias_utils import load_alias_group  # alt location found in your repo
+        from alias_utils import load_alias_group  # alt in your repo
     except Exception:
         def load_alias_group(path: str) -> dict:
             """Fallback: no alias mapping available."""
@@ -21,16 +22,13 @@ except Exception:
 
 # build_reverse_alias_map
 try:
-    from column_alias import build_reverse_alias_map  # may not exist in your file
+    from column_alias import build_reverse_alias_map
 except Exception:
     try:
         from alias_utils import build_reverse_alias_map
     except Exception:
         def build_reverse_alias_map(alias_group: dict) -> dict:
-            """
-            Fallback: build reverse map like {"qty on hand": "on_hand_qty", ...}
-            from alias_group shaped like {"on_hand_qty": ["qty on hand", "qoh", ...], ...}
-            """
+            """Fallback reverse map builder."""
             rev = {}
             for canonical, synonyms in (alias_group or {}).items():
                 key = str(canonical).strip()
@@ -44,7 +42,7 @@ except Exception:
 
 # remap_columns
 try:
-    from column_alias import remap_columns  # may not exist in your file
+    from column_alias import remap_columns
 except Exception:
     try:
         from alias_utils import remap_columns
@@ -55,28 +53,40 @@ except Exception:
                 return df.copy()
             rev_lower = {str(k).strip().lower(): str(v).strip()
                          for k, v in reverse_map.items()}
-            new_cols = []
-            for c in df.columns:
-                key = str(c).strip()
-                mapped = rev_lower.get(key.lower(), key)
-                new_cols.append(mapped)
             out = df.copy()
-            out.columns = new_cols
+            out.columns = [rev_lower.get(str(c).strip().lower(), str(c).strip()) for c in df.columns]
             return out
 
-# These should exist in your repo per screenshots; leave as-is.
-from metadata_utils import save_master_metadata_index
-from summarizer import summarize_data_context
+# EDA / summaries
 from eda import generate_eda_summary
+from summarizer import summarize_data_context
+
+# Project helpers
+from metadata_utils import save_master_metadata_index
 from file_utils import list_cleaned_files
 from constants import *  # if you rely on any constants
 
+# Sheet normalization (lives in same package)
+try:
+    from .sheet_utils import load_sheet_aliases, normalize_sheet_type
+except Exception:
+    # Safe fallbacks if module moves
+    def load_sheet_aliases(path: str) -> Optional[dict]:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+    def normalize_sheet_type(sheet_name: str, df: pd.DataFrame, sheet_aliases: Optional[dict]) -> str:
+        return "unclassified"
+
 BytesLike = Union[bytes, bytearray, io.BytesIO]
+
 
 # ---------------- Core helpers ----------------
 
 def _resolve_alias_path(paths: Optional[Any]) -> Optional[str]:
-    """Find the alias JSON path from your paths object, or fall back to metadata folder."""
+    """Find alias JSON path from your paths object, or fall back to metadata folder."""
     if paths is None:
         return None
     for attr in ("alias_json", "ALIAS_JSON", "alias_path"):
@@ -87,6 +97,18 @@ def _resolve_alias_path(paths: Optional[Any]) -> Optional[str]:
     if hasattr(paths, "metadata_folder"):
         return os.path.join(paths.metadata_folder, "global_column_aliases.json")
     return None
+
+
+def _resolve_sheet_aliases(paths: Optional[Any]) -> Optional[dict]:
+    """Try loading sheet_aliases.json once; ok if missing."""
+    try:
+        meta_dir = getattr(paths, "metadata_folder", None)
+        if not meta_dir:
+            return None
+        sa_path = os.path.join(meta_dir, "sheet_aliases.json")
+        return load_sheet_aliases(sa_path)
+    except Exception:
+        return None
 
 
 def clean_and_standardize_sheet(sheet_df: pd.DataFrame, alias_path: Optional[str]) -> pd.DataFrame:
@@ -108,44 +130,98 @@ def clean_and_standardize_sheet(sheet_df: pd.DataFrame, alias_path: Optional[str
     return df
 
 
-# ---------------- Legacy disk-writing entrypoint (kept intact) ----------------
+def _hardened_process_excel(xls: pd.ExcelFile, filename: Optional[str], alias_path: Optional[str], paths: Optional[Any]) -> Tuple[Dict[str, pd.DataFrame], list]:
+    """
+    Core, production-safe processing used by both run_pipeline() and run_pipeline_on_file().
+    - Never drops data
+    - Adds normalized_sheet_type when possible
+    - Captures per-sheet errors in metadata
+    """
+    cleaned_sheets: Dict[str, pd.DataFrame] = {}
+    per_sheet_meta = []
 
-def run_pipeline_on_file(xls_path, alias_path, output_prefix, output_folder):
-    xls = pd.ExcelFile(xls_path)
-    cleaned_sheets = []
-    all_metadata = []
+    sheet_aliases = _resolve_sheet_aliases(paths)
 
     for sheet in xls.sheet_names:
         try:
-            df = pd.read_excel(xls, sheet_name=sheet)
-            df = clean_and_standardize_sheet(df, alias_path)
+            raw_df = pd.read_excel(xls, sheet_name=sheet)
+
+            # 1) Clean/remap (tolerant if alias map missing)
+            df = clean_and_standardize_sheet(raw_df, alias_path)
             df["source_sheet"] = sheet
 
-            eda_text = generate_eda_summary(df)
-            summary_text = summarize_data_context(eda_text, client=None)
-            metadata_entry = {
-                "filename": os.path.basename(xls_path),
+            # 2) Normalize sheet type if alias file exists
+            try:
+                norm_type = normalize_sheet_type(sheet, df, sheet_aliases) if sheet_aliases else "unclassified"
+            except Exception:
+                norm_type = "unclassified"
+            df["normalized_sheet_type"] = norm_type
+
+            # 3) ALWAYS keep the data (no matter what happens next)
+            cleaned_sheets[sheet] = df
+
+            # 4) EDA & summary are best‑effort (never block output)
+            eda_text = ""
+            try:
+                eda_text = generate_eda_summary(df)
+            except Exception as e_eda:
+                eda_text = f"(EDA error: {type(e_eda).__name__}: {e_eda})"
+
+            summary_text = ""
+            try:
+                summary_text = summarize_data_context(eda_text, client=None)
+            except Exception as e_sum:
+                summary_text = f"(Summary error: {type(e_sum).__name__}: {e_sum})"
+
+            per_sheet_meta.append({
+                "filename": filename or "(unknown)",
                 "sheet_name": sheet,
+                "normalized_sheet_type": norm_type,
                 "columns": list(df.columns),
                 "record_count": int(len(df)),
-                "sheet_type": "unclassified",
-                "summary_text": summary_text,
-            }
-            all_metadata.append(metadata_entry)
-            cleaned_sheets.append(df)
+                "summary_text": summary_text
+            })
+
         except Exception as e:
-            print(f"⚠️ Failed to process sheet '{sheet}': {e}")
+            # Record failure but do not crash the whole run
+            per_sheet_meta.append({
+                "filename": filename or "(unknown)",
+                "sheet_name": sheet,
+                "error": f"{type(e).__name__}: {e}",
+            })
+
+    return cleaned_sheets, per_sheet_meta
+
+
+# ---------------- Legacy disk-writing entrypoint (kept, now hardened) ----------------
+
+def run_pipeline_on_file(xls_path, alias_path, output_prefix, output_folder):
+    xls = pd.ExcelFile(xls_path)
+    cleaned_sheets_dict, per_sheet_meta = _hardened_process_excel(
+        xls=xls,
+        filename=os.path.basename(xls_path),
+        alias_path=alias_path,
+        paths=None  # legacy path variant doesn't pass full paths; that's fine
+    )
 
     # Save metadata
+    metadata = {
+        "run_started": datetime.utcnow().isoformat() + "Z",
+        "run_completed": datetime.utcnow().isoformat() + "Z",
+        "source_filename": os.path.basename(xls_path),
+        "sheet_count": len(xls.sheet_names),
+        "processed_sheets": list(cleaned_sheets_dict.keys()),
+        "sheets": per_sheet_meta,
+    }
     metadata_path = os.path.join(output_folder, f"{output_prefix}_metadata.json")
-    save_master_metadata_index({"files": all_metadata}, metadata_path)
+    save_master_metadata_index({"files": metadata.get("sheets", [])}, metadata_path)
 
     # Save cleaned file
     cleaned_file_path = os.path.join(output_folder, f"{output_prefix}_cleaned.xlsx")
     with pd.ExcelWriter(cleaned_file_path, engine="xlsxwriter") as writer:
-        for df in cleaned_sheets:
-            name = df["source_sheet"].iloc[0]
-            df.to_excel(writer, sheet_name=name[:31], index=False)
+        for sheet_name, df in cleaned_sheets_dict.items():
+            writer_sheet = (sheet_name or "Sheet1")[:31]
+            df.to_excel(writer, sheet_name=writer_sheet, index=False)
 
     return cleaned_file_path, metadata_path
 
@@ -175,33 +251,12 @@ def run_pipeline(
 
     alias_path = _resolve_alias_path(paths)
 
-    cleaned_sheets: Dict[str, pd.DataFrame] = {}
-    per_sheet_meta = []
-
-    for sheet in xls.sheet_names:
-        try:
-            df = pd.read_excel(xls, sheet_name=sheet)
-            df = clean_and_standardize_sheet(df, alias_path)
-            df["source_sheet"] = sheet
-
-            eda_text = generate_eda_summary(df)
-            summary_text = summarize_data_context(eda_text, client=None)
-
-            per_sheet_meta.append({
-                "filename": filename or "(unknown)",
-                "sheet_name": sheet,
-                "columns": list(df.columns),
-                "record_count": int(len(df)),
-                "sheet_type": "unclassified",
-                "summary_text": summary_text,
-            })
-            cleaned_sheets[sheet] = df
-        except Exception as e:
-            per_sheet_meta.append({
-                "filename": filename or "(unknown)",
-                "sheet_name": sheet,
-                "error": f"{type(e).__name__}: {e}",
-            })
+    cleaned_sheets, per_sheet_meta = _hardened_process_excel(
+        xls=xls,
+        filename=filename,
+        alias_path=alias_path,
+        paths=paths
+    )
 
     metadata = {
         "run_started": datetime.utcnow().isoformat() + "Z",
@@ -212,3 +267,4 @@ def run_pipeline(
         "sheets": per_sheet_meta,
     }
     return cleaned_sheets, metadata
+
