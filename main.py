@@ -50,6 +50,27 @@ from phase4_knowledge.knowledgebase_builder import status as kb_status, build_or
 from phase4_knowledge.knowledgebase_retriever import search_topk, pack_context
 from phase4_knowledge.response_composer import compose_response
 
+# --- Dropbox root auto-detect helper ---
+def _detect_dropbox_root(list_func):
+    """
+    Try both Dropbox app modes and return the first root that works.
+    Returns (root, raw_path, error_details | None)
+    """
+    candidates = [
+        "/Project_Root",                     # App Folder access
+        "/Apps/Ethos LLM/Project_Root",     # Full Dropbox access
+    ]
+    errors = []
+    for root in candidates:
+        raw_path = "/".join([root.rstrip("/"), "04_Data", "00_Raw_Files"])
+        try:
+            # Will raise if path doesn't exist or is inaccessible
+            list_func(raw_path)
+            return root, raw_path, None
+        except Exception as e:
+            errors.append((root, str(e)))
+    return None, None, errors
+
 # =============================================================================
 # App setup
 # =============================================================================
@@ -125,18 +146,47 @@ class AppPaths:
 # =============================================================================
 # Ingest (debug) — local upload path
 # =============================================================================
+# =============================================================================
+# Ingest (debug) — local upload path
+# =============================================================================
 with st.expander("🔧 Ingest pipeline (debug)"):
     root_mode = st.radio("Path mode", ["Local", "Dropbox"], horizontal=True)
     default_local = "/content/drive/MyDrive/Ethos LLM/Project_Root"
     default_dbx = "/Apps/Ethos LLM/Project_Root"
 
+    # keep a stable place to store the chosen dropbox root
+    if "dbx_root" not in st.session_state:
+        st.session_state["dbx_root"] = default_dbx
+
     if root_mode == "Local":
         project_root_local = st.text_input("Project_Root (local)", value=default_local)
         app_paths = AppPaths(project_root_local=project_root_local)
     else:
-        project_root_dropbox = st.text_input("Project_Root (Dropbox)", value=default_dbx)
+        # Dropbox mode
+        col1, col2 = st.columns([3,1])
+        with col1:
+            project_root_dropbox = st.text_input(
+                "Project_Root (Dropbox)",
+                value=st.session_state["dbx_root"]
+            )
+        with col2:
+            if st.button("🔍 Auto-detect"):
+                detected_root, detected_raw, errs = _detect_dropbox_root(dbx_list_xlsx)
+                if detected_root:
+                    st.session_state["dbx_root"] = detected_root
+                    project_root_dropbox = detected_root
+                    st.success(f"Detected Dropbox root: {detected_root}")
+                    st.caption(f"RAW path: {detected_raw}")
+                else:
+                    st.error("Could not detect a valid Dropbox root.")
+                    if errs:
+                        with st.expander("Show detection errors"):
+                            for r, msg in errs:
+                                st.write(f"- {r}: {msg}")
+
         app_paths = AppPaths(project_root_dropbox=project_root_dropbox)
 
+    # --- Local file upload path (unchanged) ---
     up = st.file_uploader("Upload an Excel file to ingest (local test)", type=["xlsx", "xlsm"])
     run_btn = st.button("Run Ingest Pipeline (local upload)")
 
@@ -154,12 +204,6 @@ with st.expander("🔧 Ingest pipeline (debug)"):
         st.subheader("Sheets cleaned")
         st.write(list(cleaned_sheets.keys()))
 
-        # Per-sheet preview + summary
-        for sname, df in cleaned_sheets.items():
-            st.markdown(f"### Sheet: `{sname}`")
-            st.write(df.head(10))
-
-        # Quick summaries table
         if "sheets" in meta:
             st.markdown("### Per-sheet summaries")
             rows = []
@@ -171,6 +215,7 @@ with st.expander("🔧 Ingest pipeline (debug)"):
                     "summary": s.get("summary_text")
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
 
 # =============================================================================
 # Sidebar: Cloud health checks
