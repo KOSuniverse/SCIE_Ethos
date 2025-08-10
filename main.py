@@ -8,6 +8,8 @@ import pandas as pd
 import streamlit as st
 
 # Make local modules importable
+from orchestrator import run_ingest_pipeline
+from session import SessionState
 import sys
 from pathlib import Path
 sys.path.append(str((Path(__file__).resolve().parent / "PY Files").resolve()))
@@ -47,6 +49,56 @@ st.title("📊 LLM Inventory + KB-Enhanced Assistant")
 
 # Resolve canonical cloud paths
 paths = get_project_paths()
+
+# If you already have a function for app Paths, reuse it.
+class AppPaths:
+    def __init__(self, project_root: str):
+        self.project_root = project_root
+        self.metadata_folder = os.path.join(project_root, "04_Data", "04_Metadata")
+        self.alias_json = os.path.join(self.metadata_folder, "global_column_aliases.json")
+
+# ---- Ingest (debug) UI block ----
+with st.expander("🔧 Ingest pipeline (debug)"):
+    project_root = st.text_input(
+        "Project_Root",
+        value="/content/drive/MyDrive/Ethos LLM/Project_Root"
+    )
+    paths = AppPaths(project_root)
+
+    up = st.file_uploader("Upload an Excel file to ingest", type=["xlsx", "xlsm"])
+    run_btn = st.button("Run Ingest Pipeline")
+
+    if run_btn and up is not None:
+        file_bytes = up.read()
+        cleaned_sheets, meta = run_ingest_pipeline(
+            source=file_bytes,
+            filename=up.name,
+            paths=paths
+        )
+
+        st.subheader("Run metadata")
+        st.json(meta)
+
+        st.subheader("Sheets cleaned")
+        st.write(list(cleaned_sheets.keys()))
+
+        # Per-sheet preview + summary
+        for sname, df in cleaned_sheets.items():
+            st.markdown(f"### Sheet: `{sname}`")
+            st.write(df.head(10))
+
+        # Optional: show quick summaries table
+        if "sheets" in meta:
+            st.markdown("### Per-sheet summaries")
+            rows = []
+            for s in meta["sheets"]:
+                rows.append({
+                    "sheet_name": s.get("sheet_name"),
+                    "normalized_sheet_type": s.get("normalized_sheet_type"),
+                    "records": s.get("record_count"),
+                    "summary": s.get("summary_text")
+                })
+            st.dataframe(pd.DataFrame(rows))
 
 # =============================================================================
 # Sidebar: Cloud health checks
