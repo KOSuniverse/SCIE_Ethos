@@ -1,12 +1,15 @@
 # PY Files/dbx_utils.py
 import io, json
 import os
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any, Union
+import pandas as pd
 
 try:
     import streamlit as st
 except ImportError:
     st = None
+
+# ---------------- internal helpers ----------------
 
 def _secret(name: str, default: Optional[str] = None) -> Optional[str]:
     if st is not None and hasattr(st, "secrets"):
@@ -28,17 +31,17 @@ def _get_dbx_client():
         app_secret=app_secret,
     )
 
+# ---------------- listing / io ----------------
+
 def list_xlsx(folder_path: str) -> List[Dict]:
     """List .xlsx files in a Dropbox folder (handles pagination)."""
     import dropbox
     dbx = _get_dbx_client()
     files: List[Dict] = []
 
-    # Initial page
     resp = dbx.files_list_folder(folder_path)
     entries = list(resp.entries)
 
-    # Follow pagination
     while resp.has_more:
         resp = dbx.files_list_folder_continue(resp.cursor)
         entries.extend(resp.entries)
@@ -51,7 +54,6 @@ def list_xlsx(folder_path: str) -> List[Dict]:
                 "server_modified": getattr(e, "server_modified", None)
             })
 
-    # Newest first if we have timestamps
     files.sort(key=lambda d: d.get("server_modified") or 0, reverse=True)
     return files
 
@@ -68,15 +70,55 @@ def upload_bytes(path_lower: str, data: bytes, mode: str = "overwrite"):
     write_mode = dropbox.files.WriteMode.overwrite if mode == "overwrite" else dropbox.files.WriteMode.add
     dbx.files_upload(data, path_lower, mode=write_mode, mute=True)
 
-def save_xlsx_bytes(sheets: dict[str, "pd.DataFrame"]) -> bytes:
-    """Given {sheet_name: df}, return an in‑memory .xlsx bytes object."""
-    import pandas as pd
-    bio = io.BytesIO()
-    with pd.ExcelWriter(bio, engine="xlsxwriter") as writer:
-        for sheet, df in sheets.items():
-            safe = (sheet or "Sheet1")[:31]
-            df.to_excel(writer, index=False, sheet_name=safe)
-    return bio.getvalue()
+# ---------------- Excel bytes builder (hardened) ----------------
+
+BytesLike = (bytes, bytearray, io.BytesIO)
+
+def save_xlsx_bytes(
+    source: Union[Dict[str, pd.DataFrame], BytesLike]
+) -> bytes:
+    """
+    Build a valid .xlsx byte stream.
+
+    Accepts:
+      - dict[str, pd.DataFrame]  -> builds an Excel workbook with one sheet per key
+      - bytes/bytearray/BytesIO  -> pass-through (already .xlsx content)
+
+    Returns:
+      - bytes: Excel file content ready for upload_bytes(...)
+
+    Notes:
+      - No filename/path is required.
+      - Never calls .endswith(...) on anything.
+      - Sheet names are truncated to 31 chars (Excel limit).
+    """
+    # Pass-through for already bytes-like content
+    if isinstance(source, (bytes, bytearray)):
+        return bytes(source)
+    if isinstance(source, io.BytesIO):
+        pos = source.tell()
+        source.seek(0)
+        data = source.read()
+        source.seek(pos)
+        return data
+
+    # Build from dict-of-DataFrames
+    if isinstance(source, dict):
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+            for sheet_name, df in source.items():
+                safe_name = (str(sheet_name) or "Sheet1")[:31]
+                if not isinstance(df, pd.DataFrame):
+                    df = pd.DataFrame(df)
+                df.to_excel(writer, sheet_name=safe_name, index=False)
+        buf.seek(0)
+        return buf.read()
+
+    raise TypeError(
+        "save_xlsx_bytes() expected a dict[str, DataFrame] or bytes-like input."
+    )
+
+# ---------------- JSON upload ----------------
 
 def upload_json(path_lower: str, obj: dict, mode: str = "overwrite"):
     """Upload a JSON object to Dropbox."""
