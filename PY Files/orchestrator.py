@@ -1,103 +1,187 @@
 # PY Files/orchestrator.py
-
 from __future__ import annotations
 
 import os
 import re
 import json
-import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-# --- Core deps (safe imports) ---
-from llm_client import get_openai_client, chat_completion
-from loader import load_master_metadata_index
-from executor import run_intent_task
-from phase1_ingest.pipeline import run_pipeline
+# --- Core deps (safe imports, with fallbacks) ---
+try:
+    from llm_client import get_openai_client, chat_completion
+except Exception:
+    # Minimal fallbacks to avoid import errors during boot
+    def get_openai_client():
+        raise RuntimeError("llm_client.get_openai_client not available")
 
-import llm_prompts  # scaffold (llm_prompts.py)
+    def chat_completion(client, messages, model: str):
+        raise RuntimeError("llm_client.chat_completion not available")
 
-# Try to use your external classifier if present; fall back to local one below
+# Optional: file listing utility (auto-scan cleansed files)
+try:
+    from file_utils import list_cleaned_files  # your helper in main.py context
+except Exception:
+    def list_cleaned_files() -> List[str]:
+        # Fallback: look at a conventional folder if mounted or pre-synced
+        # If your runtime doesn't support local listing, pass cleansed_paths from UI
+        return []
+
+# Phase 1 ingest passthrough
+try:
+    from phase1_ingest.pipeline import run_pipeline
+except Exception:
+    def run_pipeline(*args, **kwargs):
+        raise RuntimeError("phase1_ingest.pipeline.run_pipeline not available")
+
+# Phase 4 executor (your business logic once an intent is chosen)
+try:
+    from executor import run_intent_task
+except Exception:
+    def run_intent_task(query, df_dict, metadata_index, client):
+        return {"error": "executor.run_intent_task unavailable"}
+
+# Metadata loader (master index)
+try:
+    from loader import load_master_metadata_index
+except Exception:
+    def load_master_metadata_index(path: str):
+        return {}
+
+# Prompt scaffolds / system prompt text
+import llm_prompts  # your existing scaffold (must exist)
+
+# --- Optional external classifier (if present) ---
 try:
     from intent import classify_intent as _external_classify_intent
 except Exception:
     _external_classify_intent = None
 
-# Tools runtime is loaded lazily inside _safe_tool_specs/_execute_plan
-# to avoid import-time crashes.
 
-
-# ----------------------------
-# Light paths shim
-# ----------------------------
-class Paths:
-    """
-    Minimal shim to pass metadata folder & alias path.
-    Update to your real project's Paths object if you have one.
-    """
-    def __init__(self, metadata_folder: str, alias_json: Optional[str] = None):
-        self.metadata_folder = metadata_folder
-        self.alias_json = alias_json  # optional explicit path
-
-
-# ----------------------------
-# Phase 1 wrapper
-# ----------------------------
+# =============================================================================
+# Public: thin wrapper for Phase 1 ingest (unchanged)
+# =============================================================================
 def run_ingest_pipeline(
     source: bytes | bytearray | str,
     filename: Optional[str],
     paths: Optional[Any],
 ) -> Tuple[Dict[str, pd.DataFrame], dict]:
-    """
-    Thin wrapper for Phase 1 ingestion. Returns (cleaned_sheets, metadata).
-    """
     cleaned_sheets, metadata = run_pipeline(source=source, filename=filename, paths=paths)
     return cleaned_sheets, metadata
 
 
-# ----------------------------
-# Cloud tool-planned path
-# ----------------------------
+# =============================================================================
+# Artifact location routing (Dropbox vs S3)
+# =============================================================================
+def _artifact_backend() -> str:
+    return (os.getenv("ARTIFACT_BACKEND") or "dropbox").strip().lower()
+
+def _s3_bucket() -> Optional[str]:
+    return os.getenv("S3_BUCKET")
+
+def _s3_prefix() -> str:
+    return (os.getenv("S3_PREFIX") or "project-root").strip().strip("/")
+
+def _dbx_default_charts(app_paths: Any) -> Optional[str]:
+    return getattr(app_paths, "dbx_charts_folder", getattr(app_paths, "dbx_eda_charts_folder", "/04_Data/02_EDA_Charts"))
+
+def _dbx_default_summaries(app_paths: Any) -> Optional[str]:
+    return getattr(app_paths, "dbx_summaries_folder", "/04_Data/03_Summaries")
+
+def _artifact_folder(kind: str, app_paths: Any) -> Optional[str]:
+    """
+    kind: 'charts' | 'summaries'
+    Returns a folder URI/path appropriate for the configured backend.
+    """
+    backend = _artifact_backend()
+    if backend == "s3":
+        bucket = _s3_bucket()
+        if not bucket:
+            raise RuntimeError("ARTIFACT_BACKEND=s3 requires S3_BUCKET env")
+        base = f"s3://{bucket}/{_s3_prefix()}"
+        if kind == "charts":
+            return f"{base}/04_Data/02_EDA_Charts"
+        return f"{base}/04_Data/03_Summaries"
+    # default dropbox pathing
+    return _normalize_dbx_path(_dbx_default_charts(app_paths) if kind == "charts" else _dbx_default_summaries(app_paths))
+
+
+# =============================================================================
+# Dropbox/S3 path normalization
+# =============================================================================
+def _normalize_dbx_path(p: Optional[str]) -> Optional[str]:
+    if not p:
+        return p
+    s = p.strip()
+    if s.startswith(("/", "id:", "rev:", "ns:")):
+        return s
+    if s.startswith("dropbox://") or s.startswith("dbx://"):
+        s = s.split("://", 1)[1]
+    if not s.startswith("/"):
+        s = "/" + s
+    return s
+
+def _normalize_dbx_paths(paths: Optional[List[str]]) -> List[str]:
+    return [_normalize_dbx_path(p) for p in (paths or []) if _normalize_dbx_path(p)]
+
+
+# =============================================================================
+# COMBINED CONTEXT Orchestration (Excel + KB, no dropdowns)
+# =============================================================================
 def answer_question(
     user_question: str,
     *,
     app_paths: Any,
-    cleansed_paths: List[str],
+    cleansed_paths: Optional[List[str]] = None,
     answer_style: str = llm_prompts.ANSWER_STYLE_CONCISE,
 ) -> Dict[str, Any]:
     """
-    Orchestrate: classify intent -> propose tool plan -> execute -> compose final answer.
-    Cloud-only; cleansed_paths are Dropbox paths to .xlsx produced by Phase 1.
-    Returns dict with final_text, intent_info, tool_calls, artifacts, debug.
+    Enterprise path:
+      1) Auto-intent
+      2) Build global context (ALL cleansed files + sheets + columns; KB candidates)
+      3) Plan with GPT (NO guessing; must pick from provided lists)
+      4) Execute with guardrails (sheet/file validation, alias-aware args)
+      5) Compose final answer with both quantitative (Excel) + qualitative (KB) context
     """
     # 0) Intent + model routing
     intent_info = classify_user_intent(user_question)
     intent = intent_info["intent"]
-    model_size = intent_info["model_size"]  # "small"|"large"
+    model_size = intent_info.get("model_size", "large" if intent in {"root_cause", "forecast"} else "small")
     model = "gpt-4o" if model_size == "large" else "gpt-4o-mini"
 
-    # 1) Propose a tool plan (JSON) with GPT
-    tools_catalog = _safe_tool_specs()
     client = get_openai_client()
-    plan = _propose_tool_plan(client, user_question, tools_catalog, cleansed_paths, app_paths)
 
-    # 2) Execute plan (guarded)
-    exec_result = _execute_plan(plan, cleansed_paths, app_paths)
+    # 1) Assemble global context
+    excel_ctx = _build_excel_context(cleansed_paths)   # files -> sheets (+types) (+columns)
+    kb_ctx_preview = _kb_candidates(user_question)     # doc titles or brief refs
 
-    # Build quantitative context (compact text for scaffold)
+    # 2) Propose a plan with hard guardrails
+    tools_catalog = _safe_tool_specs()
+    plan = _propose_tool_plan(
+        client=client,
+        question=user_question,
+        tools=tools_catalog,
+        excel_context=excel_ctx,
+        kb_candidates=kb_ctx_preview,
+        app_paths=app_paths,
+    )
+
+    # 3) Execute plan (guarded)
+    exec_result = _execute_plan(plan, app_paths)
+
+    # Build quantitative context (compact)
     quantitative_context, matched_artifacts = _summarize_exec(exec_result)
+    # Extract KB chunks for final answer
+    kb_text_ctx, kb_citations = _extract_kb(exec_result)
 
-    # 3) (Optional) KB enrich if plan included kb_search or we want enrichment
-    kb_ctx, kb_citations = _extract_kb(exec_result)
-
-    # 4) Compose final answer with scaffold
+    # 4) Compose final answer
     messages = llm_prompts.build_scaffold_messages(
         user_question=user_question,
         intent=intent,
         tools_catalog=tools_catalog,
         quantitative_context=quantitative_context,
-        kb_context=kb_ctx,
+        kb_context=kb_text_ctx,
         matched_artifacts=matched_artifacts,
         matched_docs=kb_citations,
         answer_style=answer_style,
@@ -113,64 +197,153 @@ def answer_question(
         "kb_citations": kb_citations,
         "debug": {
             "plan_raw": plan,
+            "excel_context": excel_ctx,
+            "kb_candidates": kb_ctx_preview,
             "quantitative_context": quantitative_context,
-            "kb_context": kb_ctx,
         },
     }
 
 
-# ----------------------------
-# Tool planning helpers
-# ----------------------------
+# =============================================================================
+# Context builders
+# =============================================================================
+def _build_excel_context(cleansed_paths: Optional[List[str]]) -> Dict[str, Any]:
+    """
+    Returns a dict:
+    {
+      "files": ["/04_Data/01_Cleansed_Files/a.xlsx", ...],
+      "sheets_by_file": {file: ["Inventory", "Aged WIP", ...]},
+      "sheet_types": {file: {"Inventory":"inventory", "Aged WIP":"wip"}},
+      "columns_by_sheet": {file: {"Aged WIP": ["job","extended_cost",...], ...}}  # if available
+    }
+    """
+    # 1) pick files: use provided OR auto-scan
+    files = _normalize_dbx_paths(cleansed_paths) if cleansed_paths else _normalize_dbx_paths(list_cleaned_files())
+
+    sheets_by_file: Dict[str, List[str]] = {}
+    sheet_types: Dict[str, Dict[str, str]] = {}
+    columns_by_sheet: Dict[str, Dict[str, List[str]]] = {}
+
+    # Lazy import tools_runtime helpers if available
+    try:
+        from tools_runtime import list_sheets, peek_columns  # optional helpers
+    except Exception:
+        list_sheets = None
+        peek_columns = None
+
+    for f in files:
+        sheets = []
+        try:
+            if callable(list_sheets):
+                sheets = list_sheets(f) or []
+        except Exception:
+            sheets = []
+        sheets_by_file[f] = sheets
+
+        # lightweight type hints by heuristics
+        tmap: Dict[str, str] = {}
+        for s in sheets:
+            sl = s.lower()
+            if any(k in sl for k in ("wip", "aged wip", "g512", "work in progress")):
+                tmap[s] = "wip"
+            elif any(k in sl for k in ("inventory", "finished goods", "fg")):
+                tmap[s] = "inventory"
+            else:
+                tmap[s] = "unknown"
+        sheet_types[f] = tmap
+
+        # columns (optional; speeds planner correctness)
+        cmap: Dict[str, List[str]] = {}
+        if callable(peek_columns):
+            for s in sheets:
+                try:
+                    cmap[s] = peek_columns(f, s) or []
+                except Exception:
+                    pass
+        columns_by_sheet[f] = cmap
+
+    return {
+        "files": files,
+        "sheets_by_file": sheets_by_file,
+        "sheet_types": sheet_types,
+        "columns_by_sheet": columns_by_sheet,
+    }
+
+
+def _kb_candidates(question: str, k: int = 6) -> List[str]:
+    """
+    Returns top-N KB titles/ids to nudge planner. Execution will still call kb_search.
+    This abstracts FAISS vs future backends (OpenAI File Search, pgvector, etc.).
+    """
+    try:
+        from tools_runtime import kb_suggest_titles  # optional preview function
+        titles = kb_suggest_titles(question, k)
+        return titles or []
+    except Exception:
+        # If no preview API, just return empty; executor can still run kb_search
+        return []
+
+
+# =============================================================================
+# Planning (hard guardrails, no guessing)
+# =============================================================================
 def _safe_tool_specs() -> Dict[str, Dict[str, Any]]:
     try:
-        from tools_runtime import tool_specs  # lazy
+        from tools_runtime import tool_specs
         return tool_specs()
     except Exception as e:
-        # Minimal fallback so the app still renders and we can see the error
-        return {
-            "_load_error": {
-                "purpose": f"tools_runtime.tool_specs failed to import: {e}",
-                "args_schema": {},
-                "returns": "N/A",
-            }
-        }
-
+        return {"_load_error": {"purpose": f"tools_runtime.tool_specs failed: {e}", "args_schema": {}, "returns": "N/A"}}
 
 def _propose_tool_plan(
     client,
     question: str,
     tools: Dict[str, Dict[str, Any]],
-    cleansed_paths: List[str],
+    excel_context: Dict[str, Any],
+    kb_candidates: List[str],
     app_paths: Any,
 ) -> List[Dict[str, Any]]:
-    tool_guide = llm_prompts._render_tool_guide(tools)  # reuse private helper
+    tool_guide = llm_prompts._render_tool_guide(tools)
+
+    # Build artifact defaults based on backend
     defaults = {
-        "cleansed_paths": cleansed_paths,
-        "artifact_folder_charts": getattr(
-            app_paths, "dbx_charts_folder", getattr(app_paths, "dbx_eda_charts_folder", None)
-        ),
-        "artifact_folder_summaries": getattr(app_paths, "dbx_summaries_folder", None),
+        "artifact_folder_charts": _artifact_folder("charts", app_paths),
+        "artifact_folder_summaries": _artifact_folder("summaries", app_paths),
+        "excel": {
+            "files": excel_context.get("files", []),
+            "sheets_by_file": excel_context.get("sheets_by_file", {}),
+            "sheet_types": excel_context.get("sheet_types", {}),
+            "columns_by_sheet": excel_context.get("columns_by_sheet", {}),
+        },
+        "kb_candidates": kb_candidates,
+        "rules": {
+            "choose_files_from_list_only": True,
+            "choose_sheets_from_list_only": True,
+            "omit_sheet_if_unsure": True,
+            "include_kb_if_candidates_present": True,
+            "if_inventory_and_wip": "query both, summarize together",
+        },
     }
+
     prompt = (
-        "Plan a minimal set of tool calls to answer the user's question.\n"
-        "Return STRICT JSON (list of steps). Allowed tools and args schema are below.\n"
-        "Rules:\n"
-        "- Use only these tools: dataframe_query, chart, kb_search.\n"
-        "- Prefer a single dataframe_query; only add chart if a visual would help.\n"
-        "- Always include 'artifact_folder' when saving outputs.\n"
-        "- Use the provided 'cleansed_paths' for data.\n"
-        "- If the question asks for guidance/policy/SOP, include a kb_search step.\n"
-        "- Keep args small; do not include huge literal data.\n\n"
+        "You are a planning assistant that emits STRICT JSON (a list of steps). "
+        "Use only the tools and schema below. DO NOT guess file or sheet names — "
+        "pick only from the provided context.\n\n"
         f"{tool_guide}\n\n"
-        f"Defaults (fill missing args with these):\n{json.dumps(defaults, ensure_ascii=False)}\n\n"
+        "Context:\n"
+        f"{json.dumps(defaults, ensure_ascii=False)}\n\n"
+        "Rules:\n"
+        "- Use: dataframe_query, chart, kb_search ONLY.\n"
+        "- If both Inventory and WIP are relevant, include two dataframe_query steps and then a chart or combined summary.\n"
+        "- Only use files from context.excel.files.\n"
+        "- If you specify 'sheet', it MUST be in context.excel.sheets_by_file[file]. If unsure, omit 'sheet'.\n"
+        "- If kb_candidates not empty and the question is analytical/interpretive, include a kb_search step.\n"
+        "- Keep args small; do not include large literal data.\n\n"
         f"USER QUESTION: {question}\n\n"
-        "Respond with JSON only. Example:\n"
-        '[{"tool":"dataframe_query","args":{"cleansed_paths":["dropbox://...xlsx"],"sheet":"Aged WIP","filters":[],"groupby":["plant"],"metrics":[{"col":"extended_cost","agg":"sum"}],"limit":25,"artifact_folder":"dropbox://.../03_Summaries"}},'
-        '{"tool":"chart","args":{"kind":"bar","rows":"$prev_rows","x":"plant","y":["extended_cost_sum"],"title":"Cost by Plant","artifact_folder":"dropbox://.../02_EDA_Charts","base_name":"cost_by_plant"}}]'
+        "Respond with JSON ONLY."
     )
+
     messages = [
-        {"role": "system", "content": "You are a planning assistant that outputs valid JSON for tool execution, nothing else."},
+        {"role": "system", "content": "Return JSON only. No prose."},
         {"role": "user", "content": prompt},
     ]
     plan_text = chat_completion(client, messages, model="gpt-4o-mini")
@@ -180,30 +353,35 @@ def _propose_tool_plan(
             return plan
     except Exception:
         pass
+
     # Fallback trivial plan
+    files = excel_context.get("files", [])
     return [
         {
             "tool": "dataframe_query",
             "args": {
-                "cleansed_paths": cleansed_paths[:1],
+                "files": files[:1],
                 "sheet": None,
                 "filters": [],
                 "groupby": None,
                 "metrics": None,
                 "limit": 50,
-                "artifact_folder": getattr(app_paths, "dbx_summaries_folder", None),
+                "artifact_folder": _artifact_folder("summaries", app_paths),
             },
         }
     ]
 
 
-def _execute_plan(plan: List[Dict[str, Any]], cleansed_paths: List[str], app_paths: Any) -> Dict[str, Any]:
+# =============================================================================
+# Execution with guardrails (validates file/sheet, normalizes paths, merges KB)
+# =============================================================================
+def _execute_plan(plan: List[Dict[str, Any]], app_paths: Any) -> Dict[str, Any]:
     calls: List[Dict[str, Any]] = []
     context: Dict[str, Any] = {"last_rows": None}
     artifacts: List[str] = []
 
     try:
-        from tools_runtime import dataframe_query, chart, kb_search  # lazy
+        from tools_runtime import dataframe_query, chart, kb_search, list_sheets
     except Exception as e:
         calls.append({"tool": "import", "args": {}, "error": f"Failed to import tools_runtime: {e}"})
         return {"calls": calls, "context": context, "artifacts": artifacts}
@@ -213,44 +391,95 @@ def _execute_plan(plan: List[Dict[str, Any]], cleansed_paths: List[str], app_pat
         args = step.get("args") or {}
 
         if tool == "dataframe_query":
-            args.setdefault("cleansed_paths", cleansed_paths[:1])
-            args.setdefault("limit", 50)
-            args.setdefault("artifact_folder", getattr(app_paths, "dbx_summaries_folder", None))
+            # Support new schema: {"files":[...]} or legacy {"cleansed_paths":[...]}
+            files = args.get("files") or args.get("cleansed_paths") or []
+            files = _normalize_dbx_paths(files)
+            if not files:
+                calls.append({"tool": tool, "args": args, "error": "No files provided"})
+                continue
+
+            # Validate requested sheet
+            requested = (args.get("sheet") or "").strip() or None
+            sheet_used = None
             try:
-                res = dataframe_query(**args)
+                available = list_sheets(files[0]) or []
+            except Exception:
+                available = []
+
+            if requested and requested not in available:
+                # Deterministic fallback: prefer WIP -> Inventory -> first
+                sheet_used = _pick_fallback_sheet(available, requested)
+            else:
+                sheet_used = requested or _pick_fallback_sheet(available, None)
+
+            # Artifact folder by backend
+            artifact_folder = args.get("artifact_folder")
+            if not artifact_folder:
+                artifact_folder = _artifact_folder("summaries", app_paths)
+
+            # Safe defaults
+            args_exec = {
+                "cleansed_paths": files[:1],  # current runtime supports single-file ops; planner can add more steps
+                "sheet": sheet_used,
+                "filters": args.get("filters", []),
+                "groupby": args.get("groupby"),
+                "metrics": args.get("metrics"),
+                "limit": int(args.get("limit", 50)),
+                "artifact_folder": artifact_folder,
+            }
+
+            try:
+                res = dataframe_query(**args_exec)
             except Exception as e:
                 res = {"error": f"dataframe_query failed: {e}"}
+
             context["last_rows"] = res.get("preview")
             if res.get("artifact_path"):
                 artifacts.append(res["artifact_path"])
-            calls.append(
-                {"tool": tool, "args": args, "result_meta": {k: res.get(k) for k in ("rowcount", "artifact_path", "sheet_used", "error")}}
-            )
+
+            calls.append({"tool": tool, "args": args_exec, "result_meta": {
+                "rowcount": res.get("rowcount"),
+                "artifact_path": res.get("artifact_path"),
+                "sheet_used": res.get("sheet_used", sheet_used),
+                "available_sheets": available[:20],
+                "error": res.get("error"),
+            }})
 
         elif tool == "chart":
             rows = args.get("rows")
             if isinstance(rows, str) and rows.strip() == "$prev_rows":
                 rows = context.get("last_rows") or []
-            args["rows"] = rows
-            args.setdefault(
-                "artifact_folder",
-                getattr(app_paths, "dbx_charts_folder", getattr(app_paths, "dbx_eda_charts_folder", None)),
-            )
-            args.setdefault("base_name", "chart")
+            artifact_folder = args.get("artifact_folder") or _artifact_folder("charts", app_paths)
+
+            args_exec = {
+                "kind": args.get("kind", "bar"),
+                "rows": rows,
+                "x": args.get("x"),
+                "y": args.get("y"),
+                "title": args.get("title", "Chart"),
+                "artifact_folder": artifact_folder,
+                "base_name": args.get("base_name", "chart"),
+            }
             try:
-                res = chart(**args)
+                res = chart(**args_exec)
             except Exception as e:
                 res = {"error": f"chart failed: {e}"}
+
             if res.get("image_path"):
                 artifacts.append(res["image_path"])
-            calls.append({"tool": tool, "args": args, "result_meta": {"image_path": res.get("image_path"), "error": res.get("error")}})
+            calls.append({"tool": tool, "args": args_exec, "result_meta": {"image_path": res.get("image_path"), "error": res.get("error")}})
 
         elif tool == "kb_search":
+            query = args.get("query")
+            top_k = int(args.get("k", 5))
             try:
-                res = kb_search(args.get("query", ""), int(args.get("k", 5)))
+                res = kb_search(query or "", top_k)
             except Exception as e:
                 res = {"error": f"kb_search failed: {e}", "citations": []}
-            calls.append({"tool": tool, "args": args, "result_meta": {"citations": res.get("citations", []), "error": res.get("error")}})
+            calls.append({"tool": tool, "args": {"query": query, "k": top_k}, "result_meta": {
+                "citations": res.get("citations", []),
+                "error": res.get("error")
+            }})
             context["kb_chunks"] = res.get("chunks", [])
             context["kb_citations"] = res.get("citations", [])
 
@@ -260,6 +489,26 @@ def _execute_plan(plan: List[Dict[str, Any]], cleansed_paths: List[str], app_pat
     return {"calls": calls, "context": context, "artifacts": artifacts}
 
 
+def _pick_fallback_sheet(available_sheets: List[str], requested: Optional[str]) -> Optional[str]:
+    if not available_sheets:
+        return None
+    if requested in available_sheets:
+        return requested
+    lower = [s.lower() for s in available_sheets]
+    for key in ("wip", "aged wip", "g512", "work in progress"):
+        for i, s in enumerate(lower):
+            if key in s:
+                return available_sheets[i]
+    for key in ("inventory", "finished goods", "fg"):
+        for i, s in enumerate(lower):
+            if key in s:
+                return available_sheets[i]
+    return available_sheets[0]
+
+
+# =============================================================================
+# Quant/KB merging for final answer
+# =============================================================================
 def _summarize_exec(exec_result: Dict[str, Any]) -> Tuple[str, List[str]]:
     calls = exec_result["calls"]
     artifacts = exec_result["artifacts"]
@@ -271,7 +520,6 @@ def _summarize_exec(exec_result: Dict[str, Any]) -> Tuple[str, List[str]]:
         elif c["tool"] == "dataframe_query":
             meta = c.get("result_meta", {})
             lines.append(f"Dataframe Query • rows={meta.get('rowcount','?')} • sheet={meta.get('sheet_used')}")
-
     if not lines:
         lines.append("No data operations executed.")
 
@@ -291,19 +539,12 @@ def _extract_kb(exec_result: Dict[str, Any]) -> Tuple[str, List[str]]:
     return "\n\n---\n\n".join(parts), cits
 
 
-# ----------------------------
-# Intent classification (robust)
-# ----------------------------
+# =============================================================================
+# Intent classification (robust + external-friendly)
+# =============================================================================
 SUPPORTED_INTENTS = [
-    "compare",
-    "root_cause",
-    "forecast",
-    "summarize",
-    "eda",
-    "rank",
-    "anomaly",
-    "optimize",
-    "filter",
+    "compare", "root_cause", "forecast", "summarize",
+    "eda", "rank", "anomaly", "optimize", "filter",
 ]
 
 WIP_EO_BIAS_KEYWORDS = {
@@ -312,7 +553,7 @@ WIP_EO_BIAS_KEYWORDS = {
 }
 
 DEFAULT_INTENT_MODEL = os.getenv("INTENT_MODEL", "gpt-4o-mini")
-CONFIDENCE_THRESHOLD = 0.52  # tune as needed
+CONFIDENCE_THRESHOLD = 0.52
 
 
 def _build_intent_prompt(user_question: str) -> str:
@@ -340,11 +581,9 @@ Return JSON only.
 
 def _fallback_intent(user_question: str) -> Tuple[str, float]:
     q = user_question.lower()
-
     if any(k in q for k in WIP_EO_BIAS_KEYWORDS["wip"]) or any(k in q for k in WIP_EO_BIAS_KEYWORDS["eo"]):
         if any(w in q for w in ["why", "cause", "driver", "increase", "rise", "spike", "root"]):
             return "root_cause", 0.62
-
     if any(w in q for w in ["compare", "difference", "delta", "vs", "change", "trend vs"]):
         return "compare", 0.58
     if any(w in q for w in ["forecast", "predict", "par", "reorder point", "rop", "safety stock", "seasonal"]):
@@ -361,22 +600,15 @@ def _fallback_intent(user_question: str) -> Tuple[str, float]:
         return "filter", 0.55
     if any(w in q for w in ["summarize", "tl;dr", "brief", "overview"]):
         return "summarize", 0.55
-
     return "eda", 0.45
 
 
 def classify_user_intent(user_question: str, client=None) -> Dict[str, Any]:
-    """
-    Model-based classification with JSON parsing hardening + fallback.
-    Also exposes 'model_size' for routing: 'small' vs 'large'.
-    """
-    # Prefer your external classifier if available
+    # Use your external classifier if present
     if _external_classify_intent is not None:
         try:
             out = _external_classify_intent(user_question)
-            # Normalize and add model_size hint if missing
-            model_size = out.get("model_size") or ("large" if out.get("intent") in {"root_cause", "forecast"} else "small")
-            out["model_size"] = model_size
+            out["model_size"] = out.get("model_size") or ("large" if out.get("intent") in {"root_cause", "forecast"} else "small")
             return out
         except Exception:
             pass
@@ -386,11 +618,7 @@ def classify_user_intent(user_question: str, client=None) -> Dict[str, Any]:
     prompt = _build_intent_prompt(user_question)
 
     try:
-        resp = client.responses.create(
-            model=DEFAULT_INTENT_MODEL,
-            input=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-        )
+        resp = client.responses.create(model=DEFAULT_INTENT_MODEL, input=[{"role": "user", "content": prompt}], temperature=0.0)
         text = resp.output_text.strip()
         text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.IGNORECASE | re.MULTILINE).strip()
         data = json.loads(text)
@@ -426,56 +654,4 @@ def classify_user_intent(user_question: str, client=None) -> Dict[str, Any]:
             "model_size": model_size,
         }
 
-
-# ----------------------------
-# Existing “Phase 4” entry (unchanged signature)
-# ----------------------------
-def run_query_pipeline(query: str, df_dict: dict, metadata_path: str) -> dict:
-    """
-    Orchestrates the full flow: classify → confidence gate → match/execute → return.
-    """
-    # 1) Clients & metadata
-    client = get_openai_client()
-    metadata_index = load_master_metadata_index(metadata_path)
-
-    # 2) Intent classification (no dropdowns)
-    intent_result = classify_user_intent(query, client=client)
-    intent = intent_result["intent"]
-    confidence = intent_result["confidence"]
-
-    # 3) Confidence gate (abstain if too low)
-    if confidence < CONFIDENCE_THRESHOLD:
-        abstained = {
-            "intent": "abstain",
-            "confidence": 0.0,
-            "message": "I’m not confident enough to proceed without clarification.",
-            "reason": f"Low confidence ({confidence:.2f}) for intent '{intent}'. "
-                      f"Reason: {intent_result.get('reasoning','')}",
-        }
-        abstained["intent_classification"] = intent_result
-        abstained["flags"] = {"wip_eo_bias": _is_wip_or_eo_query(query)}
-        return abstained
-
-    # 4) Optional flags for downstream (executor can ignore if not used)
-    flags = {"wip_eo_bias": _is_wip_or_eo_query(query)}
-
-    # 5) Execute your existing pipeline (no signature change)
-    result = run_intent_task(query, df_dict, metadata_index, client)
-
-    # 6) Attach classification + flags for transparency (non-breaking)
-    if isinstance(result, dict):
-        result.setdefault("intent_classification", intent_result)
-        result.setdefault("flags", flags)
-        return result
-
-    # Fallback shape if executor returns unexpected type
-    return {"data": result, "intent_classification": intent_result, "flags": flags}
-
-
-# ----------------------------
-# Tiny utils
-# ----------------------------
-def _is_wip_or_eo_query(user_question: str) -> bool:
-    q = user_question.lower()
-    return any(k in q for k in WIP_EO_BIAS_KEYWORDS["wip"] + WIP_EO_BIAS_KEYWORDS["eo"])
 
