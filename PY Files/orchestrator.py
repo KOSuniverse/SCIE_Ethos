@@ -1,27 +1,36 @@
-# orchestrator.py
+# PY Files/orchestrator.py
+
+from __future__ import annotations
 
 import os
 import re
 import json
-from typing import Optional, Any, Tuple, Dict
+import traceback
+from typing import Any, Dict, List, Optional, Tuple
+
 import pandas as pd
 
-from llm_client import get_openai_client
+# --- Core deps (safe imports) ---
+from llm_client import get_openai_client, chat_completion
 from loader import load_master_metadata_index
 from executor import run_intent_task
 from phase1_ingest.pipeline import run_pipeline
 
-# PY Files/orchestrator.py
-from __future__ import annotations
-from typing import Any, Dict, List, Optional, Tuple
-import json
-import traceback
+import llm_prompts  # scaffold (llm_prompts.py)
 
-from llm_client import get_openai_client, chat_completion
-import llm_prompts  # your scaffold (llm_prompts.py)
-from intent import classify_intent
-from tools_runtime import tool_specs, dataframe_tools, chart, kb_search  # your tool definitions
+# Try to use your external classifier if present; fall back to local one below
+try:
+    from intent import classify_intent as _external_classify_intent
+except Exception:
+    _external_classify_intent = None
 
+# Tools runtime is loaded lazily inside _safe_tool_specs/_execute_plan
+# to avoid import-time crashes.
+
+
+# ----------------------------
+# Light paths shim
+# ----------------------------
 class Paths:
     """
     Minimal shim to pass metadata folder & alias path.
@@ -31,10 +40,14 @@ class Paths:
         self.metadata_folder = metadata_folder
         self.alias_json = alias_json  # optional explicit path
 
+
+# ----------------------------
+# Phase 1 wrapper
+# ----------------------------
 def run_ingest_pipeline(
     source: bytes | bytearray | str,
     filename: Optional[str],
-    paths: Optional[Any]
+    paths: Optional[Any],
 ) -> Tuple[Dict[str, pd.DataFrame], dict]:
     """
     Thin wrapper for Phase 1 ingestion. Returns (cleaned_sheets, metadata).
@@ -42,10 +55,10 @@ def run_ingest_pipeline(
     cleaned_sheets, metadata = run_pipeline(source=source, filename=filename, paths=paths)
     return cleaned_sheets, metadata
 
-# ----------------------------
-# Public API
-# ----------------------------
 
+# ----------------------------
+# Cloud tool-planned path
+# ----------------------------
 def answer_question(
     user_question: str,
     *,
@@ -59,7 +72,7 @@ def answer_question(
     Returns dict with final_text, intent_info, tool_calls, artifacts, debug.
     """
     # 0) Intent + model routing
-    intent_info = classify_intent(user_question)
+    intent_info = classify_user_intent(user_question)
     intent = intent_info["intent"]
     model_size = intent_info["model_size"]  # "small"|"large"
     model = "gpt-4o" if model_size == "large" else "gpt-4o-mini"
@@ -105,10 +118,10 @@ def answer_question(
         },
     }
 
-# ----------------------------
-# Internal helpers (with lazy imports)
-# ----------------------------
 
+# ----------------------------
+# Tool planning helpers
+# ----------------------------
 def _safe_tool_specs() -> Dict[str, Dict[str, Any]]:
     try:
         from tools_runtime import tool_specs  # lazy
@@ -119,18 +132,24 @@ def _safe_tool_specs() -> Dict[str, Dict[str, Any]]:
             "_load_error": {
                 "purpose": f"tools_runtime.tool_specs failed to import: {e}",
                 "args_schema": {},
-                "returns": "N/A"
+                "returns": "N/A",
             }
         }
 
-def _propose_tool_plan(client, question: str, tools: Dict[str, Dict[str, Any]], cleansed_paths: List[str], app_paths: Any) -> List[Dict[str, Any]]:
-    """
-    Ask GPT for a minimal JSON plan of tool calls. We provide guardrails and defaults.
-    """
-    tool_guide = llm_prompts._render_tool_guide(tools)  # private helper is fine to reuse
+
+def _propose_tool_plan(
+    client,
+    question: str,
+    tools: Dict[str, Dict[str, Any]],
+    cleansed_paths: List[str],
+    app_paths: Any,
+) -> List[Dict[str, Any]]:
+    tool_guide = llm_prompts._render_tool_guide(tools)  # reuse private helper
     defaults = {
         "cleansed_paths": cleansed_paths,
-        "artifact_folder_charts": getattr(app_paths, "dbx_charts_folder", getattr(app_paths, "dbx_eda_charts_folder", None)),
+        "artifact_folder_charts": getattr(
+            app_paths, "dbx_charts_folder", getattr(app_paths, "dbx_eda_charts_folder", None)
+        ),
         "artifact_folder_summaries": getattr(app_paths, "dbx_summaries_folder", None),
     }
     prompt = (
@@ -162,29 +181,30 @@ def _propose_tool_plan(client, question: str, tools: Dict[str, Dict[str, Any]], 
     except Exception:
         pass
     # Fallback trivial plan
-    return [{
-        "tool": "dataframe_query",
-        "args": {
-            "cleansed_paths": cleansed_paths[:1],
-            "sheet": None,
-            "filters": [],
-            "groupby": None,
-            "metrics": None,
-            "limit": 50,
-            "artifact_folder": getattr(app_paths, "dbx_summaries_folder", None),
+    return [
+        {
+            "tool": "dataframe_query",
+            "args": {
+                "cleansed_paths": cleansed_paths[:1],
+                "sheet": None,
+                "filters": [],
+                "groupby": None,
+                "metrics": None,
+                "limit": 50,
+                "artifact_folder": getattr(app_paths, "dbx_summaries_folder", None),
+            },
         }
-    }]
+    ]
+
 
 def _execute_plan(plan: List[Dict[str, Any]], cleansed_paths: List[str], app_paths: Any) -> Dict[str, Any]:
     calls: List[Dict[str, Any]] = []
     context: Dict[str, Any] = {"last_rows": None}
     artifacts: List[str] = []
 
-    # Lazy imports for tools (avoid top-level import failures)
     try:
         from tools_runtime import dataframe_query, chart, kb_search  # lazy
     except Exception as e:
-        # Return a single error call so UI can display it
         calls.append({"tool": "import", "args": {}, "error": f"Failed to import tools_runtime: {e}"})
         return {"calls": calls, "context": context, "artifacts": artifacts}
 
@@ -203,14 +223,19 @@ def _execute_plan(plan: List[Dict[str, Any]], cleansed_paths: List[str], app_pat
             context["last_rows"] = res.get("preview")
             if res.get("artifact_path"):
                 artifacts.append(res["artifact_path"])
-            calls.append({"tool": tool, "args": args, "result_meta": {k: res.get(k) for k in ("rowcount","artifact_path","sheet_used","error")}})
+            calls.append(
+                {"tool": tool, "args": args, "result_meta": {k: res.get(k) for k in ("rowcount", "artifact_path", "sheet_used", "error")}}
+            )
 
         elif tool == "chart":
             rows = args.get("rows")
             if isinstance(rows, str) and rows.strip() == "$prev_rows":
                 rows = context.get("last_rows") or []
             args["rows"] = rows
-            args.setdefault("artifact_folder", getattr(app_paths, "dbx_charts_folder", getattr(app_paths, "dbx_eda_charts_folder", None)))
+            args.setdefault(
+                "artifact_folder",
+                getattr(app_paths, "dbx_charts_folder", getattr(app_paths, "dbx_eda_charts_folder", None)),
+            )
             args.setdefault("base_name", "chart")
             try:
                 res = chart(**args)
@@ -222,7 +247,7 @@ def _execute_plan(plan: List[Dict[str, Any]], cleansed_paths: List[str], app_pat
 
         elif tool == "kb_search":
             try:
-                res = kb_search(args.get("query",""), int(args.get("k", 5)))
+                res = kb_search(args.get("query", ""), int(args.get("k", 5)))
             except Exception as e:
                 res = {"error": f"kb_search failed: {e}", "citations": []}
             calls.append({"tool": tool, "args": args, "result_meta": {"citations": res.get("citations", []), "error": res.get("error")}})
@@ -234,15 +259,11 @@ def _execute_plan(plan: List[Dict[str, Any]], cleansed_paths: List[str], app_pat
 
     return {"calls": calls, "context": context, "artifacts": artifacts}
 
+
 def _summarize_exec(exec_result: Dict[str, Any]) -> Tuple[str, List[str]]:
-    """
-    Build a compact quantitative context string + artifact paths for the scaffold.
-    """
     calls = exec_result["calls"]
-    ctx = exec_result["context"]
     artifacts = exec_result["artifacts"]
 
-    # Try to render the last dataframe preview as a tiny table in text
     lines = []
     for c in calls:
         if c.get("error"):
@@ -250,13 +271,12 @@ def _summarize_exec(exec_result: Dict[str, Any]) -> Tuple[str, List[str]]:
         elif c["tool"] == "dataframe_query":
             meta = c.get("result_meta", {})
             lines.append(f"Dataframe Query • rows={meta.get('rowcount','?')} • sheet={meta.get('sheet_used')}")
-            # keep it compact; show first 3 rows if available
-            # (Rows are already safe JSON dicts)
-            # Note: defer full tables to the saved artifact
+
     if not lines:
         lines.append("No data operations executed.")
 
     return "\n".join(lines), artifacts
+
 
 def _extract_kb(exec_result: Dict[str, Any]) -> Tuple[str, List[str]]:
     ctx = exec_result["context"]
@@ -264,29 +284,37 @@ def _extract_kb(exec_result: Dict[str, Any]) -> Tuple[str, List[str]]:
     cits = ctx.get("kb_citations") or []
     if not chunks:
         return "", []
-    # Compact the first couple of chunks
     parts = []
     for ch in chunks[:2]:
         txt = ch.get("text") if isinstance(ch, dict) else str(ch)
         parts.append(txt.strip())
     return "\n\n---\n\n".join(parts), cits
 
-# --- Supported intents & lightweight biasing --------------------------------
+
+# ----------------------------
+# Intent classification (robust)
+# ----------------------------
 SUPPORTED_INTENTS = [
-    "compare", "root_cause", "forecast", "summarize",
-    "eda", "rank", "anomaly", "optimize", "filter"
+    "compare",
+    "root_cause",
+    "forecast",
+    "summarize",
+    "eda",
+    "rank",
+    "anomaly",
+    "optimize",
+    "filter",
 ]
 
 WIP_EO_BIAS_KEYWORDS = {
     "wip": ["wip", "work in progress", "job", "shop order", "wo ", "work order"],
-    "eo": ["e&o", "excess", "obsolete", "slow mover", "dead stock", "write-off", "write off"]
+    "eo": ["e&o", "excess", "obsolete", "slow mover", "dead stock", "write-off", "write off"],
 }
 
 DEFAULT_INTENT_MODEL = os.getenv("INTENT_MODEL", "gpt-4o-mini")
 CONFIDENCE_THRESHOLD = 0.52  # tune as needed
 
 
-# --- Prompt builder ----------------------------------------------------------
 def _build_intent_prompt(user_question: str) -> str:
     supported = ", ".join(SUPPORTED_INTENTS)
     return f"""
@@ -310,11 +338,9 @@ Return JSON only.
 """.strip()
 
 
-# --- Classifier with robust fallback ----------------------------------------
 def _fallback_intent(user_question: str) -> Tuple[str, float]:
     q = user_question.lower()
 
-    # WIP/E&O bias for root cause
     if any(k in q for k in WIP_EO_BIAS_KEYWORDS["wip"]) or any(k in q for k in WIP_EO_BIAS_KEYWORDS["eo"]):
         if any(w in q for w in ["why", "cause", "driver", "increase", "rise", "spike", "root"]):
             return "root_cause", 0.62
@@ -340,7 +366,21 @@ def _fallback_intent(user_question: str) -> Tuple[str, float]:
 
 
 def classify_user_intent(user_question: str, client=None) -> Dict[str, Any]:
-    """Model-based classification with JSON parsing hardening + fallback."""
+    """
+    Model-based classification with JSON parsing hardening + fallback.
+    Also exposes 'model_size' for routing: 'small' vs 'large'.
+    """
+    # Prefer your external classifier if available
+    if _external_classify_intent is not None:
+        try:
+            out = _external_classify_intent(user_question)
+            # Normalize and add model_size hint if missing
+            model_size = out.get("model_size") or ("large" if out.get("intent") in {"root_cause", "forecast"} else "small")
+            out["model_size"] = model_size
+            return out
+        except Exception:
+            pass
+
     if client is None:
         client = get_openai_client()
     prompt = _build_intent_prompt(user_question)
@@ -352,7 +392,6 @@ def classify_user_intent(user_question: str, client=None) -> Dict[str, Any]:
             temperature=0.0,
         )
         text = resp.output_text.strip()
-        # Strip accidental code fences
         text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.IGNORECASE | re.MULTILINE).strip()
         data = json.loads(text)
 
@@ -365,52 +404,35 @@ def classify_user_intent(user_question: str, client=None) -> Dict[str, Any]:
             intent, confidence = _fallback_intent(user_question)
             reasoning = reasoning or "Heuristic fallback triggered due to unsupported intent."
 
+        model_size = "large" if intent in {"root_cause", "forecast"} else "small"
+
         return {
             "intent": intent,
             "confidence": max(0.0, min(confidence, 1.0)),
             "reasoning": reasoning,
             "entities": entities,
             "raw": data,
+            "model_size": model_size,
         }
     except Exception as e:
-        # Model failure → fallback
         intent, confidence = _fallback_intent(user_question)
+        model_size = "large" if intent in {"root_cause", "forecast"} else "small"
         return {
             "intent": intent,
             "confidence": confidence,
             "reasoning": f"Classifier exception fallback: {e}",
             "entities": [],
             "raw": None,
+            "model_size": model_size,
         }
 
 
-# --- Utility -----------------------------------------------------------------
-def _is_wip_or_eo_query(user_question: str) -> bool:
-    q = user_question.lower()
-    return any(k in q for k in WIP_EO_BIAS_KEYWORDS["wip"] + WIP_EO_BIAS_KEYWORDS["eo"])
-
-
-def _abstain(reason: str) -> Dict[str, Any]:
-    return {
-        "intent": "abstain",
-        "confidence": 0.0,
-        "message": "I’m not confident enough to proceed without clarification.",
-        "reason": reason,
-    }
-
-
-# --- Public entry point (keeps your original signature) ----------------------
+# ----------------------------
+# Existing “Phase 4” entry (unchanged signature)
+# ----------------------------
 def run_query_pipeline(query: str, df_dict: dict, metadata_path: str) -> dict:
     """
     Orchestrates the full flow: classify → confidence gate → match/execute → return.
-
-    Args:
-        query (str): User's natural language question.
-        df_dict (dict): Dict of DataFrames keyed by (filename, sheetname).
-        metadata_path (str): Path to master_metadata_index.json.
-
-    Returns:
-        dict: Structured result (original executor result + intent metadata).
     """
     # 1) Clients & metadata
     client = get_openai_client()
@@ -423,8 +445,13 @@ def run_query_pipeline(query: str, df_dict: dict, metadata_path: str) -> dict:
 
     # 3) Confidence gate (abstain if too low)
     if confidence < CONFIDENCE_THRESHOLD:
-        abstained = _abstain(f"Low confidence ({confidence:.2f}) for intent '{intent}'. Reason: {intent_result['reasoning']}")
-        # include classification context for visibility
+        abstained = {
+            "intent": "abstain",
+            "confidence": 0.0,
+            "message": "I’m not confident enough to proceed without clarification.",
+            "reason": f"Low confidence ({confidence:.2f}) for intent '{intent}'. "
+                      f"Reason: {intent_result.get('reasoning','')}",
+        }
         abstained["intent_classification"] = intent_result
         abstained["flags"] = {"wip_eo_bias": _is_wip_or_eo_query(query)}
         return abstained
@@ -442,9 +469,13 @@ def run_query_pipeline(query: str, df_dict: dict, metadata_path: str) -> dict:
         return result
 
     # Fallback shape if executor returns unexpected type
-    return {
-        "data": result,
-        "intent_classification": intent_result,
-        "flags": flags,
-    }
+    return {"data": result, "intent_classification": intent_result, "flags": flags}
+
+
+# ----------------------------
+# Tiny utils
+# ----------------------------
+def _is_wip_or_eo_query(user_question: str) -> bool:
+    q = user_question.lower()
+    return any(k in q for k in WIP_EO_BIAS_KEYWORDS["wip"] + WIP_EO_BIAS_KEYWORDS["eo"])
 
