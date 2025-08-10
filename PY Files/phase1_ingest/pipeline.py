@@ -537,6 +537,19 @@ def run_pipeline(
         metadata["gpt_client_error"] = gpt_err
 
     # --- Executive summary for the whole file (top-level metadata) ---
+    def _compact_one_liner(text: str, max_chars: int = 480, max_sents: int = 2) -> str:
+        import re
+        t = (text or "").strip()
+        if not t:
+            return ""
+        # take the first `max_sents` sentences
+        parts = re.split(r'(?<=[\.\?\!])\s+', t)
+        joined = " ".join(parts[:max_sents]).strip()
+        # soft-cap by words so we don't cut mid-word
+        if len(joined) > max_chars:
+            joined = joined[:max_chars].rsplit(" ", 1)[0].rstrip(".,;:") + "…"
+        return joined
+
     try:
         lines = []
         lines.append(f"File: {metadata.get('source_filename', os.path.basename(str(filename)))} • Sheets: {metadata.get('sheet_count', len(per_sheet_meta))}")
@@ -548,17 +561,15 @@ def run_pipeline(
         if type_counts:
             lines.append("Detected sheet types: " + ", ".join([f"{k}={v}" for k, v in type_counts.items()]))
 
-        # one-liners per sheet
+        # bullets per sheet, sentence-safe and longer cap
         for s in per_sheet_meta:
             sn = s.get("sheet_name")
-            stxt = (s.get("summary_text") or "").strip()
-            if stxt:
-                # keep it compact
-                stxt = stxt.splitlines()[0][:240]
+            stxt_full = (s.get("summary_text") or "")
+            stxt = _compact_one_liner(stxt_full, max_chars=600, max_sents=5)
             lines.append(f"- {sn}: {stxt}")
 
         metadata["executive_summary"] = "\n".join(lines)
-    except Exception as _e:
+    except Exception:
         metadata["executive_summary"] = "Summary unavailable."
 
     return cleaned_sheets, metadata
