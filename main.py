@@ -152,7 +152,7 @@ class AppPaths:
 with st.expander("🔧 Ingest pipeline (debug)"):
     root_mode = st.radio("Path mode", ["Local", "Dropbox"], horizontal=True)
     default_local = "/content/drive/MyDrive/Ethos LLM/Project_Root"
-    default_dbx = "/Apps/Ethos LLM/Project_Root"
+    default_dbx = "/Project_Root"
 
     # keep a stable place to store the chosen dropbox root
     if "dbx_root" not in st.session_state:
