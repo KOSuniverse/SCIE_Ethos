@@ -50,6 +50,18 @@ from phase4_knowledge.knowledgebase_builder import status as kb_status, build_or
 from phase4_knowledge.knowledgebase_retriever import search_topk, pack_context
 from phase4_knowledge.response_composer import compose_response
 
+def build_xlsx_bytes_from_sheets(sheets: dict[str, pd.DataFrame]) -> bytes:
+    import io
+    import pandas as pd
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        for sheet_name, df in sheets.items():
+            safe_name = (str(sheet_name) or "Sheet1")[:31]
+            df.to_excel(writer, sheet_name=safe_name, index=False)
+    buf.seek(0)
+    return buf.read()
+
+
 # --- Dropbox root auto-detect helper ---
 def _detect_dropbox_root(list_func):
     """
@@ -328,7 +340,7 @@ if raw_files:
             cleaned_sheets, metadata = run_pipeline(b, filename, app_paths)
 
             # 3) Save cleansed workbook back to Dropbox
-            out_bytes = save_xlsx_bytes(cleaned_sheets)
+            out_bytes = build_xlsx_bytes_from_sheets(cleaned_sheets)
             out_base = filename.rsplit(".xlsx", 1)[0]
             cleansed_dbx = getattr(app_paths, "dbx_cleansed_folder", None)
             if not cleansed_dbx:
