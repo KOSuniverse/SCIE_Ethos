@@ -20,47 +20,34 @@ def run_pipeline_cloud(
     file_bytes: Optional[bytes] = None
 ) -> Tuple[Dict[str, "pd.DataFrame"], dict]:
     """
-    Adapter so main.py can call in multiple ways without breaking:
-      cleaned_sheets, metadata = run_pipeline_cloud(filename, paths)
-      cleaned_sheets, metadata = run_pipeline_cloud(filename, paths, "dropbox")
-      cleaned_sheets, metadata = run_pipeline_cloud(filename, paths, storage="local")
-      cleaned_sheets, metadata = run_pipeline_cloud(filename, paths, file_bytes=b"...")
-      (defensive) run_pipeline_cloud(filename, paths, paths)  # mistakenly passing paths twice
-
-    Behavior
-    - If file_bytes provided, use those.
-    - Else if storage == "dropbox", download RAW/<filename> via dbx_read_bytes.
-    - Else if storage == "local", read from os.path.join(paths.raw_folder, filename).
-    - Calls pl.run_pipeline with best-guess signatures:
-        A) run_pipeline(BytesIO, filename=..., paths=...)
-        B) run_pipeline(file_path_str, filename=..., paths=...)
-        C) run_pipeline(file_path_str)
-        D) run_pipeline(BytesIO)
-    - Always returns (cleaned_sheets: dict[str, DataFrame], metadata: dict)
+    Safe adapter — supports these call shapes:
+      run_pipeline_cloud(filename, paths)
+      run_pipeline_cloud(filename, paths, "dropbox")
+      run_pipeline_cloud(filename, paths, storage="local")
+      run_pipeline_cloud(filename, paths, file_bytes=b"...")
+      (defensive) run_pipeline_cloud(filename, "dropbox", paths)  # swapped args
+      (defensive) run_pipeline_cloud(filename, paths, paths)     # accidental dup
     """
+    paths, storage_name = _normalize_args(paths, storage)
 
-    # --- 0) Normalize storage in case the caller passed `paths` as the 3rd arg by mistake
-    storage_name = _normalize_storage(storage)
-
-    # --- 1) Acquire file bytes
+    # --- Acquire file bytes
     if file_bytes is None:
         if storage_name == "dropbox":
-            # Ensure consistent path join for Dropbox
-            raw_path = f"{paths.raw_folder.rstrip('/')}/{filename}"
+            raw_path = f"{_rstrip_slash(paths.raw_folder)}/{filename}"
             file_bytes = dbx_read_bytes(raw_path)
         elif storage_name == "local":
             local_path = os.path.join(paths.raw_folder, filename)
             with open(local_path, "rb") as f:
                 file_bytes = f.read()
         else:
-            # Unknown storage → fall back to Dropbox
-            raw_path = f"{paths.raw_folder.rstrip('/')}/{filename}"
+            # Unknown → fall back to Dropbox
+            raw_path = f"{_rstrip_slash(paths.raw_folder)}/{filename}"
             file_bytes = dbx_read_bytes(raw_path)
 
     if not file_bytes:
         raise FileNotFoundError(f"Could not load bytes for '{filename}' (storage={storage_name}).")
 
-    # --- 2) Try BytesIO-based call first
+    # --- Try BytesIO-based call first
     bio = io.BytesIO(file_bytes)
     try:
         out = pl.run_pipeline(bio, filename=filename, paths=paths)  # type: ignore
@@ -68,7 +55,7 @@ def run_pipeline_cloud(
     except Exception:
         pass
 
-    # --- 3) Try temp file path variants
+    # --- Try temp file path variants
     with tempfile.TemporaryDirectory() as td:
         tmp_path = os.path.join(td, filename)
         with open(tmp_path, "wb") as f:
@@ -98,19 +85,54 @@ def run_pipeline_cloud(
             ) from e
 
 
+# ---------- helpers ----------
+
+def _normalize_args(paths: Any, storage: Any) -> Tuple[Any, str]:
+    """
+    Returns (paths_obj, storage_name).
+    - If args are swapped (paths is str and storage has .raw_folder), swap them.
+    - If both look wrong, raise a clear error.
+    """
+    # Case 1: correct order already
+    if hasattr(paths, "raw_folder") and not isinstance(storage, type(paths)):
+        return paths, _normalize_storage(storage)
+
+    # Case 2: swapped (paths is str-like, storage is paths object)
+    if isinstance(paths, str) and hasattr(storage, "raw_folder"):
+        return storage, _normalize_storage(paths)
+
+    # Case 3: duplicate paths passed (paths, paths)
+    if hasattr(paths, "raw_folder") and hasattr(storage, "raw_folder"):
+        # Prefer the first, default storage to 'dropbox'
+        return paths, "dropbox"
+
+    # Case 4: both strings — assume first was meant to be storage (rare)
+    if isinstance(paths, str) and isinstance(storage, str):
+        raise TypeError(
+            "run_pipeline_cloud expected a paths object, but received two strings. "
+            "Call as run_pipeline_cloud(filename, paths, storage='dropbox')."
+        )
+
+    # Otherwise ambiguous
+    raise TypeError(
+        "run_pipeline_cloud could not identify the 'paths' object. "
+        "Pass a valid paths object with a 'raw_folder' attribute."
+    )
+
+
 def _normalize_storage(storage: Any) -> str:
-    """
-    Return a safe storage name.
-    - Strings → lowercased ('dropbox'/'local')
-    - If the caller accidentally passed a paths-like object (has .raw_folder), default to 'dropbox'
-    - Anything else defaults to 'dropbox'
-    """
+    """Return a safe storage name ('dropbox' or 'local'), defaulting to 'dropbox'."""
     if isinstance(storage, str):
-        return storage.lower().strip() or "dropbox"
-    # Treat objects with raw_folder as 'paths' accidentally passed in
+        s = storage.strip().lower()
+        return s if s in {"dropbox", "local"} else "dropbox"
+    # If caller passed a paths-like object here, default to dropbox
     if hasattr(storage, "raw_folder"):
         return "dropbox"
     return "dropbox"
+
+
+def _rstrip_slash(p: str) -> str:
+    return p[:-1] if p.endswith("/") else p
 
 
 def _normalize_pipeline_output(out: Any, filename: str) -> Tuple[Dict[str, "pd.DataFrame"], dict]:
@@ -122,22 +144,18 @@ def _normalize_pipeline_output(out: Any, filename: str) -> Tuple[Dict[str, "pd.D
       - dict[str, DataFrame]  (no metadata)
     Returns (cleaned_sheets, metadata).
     """
-    # Tuple already
     if isinstance(out, tuple) and len(out) == 2:
         return out[0], out[1]
 
-    # Dict shapes
     if isinstance(out, dict):
         if "cleaned_sheets" in out and "metadata" in out:
             return out["cleaned_sheets"], out["metadata"]
         if "sheets" in out and "metadata" in out:
             return out["sheets"], out["metadata"]
-
-        # Heuristic: dictionary of DataFrames without metadata
         if out and all(isinstance(k, str) for k in out.keys()):
             return out, {"source_filename": filename, "note": "Metadata synthesized by adapter"}
 
-    # Fallback: unknown shape
     return out, {"source_filename": filename, "note": "Metadata synthesized by adapter"}
+
 
 
