@@ -147,75 +147,96 @@ class AppPaths:
 # Ingest (debug) — local upload path
 # =============================================================================
 # =============================================================================
-# Ingest (debug) — local upload path
+# Ingest (debug) — Dropbox-only upload -> RAW save -> ingest -> metadata/heads
 # =============================================================================
 with st.expander("🔧 Ingest pipeline (debug)"):
-    root_mode = st.radio("Path mode", ["Local", "Dropbox"], horizontal=True)
-    default_local = "/content/drive/MyDrive/Ethos LLM/Project_Root"
-    default_dbx = "/Project_Root"
-
-    # keep a stable place to store the chosen dropbox root
+    # Auto-detect Dropbox root once
     if "dbx_root" not in st.session_state:
-        st.session_state["dbx_root"] = default_dbx
+        # tries /Project_Root (App Folder) then /Apps/Ethos LLM/Project_Root (Full)
+        def _detect_dropbox_root(list_func):
+            candidates = ["/Project_Root", "/Apps/Ethos LLM/Project_Root"]
+            for root in candidates:
+                raw_path = "/".join([root.rstrip("/"), "04_Data", "00_Raw_Files"])
+                try:
+                    list_func(raw_path)
+                    return root, raw_path, None
+                except Exception as e:
+                    last_err = str(e)
+            return None, None, last_err
 
-    if root_mode == "Local":
-        project_root_local = st.text_input("Project_Root (local)", value=default_local)
-        app_paths = AppPaths(project_root_local=project_root_local)
-    else:
-        # Dropbox mode
-        col1, col2 = st.columns([3,1])
-        with col1:
-            project_root_dropbox = st.text_input(
-                "Project_Root (Dropbox)",
-                value=st.session_state["dbx_root"]
+        detected_root, _, _ = _detect_dropbox_root(dbx_list_xlsx)
+        st.session_state["dbx_root"] = detected_root or "/Project_Root"
+
+    dbx_root = st.text_input("Project_Root (Dropbox)", value=st.session_state["dbx_root"])
+    app_paths = AppPaths(project_root_dropbox=dbx_root)
+
+    st.caption(f"RAW folder: {app_paths.dbx_raw_folder}")
+
+    up = st.file_uploader("Upload an Excel file (saved to Dropbox RAW, then ingested)", type=["xlsx", "xlsm"])
+
+    if up is not None:
+        try:
+            # 1) Read upload bytes
+            up.seek(0)
+            file_bytes = up.read()
+            filename = up.name
+
+            # 2) Save upload to RAW in Dropbox
+            raw_dest = f"{app_paths.dbx_raw_folder}/{filename}"
+            upload_bytes(raw_dest, file_bytes)
+            st.success(f"Saved to Dropbox RAW: {raw_dest}")
+
+            # 3) Run ingest pipeline on the uploaded bytes (not the RAW path)
+            cleaned_sheets, meta = run_ingest_pipeline(
+                source=file_bytes,
+                filename=filename,
+                paths=app_paths
             )
-        with col2:
-            if st.button("🔍 Auto-detect"):
-                detected_root, detected_raw, errs = _detect_dropbox_root(dbx_list_xlsx)
-                if detected_root:
-                    st.session_state["dbx_root"] = detected_root
-                    project_root_dropbox = detected_root
-                    st.success(f"Detected Dropbox root: {detected_root}")
-                    st.caption(f"RAW path: {detected_raw}")
-                else:
-                    st.error("Could not detect a valid Dropbox root.")
-                    if errs:
-                        with st.expander("Show detection errors"):
-                            for r, msg in errs:
-                                st.write(f"- {r}: {msg}")
 
-        app_paths = AppPaths(project_root_dropbox=project_root_dropbox)
+            # 4) Show per-sheet heads and metadata/summaries
+            st.subheader("Run metadata (Dropbox ingest)")
+            st.json(meta)
 
-    # --- Local file upload path (unchanged) ---
-    up = st.file_uploader("Upload an Excel file to ingest (local test)", type=["xlsx", "xlsm"])
-    run_btn = st.button("Run Ingest Pipeline (local upload)")
+            st.subheader("Sheets cleaned (preview)")
+            st.write(list(cleaned_sheets.keys()))
+            for sname, df in cleaned_sheets.items():
+                st.markdown(f"### Sheet: `{sname}`")
+                st.dataframe(df.head(5), use_container_width=True)
 
-    if run_btn and up is not None:
-        file_bytes = up.read()
-        cleaned_sheets, meta = run_ingest_pipeline(
-            source=file_bytes,
-            filename=up.name,
-            paths=app_paths
-        )
+            if "sheets" in meta:
+                st.markdown("### Per-sheet summaries")
+                rows = []
+                for s in meta["sheets"]:
+                    rows.append({
+                        "sheet_name": s.get("sheet_name"),
+                        "normalized_sheet_type": s.get("normalized_sheet_type"),
+                        "records": s.get("record_count"),
+                        "summary": s.get("summary_text"),
+                        "name_hint": s.get("name_implied_type"),
+                        "feature_hint": s.get("feature_implied_type"),
+                        "resolution": s.get("type_resolution"),
+                    })
+                st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
-        st.subheader("Run metadata")
-        st.json(meta)
+            # 5) Append metadata to master index (Dropbox)
+            meta_path = getattr(app_paths, "dbx_master_metadata_path", None)
+            if not meta_path:
+                st.error("Dropbox metadata path not set.")
+            else:
+                try:
+                    existing = json.loads(dbx_read_bytes(meta_path).decode("utf-8"))
+                    if not isinstance(existing, list):
+                        existing = []
+                except Exception:
+                    existing = []
+                existing.append(meta)
+                upload_json(meta_path, existing)
+                st.success(f"✅ Metadata updated at: {meta_path}")
 
-        st.subheader("Sheets cleaned")
-        st.write(list(cleaned_sheets.keys()))
+            st.info("Next: use 'Process a RAW workbook (Dropbox ➜ Dropbox)' to produce the Cleansed workbook.")
 
-        if "sheets" in meta:
-            st.markdown("### Per-sheet summaries")
-            rows = []
-            for s in meta["sheets"]:
-                rows.append({
-                    "sheet_name": s.get("sheet_name"),
-                    "normalized_sheet_type": s.get("normalized_sheet_type"),
-                    "records": s.get("record_count"),
-                    "summary": s.get("summary_text")
-                })
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
-
+        except Exception as e:
+            st.error(f"Ingest (Dropbox) failed: {e}")
 
 # =============================================================================
 # Sidebar: Cloud health checks
