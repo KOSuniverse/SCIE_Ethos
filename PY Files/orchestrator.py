@@ -3,11 +3,33 @@
 import os
 import re
 import json
-from typing import Dict, Any, Tuple
+from typing import Optional, Any, Tuple, Dict
+import pandas as pd
 
 from llm_client import get_openai_client
 from loader import load_master_metadata_index
 from executor import run_intent_task
+from phase1_ingest.pipeline import run_pipeline
+
+class Paths:
+    """
+    Minimal shim to pass metadata folder & alias path.
+    Update to your real project's Paths object if you have one.
+    """
+    def __init__(self, metadata_folder: str, alias_json: Optional[str] = None):
+        self.metadata_folder = metadata_folder
+        self.alias_json = alias_json  # optional explicit path
+
+def run_ingest_pipeline(
+    source: bytes | bytearray | str,
+    filename: Optional[str],
+    paths: Optional[Any]
+) -> Tuple[Dict[str, pd.DataFrame], dict]:
+    """
+    Thin wrapper for Phase 1 ingestion. Returns (cleaned_sheets, metadata).
+    """
+    cleaned_sheets, metadata = run_pipeline(source=source, filename=filename, paths=paths)
+    return cleaned_sheets, metadata
 
 # --- Supported intents & lightweight biasing --------------------------------
 SUPPORTED_INTENTS = [
