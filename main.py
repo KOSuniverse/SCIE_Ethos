@@ -62,6 +62,31 @@ def build_xlsx_bytes_from_sheets(sheets: dict[str, pd.DataFrame]) -> bytes:
     return buf.read()
 
 
+# --- Build a human-readable Markdown summary from pipeline metadata ---
+def _build_summary_markdown(metadata: dict) -> str:
+    import datetime as _dt
+    fn = metadata.get("source_filename", "(unknown)")
+    sheet_count = metadata.get("sheet_count", 0)
+    exec_txt = metadata.get("executive_summary", "")
+    ts = _dt.datetime.utcnow().strftime("%Y-%m-%d %H:%MZ")
+
+    lines = [f"# Executive Summary — {fn}", "", f"_Generated: {ts}_", "", f"**Sheets:** {sheet_count}", ""]
+    if exec_txt:
+        lines += ["## Overview", exec_txt, ""]
+
+    lines.append("## Per‑Sheet EDA")
+    for s in metadata.get("sheets", []):
+        lines.append(f"### {s.get('sheet_name')}")
+        lines.append(f"- Type: `{s.get('normalized_sheet_type')}`")
+        lines.append(f"- Records: {s.get('record_count')}")
+        eda = (s.get("eda_text") or "").strip()
+        if eda:
+            lines.append("")
+            lines.append(eda)
+            lines.append("")
+    return "\n".join(lines)
+
+
 # --- Dropbox root auto-detect helper ---
 def _detect_dropbox_root(list_func):
     """
@@ -362,6 +387,21 @@ if raw_files:
             existing.append(metadata)
             upload_json(meta_path, existing)
             st.success(f"✅ Metadata updated at: {meta_path}")
+
+            # --- Save per-file summaries to Dropbox (JSON + Markdown) ---
+            summaries_dbx = getattr(app_paths, "dbx_summaries_folder", None)
+            if summaries_dbx:
+                # reuse the same base you used for cleansed output naming
+                run_meta_path = f"{summaries_dbx}/{out_base}_run_metadata.json"
+                upload_json(run_meta_path, metadata)
+
+                exec_md_bytes = _build_summary_markdown(metadata).encode("utf-8")
+                exec_md_path = f"{summaries_dbx}/{out_base}_executive_summary.md"
+                upload_bytes(exec_md_path, exec_md_bytes)
+
+                st.success(f"✅ Summaries saved:\n- {run_meta_path}\n- {exec_md_path}")
+            else:
+                st.warning("Summaries folder not set on Dropbox (03_Summaries). Skipping summaries save.")
 
             with st.expander("Sheets cleaned"):
                 st.write(list(cleaned_sheets.keys()))
