@@ -4,157 +4,146 @@ import os
 import tempfile
 from typing import Dict, Tuple, Any, Optional
 
-# Import your real pipeline module
 from phase1_ingest import pipeline as pl
-
-# Reuse your cloud/helpers
-from path_utils import get_project_paths  # OK to keep for symmetry
 from dbx_utils import read_file_bytes as dbx_read_bytes
 
+BytesLike = (bytes, bytearray, io.BytesIO)
 
 def run_pipeline_cloud(
+    source: Any,
     filename: str,
     paths: Any,
-    storage: Any = "dropbox",
+    storage: Optional[str] = None,
     *,
     file_bytes: Optional[bytes] = None
 ) -> Tuple[Dict[str, "pd.DataFrame"], dict]:
     """
-    Safe adapter — supports these call shapes:
-      run_pipeline_cloud(filename, paths)
-      run_pipeline_cloud(filename, paths, "dropbox")
-      run_pipeline_cloud(filename, paths, storage="local")
-      run_pipeline_cloud(filename, paths, file_bytes=b"...")
-      (defensive) run_pipeline_cloud(filename, "dropbox", paths)  # swapped args
-      (defensive) run_pipeline_cloud(filename, paths, paths)     # accidental dup
+    Final adapter matching main.py usage:
+      cleaned_sheets, metadata = run_pipeline_cloud(b, filename, app_paths)
+
+    Accepted 'source':
+      - bytes/bytearray/BytesIO  -> use directly
+      - str Dropbox path         -> read via dbx
+      - str local path           -> open directly
+      - None                     -> load by (storage, filename, paths)
+
+    Behavior:
+      - Prefer Dropbox folders when paths.dbx_* are present.
+      - Never assumes paths.raw_folder exists; checks before using.
+      - Always returns (cleaned_sheets: dict[str, DataFrame], metadata: dict).
     """
-    paths, storage_name = _normalize_args(paths, storage)
+    # 0) Normalize storage hint
+    storage_name = _normalize_storage(storage, paths)
 
-    # --- Acquire file bytes
-    if file_bytes is None:
-        if storage_name == "dropbox":
-            raw_path = f"{_rstrip_slash(paths.raw_folder)}/{filename}"
-            file_bytes = dbx_read_bytes(raw_path)
-        elif storage_name == "local":
-            local_path = os.path.join(paths.raw_folder, filename)
-            with open(local_path, "rb") as f:
-                file_bytes = f.read()
+    # 1) Acquire bytes or path handle from 'source'
+    if isinstance(source, BytesLike):
+        b = _to_bytes(source)
+    elif isinstance(source, str) and source.strip():
+        # A string source can be a Dropbox path or a local path
+        if source.startswith("/"):
+            b = dbx_read_bytes(source)
         else:
-            # Unknown → fall back to Dropbox
-            raw_path = f"{_rstrip_slash(paths.raw_folder)}/{filename}"
-            file_bytes = dbx_read_bytes(raw_path)
+            with open(source, "rb") as f:
+                b = f.read()
+    elif source is None:
+        # Fallback: locate by filename using storage + paths
+        b = _load_by_filename(filename, paths, storage_name)
+    else:
+        raise TypeError(f"Unsupported 'source' type: {type(source).__name__}")
 
-    if not file_bytes:
+    if not b:
         raise FileNotFoundError(f"Could not load bytes for '{filename}' (storage={storage_name}).")
 
-    # --- Try BytesIO-based call first
-    bio = io.BytesIO(file_bytes)
+    # 2) Call your real pipeline with bytes first, then temp path variants
+    bio = io.BytesIO(b)
+
+    # A) BytesIO with explicit kwargs
     try:
         out = pl.run_pipeline(bio, filename=filename, paths=paths)  # type: ignore
         return _normalize_pipeline_output(out, filename)
     except Exception:
         pass
 
-    # --- Try temp file path variants
+    # B/C) Temp file path attempts (with/without kwargs)
     with tempfile.TemporaryDirectory() as td:
         tmp_path = os.path.join(td, filename)
         with open(tmp_path, "wb") as f:
-            f.write(file_bytes)
+            f.write(b)
 
-        # B) full args
         try:
             out = pl.run_pipeline(tmp_path, filename=filename, paths=paths)  # type: ignore
             return _normalize_pipeline_output(out, filename)
         except Exception:
             pass
 
-        # C) minimal args (path only)
         try:
             out = pl.run_pipeline(tmp_path)  # type: ignore
             return _normalize_pipeline_output(out, filename)
         except Exception:
             pass
 
-        # D) minimal args (BytesIO only)
-        try:
-            out = pl.run_pipeline(bio)  # type: ignore
-            return _normalize_pipeline_output(out, filename)
-        except Exception as e:
-            raise RuntimeError(
-                f"run_pipeline failed for '{filename}' using all known signatures."
-            ) from e
+    # D) Last resort: BytesIO only
+    out = pl.run_pipeline(bio)  # type: ignore
+    return _normalize_pipeline_output(out, filename)
 
 
-# ---------- helpers ----------
+# ---------------- helpers ----------------
 
-def _normalize_args(paths: Any, storage: Any) -> Tuple[Any, str]:
+def _to_bytes(x: Any) -> bytes:
+    if isinstance(x, (bytes, bytearray)):
+        return bytes(x)
+    if isinstance(x, io.BytesIO):
+        pos = x.tell()
+        x.seek(0)
+        b = x.read()
+        x.seek(pos)
+        return b
+    raise TypeError("Not bytes-like")
+
+def _normalize_storage(storage: Optional[str], paths: Any) -> str:
     """
-    Returns (paths_obj, storage_name).
-    - If args are swapped (paths is str and storage has .raw_folder), swap them.
-    - If both look wrong, raise a clear error.
+    Decide storage mode. Prefer Dropbox if paths has dbx folders.
     """
-    # Case 1: correct order already
-    if hasattr(paths, "raw_folder") and not isinstance(storage, type(paths)):
-        return paths, _normalize_storage(storage)
-
-    # Case 2: swapped (paths is str-like, storage is paths object)
-    if isinstance(paths, str) and hasattr(storage, "raw_folder"):
-        return storage, _normalize_storage(paths)
-
-    # Case 3: duplicate paths passed (paths, paths)
-    if hasattr(paths, "raw_folder") and hasattr(storage, "raw_folder"):
-        # Prefer the first, default storage to 'dropbox'
-        return paths, "dropbox"
-
-    # Case 4: both strings — assume first was meant to be storage (rare)
-    if isinstance(paths, str) and isinstance(storage, str):
-        raise TypeError(
-            "run_pipeline_cloud expected a paths object, but received two strings. "
-            "Call as run_pipeline_cloud(filename, paths, storage='dropbox')."
-        )
-
-    # Otherwise ambiguous
-    raise TypeError(
-        "run_pipeline_cloud could not identify the 'paths' object. "
-        "Pass a valid paths object with a 'raw_folder' attribute."
-    )
-
-
-def _normalize_storage(storage: Any) -> str:
-    """Return a safe storage name ('dropbox' or 'local'), defaulting to 'dropbox'."""
-    if isinstance(storage, str):
-        s = storage.strip().lower()
-        return s if s in {"dropbox", "local"} else "dropbox"
-    # If caller passed a paths-like object here, default to dropbox
-    if hasattr(storage, "raw_folder"):
+    if isinstance(storage, str) and storage.strip().lower() in {"dropbox", "local"}:
+        return storage.strip().lower()
+    # If AppPaths exposes Dropbox folders, default to dropbox
+    if hasattr(paths, "dbx_raw_folder") and getattr(paths, "dbx_raw_folder", None):
         return "dropbox"
-    return "dropbox"
+    return "local"
 
+def _load_by_filename(filename: str, paths: Any, storage_name: str) -> bytes:
+    """
+    Load bytes using filename + paths + storage hint, without assuming local raw_folder exists.
+    """
+    if storage_name == "dropbox":
+        dbx_raw = getattr(paths, "dbx_raw_folder", None)
+        if not dbx_raw:
+            raise RuntimeError("Dropbox mode requested but 'dbx_raw_folder' is not set on paths.")
+        dbx_path = f"{dbx_raw.rstrip('/')}/{filename}"
+        return dbx_read_bytes(dbx_path)
 
-def _rstrip_slash(p: str) -> str:
-    return p[:-1] if p.endswith("/") else p
-
+    # local
+    local_raw = getattr(paths, "raw_folder", None)
+    if not local_raw:
+        raise RuntimeError("Local mode requested but 'raw_folder' is not set on paths.")
+    local_path = os.path.join(local_raw, filename)
+    with open(local_path, "rb") as f:
+        return f.read()
 
 def _normalize_pipeline_output(out: Any, filename: str) -> Tuple[Dict[str, "pd.DataFrame"], dict]:
-    """
-    Accepts several shapes:
-      - (dict[str, DataFrame], dict)
-      - {"sheets": dict[str, DataFrame], "metadata": dict}
-      - {"cleaned_sheets": ..., "metadata": ...}
-      - dict[str, DataFrame]  (no metadata)
-    Returns (cleaned_sheets, metadata).
-    """
+    # Tuple already
     if isinstance(out, tuple) and len(out) == 2:
         return out[0], out[1]
-
+    # Dict shapes
     if isinstance(out, dict):
         if "cleaned_sheets" in out and "metadata" in out:
             return out["cleaned_sheets"], out["metadata"]
         if "sheets" in out and "metadata" in out:
             return out["sheets"], out["metadata"]
+        # Heuristic: dict[str, DataFrame]
         if out and all(isinstance(k, str) for k in out.keys()):
             return out, {"source_filename": filename, "note": "Metadata synthesized by adapter"}
-
+    # Fallback: unknown shape
     return out, {"source_filename": filename, "note": "Metadata synthesized by adapter"}
 
 
