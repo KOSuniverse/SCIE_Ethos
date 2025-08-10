@@ -8,7 +8,6 @@ from openai import OpenAI
 CONFIG_PATH = "config/instructions_master.yaml"
 ASSISTANT_META_PATH = "config/assistant.json"
 
-# Keep name stable to avoid dupes
 ASSISTANT_NAME = "SCIE Ethos Supply Chain & Inventory Analyst"
 
 # ---------------------------
@@ -21,7 +20,7 @@ def load_yaml(path: str) -> dict:
 def to_instruction_text(cfg: dict) -> str:
     """
     Flatten YAML to one instruction string for the Assistants API.
-    Mirrors your existing behavior; extended only if needed.
+    Includes fallbacks for current YAML key names.
     """
     lines = []
     ap = cfg.get("assistant_profile", {})
@@ -38,10 +37,8 @@ def to_instruction_text(cfg: dict) -> str:
             for k, v in items.items():
                 lines.append(f"- {k}: {v}")
 
-    # Core directives / rules
     add_section("Core Directives", cfg.get("core_directives", []))
 
-    # Intents + sub-skills
     intents = cfg.get("intents", {}) or {}
     if intents:
         lines.append("\n# Intents & Sub-skills (choose best fit; reason internally)")
@@ -51,10 +48,9 @@ def to_instruction_text(cfg: dict) -> str:
             if subs:
                 lines.append(f"  * sub-skills: {', '.join(subs)}")
 
-    # Gap detection
     add_section("Gap Detection Rules", cfg.get("gap_detection_rules", []))
 
-    # Confidence scoring
+    # --- FIX: accept confidence or confidence_scoring ---
     conf = cfg.get("confidence_scoring", {}) or cfg.get("confidence", {})
     if conf:
         lines.append("\n# Confidence Scoring")
@@ -66,7 +62,7 @@ def to_instruction_text(cfg: dict) -> str:
         if actions:
             lines.append(f"Actions: {json.dumps(actions)}")
 
-    # Glossary & alias behavior
+    # --- FIX: accept glossary or glossary_and_alias_injection ---
     gloss = cfg.get("glossary_and_alias_injection", {}) or cfg.get("glossary", {})
     if gloss:
         lines.append("\n# Glossary & Alias Behavior")
@@ -82,26 +78,21 @@ def to_instruction_text(cfg: dict) -> str:
         if behavior:
             lines.append(f"- Behavior: {behavior}")
 
-    # Formatting rules
     add_section("Formatting Rules", cfg.get("formatting_rules", []))
 
-    # Retrieval settings
     retr = cfg.get("retrieval_settings", {}) or cfg.get("retrieval", {})
     if retr:
         lines.append("\n# Retrieval Settings")
         lines.append(json.dumps(retr))
 
-    # Abstention
     add_section("Abstention Behavior", cfg.get("abstention_behavior", []))
 
-    # Output templates
     outs = cfg.get("output_templates", {})
     if outs:
         lines.append("\n# Output Templates (use as structure; adapt as needed)")
         for k, v in outs.items():
             lines.append(f"\nTEMPLATE: {k}\n{v}")
 
-    # Always-on guardrails
     lines.append("\nAlways ground answers in retrieved files, cite sources, and separate 'Data Needed' from findings.")
     return "\n".join(lines)
 
@@ -112,7 +103,6 @@ def create_or_update_assistant(client: OpenAI, cfg: dict, instructions_text: str
     model = cfg.get("assistant_profile", {}).get("primary_model", "gpt-4o-mini")
     tools = [{"type": "file_search"}, {"type": "code_interpreter"}]
 
-    # Try to find by name to avoid duplicates
     existing = client.beta.assistants.list(limit=50)
     target = None
     for a in existing.data:
@@ -146,10 +136,6 @@ def save_meta(assistant, vector_store_id: Optional[str] = None):
 # Vector Store helpers
 # ---------------------------
 def ensure_vector_store(client: OpenAI, name: str) -> str:
-    """
-    Create (or reuse) a vector store by name and return its id.
-    """
-    # Try to reuse by name
     stores = client.beta.vector_stores.list(limit=100)
     for vs in stores.data:
         if vs.name == name:
@@ -158,9 +144,6 @@ def ensure_vector_store(client: OpenAI, name: str) -> str:
     return vs.id
 
 def attach_vector_store(client: OpenAI, assistant_id: str, vector_store_id: str):
-    """
-    Attach the vector store to the assistant's File Search tool resources.
-    """
     client.beta.assistants.update(
         assistant_id=assistant_id,
         tool_resources={"file_search": {"vector_store_ids": [vector_store_id]}},
@@ -170,28 +153,21 @@ def attach_vector_store(client: OpenAI, assistant_id: str, vector_store_id: str)
 # Main
 # ---------------------------
 def main():
-    # Load config & instructions
     cfg = load_yaml(CONFIG_PATH)
     instructions_text = to_instruction_text(cfg)
-
-    # OpenAI client
     client = OpenAI()  # uses OPENAI_API_KEY
 
-    # Create/update assistant
     assistant = create_or_update_assistant(client, cfg, instructions_text)
 
-    # Determine vector store name (env overrides YAML)
     vector_store_name = (
         os.getenv("VECTOR_STORE_NAME")
         or cfg.get("assistant_profile", {}).get("vector_store_name")
         or "SCIE-Ethos-Store"
     )
 
-    # Create or reuse and attach vector store
     vs_id = ensure_vector_store(client, vector_store_name)
     attach_vector_store(client, assistant.id, vs_id)
 
-    # Write assistant metadata (with vector store id)
     meta = save_meta(assistant, vector_store_id=vs_id)
 
     print("✅ Assistant ready and vector store attached.")
@@ -199,5 +175,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
