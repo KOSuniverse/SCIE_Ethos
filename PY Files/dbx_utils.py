@@ -1,7 +1,7 @@
 # PY Files/dbx_utils.py
 import io, json
 import os
-from typing import List, Dict, Optional, Any, Union
+from typing import List, Dict, Optional, Union
 import pandas as pd
 
 try:
@@ -72,10 +72,8 @@ def upload_bytes(path_lower: str, data: bytes, mode: str = "overwrite"):
 
 # ---------------- Excel bytes builder (hardened) ----------------
 
-BytesLike = (bytes, bytearray, io.BytesIO)
-
 def save_xlsx_bytes(
-    source: Union[Dict[str, pd.DataFrame], BytesLike]
+    source: Union[Dict[str, pd.DataFrame], bytes, bytearray, io.BytesIO]
 ) -> bytes:
     """
     Build a valid .xlsx byte stream.
@@ -124,3 +122,4 @@ def upload_json(path_lower: str, obj: dict, mode: str = "overwrite"):
     """Upload a JSON object to Dropbox."""
     data = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
     upload_bytes(path_lower, data, mode=mode)
+
