@@ -1,39 +1,70 @@
-# llm_client.py
+# PY Files/llm_client.py
 
 import os
-import openai
-from dotenv import load_dotenv
+from typing import Optional
 
-# Optional import if using Streamlit UI
+# Optional import if running inside Streamlit
 try:
-    import streamlit as st
-    streamlit_available = True
-except ImportError:
-    streamlit_available = False
+    import streamlit as st  # type: ignore
+    _SECRETS = dict(getattr(st, "secrets", {}))
+except Exception:
+    _SECRETS = {}
 
-# --- Load environment variables ---
-load_dotenv()
-
-def get_openai_api_key():
+def _get_api_key() -> str:
     """
-    Retrieves the OpenAI API key from .env or Streamlit secrets.
+    Prefer Streamlit secrets, then env var.
     """
-    # Priority 1: .env file
-    key = os.getenv("OPENAI_API_KEY")
-
-    # Priority 2: Streamlit secrets
-    if not key and streamlit_available and hasattr(st, "secrets"):
-        key = st.secrets.get("OPENAI_API_KEY", None)
-
-    # If still missing
+    key = _SECRETS.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
     if not key:
-        raise ValueError("❌ OpenAI API key not found in .env or Streamlit secrets.")
-    
+        raise RuntimeError(
+            "OPENAI_API_KEY not configured. Add it to Streamlit secrets "
+            "(.streamlit/secrets.toml) or set it as an environment variable."
+        )
     return key
 
 def get_openai_client():
     """
-    Returns an OpenAI client using the resolved API key.
+    Return an OpenAI v1 client, or raise a clear error.
     """
-    api_key = get_openai_api_key()
-    return openai.OpenAI(api_key=api_key)
+    api_key = _get_api_key()
+    try:
+        from openai import OpenAI
+        return OpenAI(api_key=api_key)
+    except Exception as e:
+        raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
+
+def chat_completion(client, messages, model: str = "gpt-4o-mini") -> str:
+    """
+    Compatibility wrapper:
+    - Try Chat Completions
+    - Fall back to Responses API
+    Returns assistant text.
+    """
+    # Try Chat Completions first
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.2,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception:
+        # Fallback: Responses API
+        try:
+            resp = client.responses.create(
+                model=model,
+                input=[{"role": "user", "content": messages[-1]["content"]}],
+                temperature=0.2,
+            )
+            # Prefer the convenience property if present
+            text = getattr(resp, "output_text", None)
+            if text:
+                return text.strip()
+            # Otherwise scan structured output
+            for item in getattr(resp, "output", []) or []:
+                if getattr(item, "type", "") == "output_text":
+                    return (getattr(item, "text", "") or "").strip()
+            return ""
+        except Exception as e2:
+            return f"⚠️ GPT summary failed: {e2}"
+
