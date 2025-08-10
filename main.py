@@ -467,13 +467,87 @@ with st.expander("Knowledge Base controls"):
         st.success("KB build complete")
         st.json(res)
 
-# =============================================================================
-# Q&A over Cleansed (coming next)
-# =============================================================================
-st.header("4) Ask questions about a Cleansed workbook")
-st.caption("This will be enabled after we switch the orchestrator/metadata loader to Dropbox paths.")
-st.text_input("Your question", value="", disabled=True)
-st.button("Run Query", disabled=True)
+# =========================
+# 4) Ask questions about a Cleansed workbook (cloud-only)
+# =========================
+import datetime as _dt
+from orchestrator import answer_question
+from dbx_utils import list_xlsx
+
+st.markdown("## 4) Ask questions about a Cleansed workbook")
+
+cleansed_folder = getattr(app_paths, "dbx_cleansed_folder", None)
+if not cleansed_folder:
+    st.warning("Cleansed folder not configured on Dropbox. Set app_paths.dbx_cleansed_folder.")
+else:
+    try:
+        files = list_xlsx(cleansed_folder)
+    except Exception as e:
+        files = []
+        st.error(f"Could not list cleansed files: {e}")
+
+    if not files:
+        st.info("No cleansed workbooks found in Dropbox yet. Run a cleanse in section 3 first.")
+    else:
+        # Recent first (list_xlsx already sorts newest first)
+        nice_labels = [
+            f"{f['name']}"
+            + (f" — {f['server_modified'].strftime('%Y-%m-%d %H:%M')}" if f.get('server_modified') else "")
+            for f in files
+        ]
+        sel_idx = st.selectbox("Choose a cleansed workbook:", range(len(files)), format_func=lambda i: nice_labels[i], key="qa_select_clean")
+        sel = files[sel_idx]
+        cleansed_paths = [sel["path_lower"]]
+
+        st.caption(f"Selected: {sel['path_lower']}")
+        user_q = st.text_area(
+            "Your question",
+            placeholder="e.g., Why did Aged WIP cost increase in June vs May? Show top plants and drivers.",
+            height=100,
+            key="qa_question",
+        )
+
+        run_btn = st.button("Run Q&A", type="primary", disabled=(not user_q.strip()))
+        if run_btn:
+            with st.spinner("Thinking with GPT and running tools…"):
+                try:
+                    result = answer_question(
+                        user_question=user_q,
+                        app_paths=app_paths,
+                        cleansed_paths=cleansed_paths,
+                        answer_style="concise",
+                    )
+                except Exception as e:
+                    st.error(f"Orchestrator error: {e}")
+                    result = None
+
+            if result:
+                st.markdown("### Answer")
+                st.write(result.get("final_text", ""))
+
+                st.markdown("### What I did")
+                ii = result.get("intent_info", {})
+                st.write(f"- Intent: **{ii.get('intent')}** (confidence {ii.get('confidence')}) — {ii.get('reason')}")
+                for call in result.get("tool_calls", []):
+                    tool = call.get("tool")
+                    meta = call.get("result_meta", {})
+                    st.write(f"- Tool: `{tool}` → {json.dumps(meta, ensure_ascii=False)}")
+
+                arts = result.get("artifacts") or []
+                if arts:
+                    st.markdown("### Artifacts (Dropbox)")
+                    for p in arts:
+                        st.write(p)
+
+                kb = result.get("kb_citations") or []
+                if kb:
+                    st.markdown("### KB Sources")
+                    for c in kb:
+                        st.write(c)
+
+                # Optional: show debug for troubleshooting
+                with st.expander("Debug"):
+                    st.json(result.get("debug", {}))
 
 # =============================================================================
 # Project Manifest (diagnostic)
