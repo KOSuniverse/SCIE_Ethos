@@ -18,9 +18,9 @@ import json
 import traceback
 
 from llm_client import get_openai_client, chat_completion
-import llm_prompts  # your scaffold (renamed from llm/prompts.py to llm_prompts.py)
+import llm_prompts  # your scaffold (llm_prompts.py)
 from intent import classify_intent
-from tools_runtime import tool_specs, dataframe_query, chart, kb_search
+from tools_runtime import tool_specs, dataframe_tools, chart, kb_search  # your tool definitions
 
 class Paths:
     """
@@ -65,7 +65,7 @@ def answer_question(
     model = "gpt-4o" if model_size == "large" else "gpt-4o-mini"
 
     # 1) Propose a tool plan (JSON) with GPT
-    tools_catalog = tool_specs()
+    tools_catalog = _safe_tool_specs()
     client = get_openai_client()
     plan = _propose_tool_plan(client, user_question, tools_catalog, cleansed_paths, app_paths)
 
@@ -106,8 +106,22 @@ def answer_question(
     }
 
 # ----------------------------
-# Internal helpers
+# Internal helpers (with lazy imports)
 # ----------------------------
+
+def _safe_tool_specs() -> Dict[str, Dict[str, Any]]:
+    try:
+        from tools_runtime import tool_specs  # lazy
+        return tool_specs()
+    except Exception as e:
+        # Minimal fallback so the app still renders and we can see the error
+        return {
+            "_load_error": {
+                "purpose": f"tools_runtime.tool_specs failed to import: {e}",
+                "args_schema": {},
+                "returns": "N/A"
+            }
+        }
 
 def _propose_tool_plan(client, question: str, tools: Dict[str, Dict[str, Any]], cleansed_paths: List[str], app_paths: Any) -> List[Dict[str, Any]]:
     """
@@ -166,39 +180,52 @@ def _execute_plan(plan: List[Dict[str, Any]], cleansed_paths: List[str], app_pat
     context: Dict[str, Any] = {"last_rows": None}
     artifacts: List[str] = []
 
+    # Lazy imports for tools (avoid top-level import failures)
+    try:
+        from tools_runtime import dataframe_query, chart, kb_search  # lazy
+    except Exception as e:
+        # Return a single error call so UI can display it
+        calls.append({"tool": "import", "args": {}, "error": f"Failed to import tools_runtime: {e}"})
+        return {"calls": calls, "context": context, "artifacts": artifacts}
+
     for step in plan:
         tool = (step.get("tool") or "").strip()
         args = step.get("args") or {}
 
-        # supply defaults
         if tool == "dataframe_query":
             args.setdefault("cleansed_paths", cleansed_paths[:1])
             args.setdefault("limit", 50)
             args.setdefault("artifact_folder", getattr(app_paths, "dbx_summaries_folder", None))
-            res = dataframe_query(**args)
-            # keep a small preview for potential chart
+            try:
+                res = dataframe_query(**args)
+            except Exception as e:
+                res = {"error": f"dataframe_query failed: {e}"}
             context["last_rows"] = res.get("preview")
             if res.get("artifact_path"):
                 artifacts.append(res["artifact_path"])
-            calls.append({"tool": tool, "args": args, "result_meta": {k: res.get(k) for k in ("rowcount","artifact_path","sheet_used")}})
+            calls.append({"tool": tool, "args": args, "result_meta": {k: res.get(k) for k in ("rowcount","artifact_path","sheet_used","error")}})
 
         elif tool == "chart":
-            # allow "$prev_rows" to reference last preview rows
             rows = args.get("rows")
             if isinstance(rows, str) and rows.strip() == "$prev_rows":
                 rows = context.get("last_rows") or []
             args["rows"] = rows
             args.setdefault("artifact_folder", getattr(app_paths, "dbx_charts_folder", getattr(app_paths, "dbx_eda_charts_folder", None)))
             args.setdefault("base_name", "chart")
-            res = chart(**args)
+            try:
+                res = chart(**args)
+            except Exception as e:
+                res = {"error": f"chart failed: {e}"}
             if res.get("image_path"):
                 artifacts.append(res["image_path"])
-            calls.append({"tool": tool, "args": args, "result_meta": {"image_path": res.get("image_path")}})
+            calls.append({"tool": tool, "args": args, "result_meta": {"image_path": res.get("image_path"), "error": res.get("error")}})
 
         elif tool == "kb_search":
-            res = kb_search(args.get("query",""), int(args.get("k", 5)))
-            calls.append({"tool": tool, "args": args, "result_meta": {"citations": res.get("citations", [])}})
-            # store for enrichment
+            try:
+                res = kb_search(args.get("query",""), int(args.get("k", 5)))
+            except Exception as e:
+                res = {"error": f"kb_search failed: {e}", "citations": []}
+            calls.append({"tool": tool, "args": args, "result_meta": {"citations": res.get("citations", []), "error": res.get("error")}})
             context["kb_chunks"] = res.get("chunks", [])
             context["kb_citations"] = res.get("citations", [])
 
@@ -218,7 +245,9 @@ def _summarize_exec(exec_result: Dict[str, Any]) -> Tuple[str, List[str]]:
     # Try to render the last dataframe preview as a tiny table in text
     lines = []
     for c in calls:
-        if c["tool"] == "dataframe_query":
+        if c.get("error"):
+            lines.append(f"Tool error: {c['error']}")
+        elif c["tool"] == "dataframe_query":
             meta = c.get("result_meta", {})
             lines.append(f"Dataframe Query • rows={meta.get('rowcount','?')} • sheet={meta.get('sheet_used')}")
             # keep it compact; show first 3 rows if available
