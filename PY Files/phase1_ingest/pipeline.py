@@ -143,17 +143,27 @@ def _detect_sheet_type_by_columns(columns, filename: str) -> str:
 
 
 def _resolve_alias_path(paths: Optional[Any]) -> Optional[str]:
-    """Find alias JSON path from your paths object, or fall back to metadata folder."""
+    """Find alias JSON path from your paths object, preferring explicit, then Local, then Dropbox."""
     if paths is None:
         return None
+
+    # 1) Explicit path wins
     for attr in ("alias_json", "ALIAS_JSON", "alias_path"):
         if hasattr(paths, attr):
             val = getattr(paths, attr)
             if isinstance(val, str) and val:
                 return val
-    if hasattr(paths, "metadata_folder"):
+
+    # 2) Local metadata folder (if present)
+    if hasattr(paths, "metadata_folder") and paths.metadata_folder:
         return os.path.join(paths.metadata_folder, "global_column_aliases.json")
+
+    # 3) Dropbox metadata folder (if present)
+    if hasattr(paths, "dbx_metadata_folder") and paths.dbx_metadata_folder:
+        return "/".join([paths.dbx_metadata_folder.rstrip("/"), "global_column_aliases.json"])
+
     return None
+
 
 
 def _resolve_sheet_aliases(paths: Optional[Any]) -> Optional[dict]:
