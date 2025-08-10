@@ -256,28 +256,66 @@ def _process_single_sheet(
     # 1) Clean / remap columns
     df = _clean_and_standardize_sheet(raw_df, alias_path)
 
-    # 2) Normalize sheet type via alias map; then enforce heuristic if still unclassified
+    # ------------ Robust name/feature hints (JSON optional) ------------
+    sheet_name_clean = (sheet_name or "").strip().lower()
+
+    # Name hint: prefer JSON aliases; otherwise simple substring rules
+    name_hint = "unclassified"
+    try:
+        if sheet_aliases:
+            for alias, norm in (sheet_aliases or {}).items():
+                if alias.lower() in sheet_name_clean:
+                    name_hint = (norm or "unclassified").strip().lower()
+                    break
+        if name_hint == "unclassified":
+            if "wip" in sheet_name_clean or "work in progress" in sheet_name_clean:
+                name_hint = "wip"
+            elif any(k in sheet_name_clean for k in ["inventory", "finished goods", "fg", "raw materials", "raw"]):
+                name_hint = "inventory"
+    except Exception:
+        # if alias logic fails, keep best-effort substring rules
+        if "wip" in sheet_name_clean or "work in progress" in sheet_name_clean:
+            name_hint = "wip"
+        elif any(k in sheet_name_clean for k in ["inventory", "finished goods", "fg", "raw materials", "raw"]):
+            name_hint = "inventory"
+
+    # Feature hint from columns (independent of JSON)
+    cols_lower = [str(c).lower() for c in df.columns]
+    part_cols = [c for c in cols_lower if "part" in c and ("no" in c or "number" in c or "id" in c)]
+    qty_cols  = [c for c in cols_lower if any(k in c for k in ["qty", "quantity", "on_hand", "remaining"])]
+    val_cols  = [c for c in cols_lower if any(k in c for k in ["value", "extended_cost", "inventory_value", "total_cost"])]
+    job_cols  = [c for c in cols_lower if ("job" in c) or ("work_order" in c) or c in ("wo", "wo_no", "wo_number")]
+    aging_cols = [c for c in cols_lower if ("days" in c) or ("aging" in c) or re.search(r"\b\d{1,3}\s*-\s*\d{1,3}\b", c)]
+
+    if part_cols and (qty_cols or val_cols):
+        feature_hint = "inventory"
+    elif job_cols and aging_cols:
+        feature_hint = "wip"
+    else:
+        feature_hint = "unclassified"
+
+    # Base type via normalize (if available), else unclassified
     try:
         norm_type = normalize_sheet_type(sheet_name, df, sheet_aliases) if sheet_aliases else "unclassified"
     except Exception:
         norm_type = "unclassified"
 
+    # Upgrade unclassified using feature/name hints
     if norm_type == "unclassified":
-        heuristic = _detect_sheet_type_by_columns(df.columns, filename)
-        if heuristic != "unclassified":
-            norm_type = heuristic
+        if feature_hint != "unclassified":
+            norm_type = feature_hint
+        elif name_hint != "unclassified":
+            norm_type = name_hint
 
-    # OPTIONAL: preserve name vs feature hints (if helper exists)
-    try:
-        from sheet_utils import classify_sheet
-        cls = classify_sheet(sheet_name, df, sheet_aliases)
-        norm_type = cls.get("final_type", norm_type)
-        name_hint = cls.get("name_hint", "unclassified")
-        feature_hint = cls.get("feature_hint", "unclassified")
-        type_resolution = cls.get("type_resolution", "unknown")
-    except Exception:
-        name_hint = "unclassified"
-        feature_hint = "unclassified"
+    # Final rule: if name=WIP but features=inventory, inventory wins
+    if name_hint == "wip" and feature_hint == "inventory":
+        norm_type = "inventory"
+        type_resolution = "feature_override_name"
+    elif norm_type == feature_hint and feature_hint != "unclassified":
+        type_resolution = "feature_hint"
+    elif norm_type == name_hint and name_hint != "unclassified":
+        type_resolution = "name_hint"
+    else:
         type_resolution = "unknown"
 
     # 3) Add metadata columns (non-destructive)
@@ -295,7 +333,7 @@ def _process_single_sheet(
     summary_text = ""
     try:
         if client is not None and chat_completion is not None:
-            summary_text = _gpt_summary_for_sheet(client, norm_type, filename, df, eda_text).strip()
+            summary_text = _gpt_summary_for_sheet(client, norm_type, filename, df, str(eda_text)).strip()
     except Exception as e:
         summary_text = f"⚠️ GPT summary failed: {e}"
 
