@@ -258,6 +258,19 @@ def _process_single_sheet(
         if heuristic != "unclassified":
             norm_type = heuristic
 
+    # OPTIONAL: preserve name vs feature hints (if helper exists)
+    try:
+        from sheet_utils import classify_sheet
+        cls = classify_sheet(sheet_name, df, sheet_aliases)
+        norm_type = cls.get("final_type", norm_type)
+        name_hint = cls.get("name_hint", "unclassified")
+        feature_hint = cls.get("feature_hint", "unclassified")
+        type_resolution = cls.get("type_resolution", "unknown")
+    except Exception:
+        name_hint = "unclassified"
+        feature_hint = "unclassified"
+        type_resolution = "unknown"
+
     # 3) Add metadata columns (non-destructive)
     if "source_sheet" not in df.columns:
         df["source_sheet"] = sheet_name
@@ -285,13 +298,14 @@ def _process_single_sheet(
         "filename": os.path.basename(filename),
         "sheet_name": sheet_name,
         "normalized_sheet_type": norm_type,
+        "name_implied_type": name_hint,
+        "feature_implied_type": feature_hint,
+        "type_resolution": type_resolution,
         "columns": list(map(str, df.columns)),
         "record_count": int(len(df)),
         "summary_text": summary_text
     }
     return df, meta
-
-
 def _hardened_process_excel(
     xls: pd.ExcelFile,
     filename: Optional[str],
