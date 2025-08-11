@@ -36,6 +36,7 @@ except Exception as e:
 from path_utils import get_project_paths  # may be used for diagnostics/manifest
 from dbx_utils import (
     list_xlsx as dbx_list_xlsx,
+    list_data_files as dbx_list_data_files,
     read_file_bytes as dbx_read_bytes,
     save_xlsx_bytes,
     upload_bytes,
@@ -209,7 +210,7 @@ with st.expander("🔧 Ingest pipeline (debug)"):
 
     st.caption(f"RAW folder: {app_paths.dbx_raw_folder}")
 
-    up = st.file_uploader("Upload an Excel file (saved to Dropbox RAW, then ingested)", type=["xlsx", "xlsm"])
+    up = st.file_uploader("Upload an Excel or CSV file (saved to Dropbox RAW, then ingested)", type=["xlsx", "xlsm", "csv"])
 
     if up is not None:
         try:
@@ -326,29 +327,40 @@ raw_files = []
 try:
     raw_dbx = getattr(app_paths, "dbx_raw_folder", None)
     if raw_dbx:
-        raw_files = dbx_list_xlsx(raw_dbx)
+        raw_files = dbx_list_data_files(raw_dbx)  # Now supports both Excel and CSV
     else:
         st.info("Switch to 'Dropbox' mode in the ingest expander to process cloud files.")
 except Exception as e:
     st.error(f"Could not list RAW files: {e}")
 
 if raw_files:
-    labels = [f'{f["name"]}  ·  {f["path_lower"]}' for f in raw_files]
-    choice = st.selectbox("Pick a RAW workbook", options=labels, index=0)
+    labels = [f'{f["name"]} ({f.get("file_type", "unknown")})  ·  {f["path_lower"]}' for f in raw_files]
+    choice = st.selectbox("Pick a RAW file (Excel or CSV)", options=labels, index=0)
 
     # Quick peek
-    if st.button("🔎 Preview RAW workbook"):
+    if st.button("🔎 Preview RAW file"):
         try:
             sel = raw_files[labels.index(choice)]["path_lower"]
+            file_type = raw_files[labels.index(choice)].get("file_type", "excel")
             b = dbx_read_bytes(sel)
-            xls = pd.ExcelFile(io.BytesIO(b))
-            st.success(f"Loaded: {sel}")
-            st.write("Sheets:", xls.sheet_names)
-            if xls.sheet_names:
-                first_sheet = xls.sheet_names[0]
-                df_preview = pd.read_excel(io.BytesIO(b), sheet_name=first_sheet, nrows=5)
-                st.caption(f"Preview: {first_sheet}")
+            
+            if file_type == "csv":
+                # Handle CSV file
+                import io
+                df_preview = pd.read_csv(io.BytesIO(b), nrows=5)
+                st.success(f"Loaded CSV: {sel}")
+                st.caption("Preview (first 5 rows):")
                 st.dataframe(df_preview, use_container_width=True)
+            else:
+                # Handle Excel file
+                xls = pd.ExcelFile(io.BytesIO(b))
+                st.success(f"Loaded Excel: {sel}")
+                st.write("Sheets:", xls.sheet_names)
+                if xls.sheet_names:
+                    first_sheet = xls.sheet_names[0]
+                    df_preview = pd.read_excel(io.BytesIO(b), sheet_name=first_sheet, nrows=5)
+                    st.caption(f"Preview: {first_sheet}")
+                    st.dataframe(df_preview, use_container_width=True)
         except Exception as e:
             st.warning(f"Preview failed: {e}")
 
@@ -421,27 +433,37 @@ cln_files = []
 try:
     cln_dbx = getattr(app_paths, "dbx_cleansed_folder", None)
     if cln_dbx:
-        cln_files = dbx_list_xlsx(cln_dbx)
+        cln_files = dbx_list_data_files(cln_dbx)  # Now supports both Excel and CSV
     else:
         st.info("Switch to 'Dropbox' mode to browse Cleansed files.")
 except Exception as e:
     st.error(f"Could not list Cleansed files: {e}")
 
 if cln_files:
-    cln_labels = [f'{f["name"]}  ·  {f["path_lower"]}' for f in cln_files]
-    cln_choice = st.selectbox("Pick a Cleansed workbook", options=cln_labels, index=0, key="cln_pick")
-    if st.button("🔎 Preview Cleansed workbook"):
+    cln_labels = [f'{f["name"]} ({f.get("file_type", "unknown")})  ·  {f["path_lower"]}' for f in cln_files]
+    cln_choice = st.selectbox("Pick a Cleansed file (Excel or CSV)", options=cln_labels, index=0, key="cln_pick")
+    if st.button("🔎 Preview Cleansed file"):
         try:
             sel = cln_files[cln_labels.index(cln_choice)]["path_lower"]
+            file_type = cln_files[cln_labels.index(cln_choice)].get("file_type", "excel")
             b = dbx_read_bytes(sel)
-            xls = pd.ExcelFile(io.BytesIO(b))
-            st.success(f"Loaded: {sel}")
-            st.write("Sheets:", xls.sheet_names)
-            if xls.sheet_names:
-                first_sheet = xls.sheet_names[0]
-                df_preview = pd.read_excel(io.BytesIO(b), sheet_name=first_sheet, nrows=5)
-                st.caption(f"Preview: {first_sheet}")
+            
+            if file_type == "csv":
+                # Handle CSV file
+                df_preview = pd.read_csv(io.BytesIO(b), nrows=5)
+                st.success(f"Loaded CSV: {sel}")
+                st.caption("Preview (first 5 rows):")
                 st.dataframe(df_preview, use_container_width=True)
+            else:
+                # Handle Excel file
+                xls = pd.ExcelFile(io.BytesIO(b))
+                st.success(f"Loaded Excel: {sel}")
+                st.write("Sheets:", xls.sheet_names)
+                if xls.sheet_names:
+                    first_sheet = xls.sheet_names[0]
+                    df_preview = pd.read_excel(io.BytesIO(b), sheet_name=first_sheet, nrows=5)
+                    st.caption(f"Preview: {first_sheet}")
+                    st.dataframe(df_preview, use_container_width=True)
         except Exception as e:
             st.warning(f"Preview failed: {e}")
 else:
@@ -473,7 +495,7 @@ with st.expander("Knowledge Base controls"):
 # =========================
 import datetime as _dt
 from orchestrator import answer_question
-from dbx_utils import list_xlsx
+from dbx_utils import list_data_files
 
 st.markdown("## 4) Ask questions about a Cleansed workbook")
 
@@ -482,21 +504,21 @@ if not cleansed_folder:
     st.warning("Cleansed folder not configured on Dropbox. Set app_paths.dbx_cleansed_folder.")
 else:
     try:
-        files = list_xlsx(cleansed_folder)
+        files = list_data_files(cleansed_folder)  # Now supports both Excel and CSV
     except Exception as e:
         files = []
         st.error(f"Could not list cleansed files: {e}")
 
     if not files:
-        st.info("No cleansed workbooks found in Dropbox yet. Run a cleanse in section 3 first.")
+        st.info("No cleansed files found in Dropbox yet. Run a cleanse in section 1 first.")
     else:
-        # Recent first (list_xlsx already sorts newest first)
+        # Recent first (list_data_files already sorts newest first)
         nice_labels = [
-            f"{f['name']}"
+            f"{f['name']} ({f.get('file_type', 'unknown')})"
             + (f" — {f['server_modified'].strftime('%Y-%m-%d %H:%M')}" if f.get('server_modified') else "")
             for f in files
         ]
-        sel_idx = st.selectbox("Choose a cleansed workbook:", range(len(files)), format_func=lambda i: nice_labels[i], key="qa_select_clean")
+        sel_idx = st.selectbox("Choose a cleansed file (Excel or CSV):", range(len(files)), format_func=lambda i: nice_labels[i], key="qa_select_clean")
         sel = files[sel_idx]
         cleansed_paths = [sel["path_lower"]]
 
