@@ -57,6 +57,33 @@ def list_xlsx(folder_path: str) -> List[Dict]:
     files.sort(key=lambda d: d.get("server_modified") or 0, reverse=True)
     return files
 
+def list_data_files(folder_path: str) -> List[Dict]:
+    """List .xlsx and .csv files in a Dropbox folder (handles pagination)."""
+    import dropbox
+    dbx = _get_dbx_client()
+    files: List[Dict] = []
+
+    resp = dbx.files_list_folder(folder_path)
+    entries = list(resp.entries)
+
+    while resp.has_more:
+        resp = dbx.files_list_folder_continue(resp.cursor)
+        entries.extend(resp.entries)
+
+    for e in entries:
+        if isinstance(e, dropbox.files.FileMetadata):
+            name_lower = e.name.lower()
+            if name_lower.endswith((".xlsx", ".csv")):
+                files.append({
+                    "name": e.name,
+                    "path_lower": e.path_lower,
+                    "server_modified": getattr(e, "server_modified", None),
+                    "file_type": "excel" if name_lower.endswith(".xlsx") else "csv"
+                })
+
+    files.sort(key=lambda d: d.get("server_modified") or 0, reverse=True)
+    return files
+
 def read_file_bytes(path_lower: str) -> bytes:
     """Read a file from Dropbox into memory."""
     dbx = _get_dbx_client()
