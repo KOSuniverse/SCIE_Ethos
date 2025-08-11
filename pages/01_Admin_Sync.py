@@ -123,7 +123,10 @@ with right:
                 if override_root: os.environ["DROPBOX_ROOT"] = override_root
                 if dry_run: st.warning("Dry run not implemented; running live sync.")
                 with CapturePrints() as cap:
-                    sync_dropbox_to_assistant(batch_size=int(batch_size))
+                    sync_dropbox_to_assistant(
+                        batch_size=int(batch_size),
+                        on_save_vector_store=lambda d: _write_json(VECTOR_META_PATH, d),
+                    )
                 logs = cap.buffer.getvalue(); ok = True
             except Exception as e:
                 logs += f"\nERROR: {e}\n{traceback.format_exc()}"
