@@ -41,16 +41,33 @@ try:
     from .dbx_utils import upload_bytes, read_file_bytes, upload_json
     DBX_AVAILABLE = True
 except ImportError:
-    DBX_AVAILABLE = False
+    try:
+        # Try importing from parent directory
+        import sys
+        import os
+        sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+        from dbx_utils import upload_bytes, read_file_bytes, upload_json
+        DBX_AVAILABLE = True
+    except ImportError:
+        DBX_AVAILABLE = False
 
 # ---------- Dynamic path config ----------
 try:
     import streamlit as st
     _root = st.secrets.get("DROPBOX_ROOT", os.getenv("DROPBOX_ROOT", "")).strip("/")
+    _namespace = st.secrets.get("DROPBOX_NAMESPACE", os.getenv("DROPBOX_NAMESPACE", "")).strip("/")
 except Exception:
     _root = os.getenv("DROPBOX_ROOT", "").strip("/")
-# App‑root relative (no "/Apps/..."). Fallback to /Project_Root if unset.
-PROJECT_ROOT = f"/{_root}" if _root else "/Project_Root"
+    _namespace = os.getenv("DROPBOX_NAMESPACE", "").strip("/")
+
+# Construct full Dropbox path: /Apps/Ethos LLM/Project_Root
+if _root and _namespace:
+    PROJECT_ROOT = f"/{_namespace}/{_root}"
+elif _root:
+    PROJECT_ROOT = f"/{_root}"
+else:
+    PROJECT_ROOT = "/Project_Root"
+
 KB_SUBDIR     = "06_LLM_Knowledge_Base"
 INDEX_REL     = f"{KB_SUBDIR}/document_index.faiss"
 DOCSTORE_REL  = f"{KB_SUBDIR}/docstore.pkl"
@@ -130,7 +147,19 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 def list_source_files(project_root: Path, scan_folders: List[str]) -> List[Path]:
+    """List source files from local or cloud storage."""
+    project_root_str = str(project_root)
     files: List[Path] = []
+    
+    # For cloud paths, we can't scan directories in the same way
+    # Return empty list for now - files will need to be added explicitly
+    if project_root_str.startswith("/"):
+        # Cloud mode - source files would need to be listed differently
+        # For now, return empty list since we can't scan cloud directories
+        # Files can be added explicitly via the CLI add command
+        return []
+    
+    # Local filesystem scanning
     for rel in scan_folders:
         folder = (project_root / rel).resolve()
         if not folder.exists(): continue
@@ -463,6 +492,24 @@ def normalize_vectors_for_ip(vectors: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(vectors, axis=1, keepdims=True); norms[norms == 0] = 1.0
     return vectors / norms
 
+def cloud_file_exists(path_str: str) -> bool:
+    """Check if a file exists in cloud storage."""
+    if not DBX_AVAILABLE:
+        return False
+    try:
+        read_file_bytes(path_str)
+        return True
+    except Exception:
+        return False
+
+def file_exists_any(path: Path) -> bool:
+    """Check if file exists in local or cloud storage."""
+    path_str = str(path)
+    if path_str.startswith("/") and DBX_AVAILABLE:
+        return cloud_file_exists(path_str)
+    else:
+        return path.exists()
+
 # ---------- Build / Update ----------
 def scan_and_hash(project_root: Path, scan_folders: List[str]) -> Dict[str, FileRecord]:
     files = list_source_files(project_root, scan_folders)
@@ -485,7 +532,12 @@ def build_or_update_knowledgebase(
     force_rebuild: bool = False,
     include_text_files: bool = True,
 ) -> Dict[str, any]:
-    root = Path(project_root).resolve()
+    # Don't resolve cloud paths to avoid converting to local filesystem
+    if project_root.startswith("/"):
+        root = Path(project_root)  # Keep as cloud path
+    else:
+        root = Path(project_root).resolve()  # Only resolve local paths
+    
     ensure_dirs(root)
 
     scans = scan_folders if scan_folders else DEFAULT_SCAN_FOLDERS
@@ -501,7 +553,13 @@ def build_or_update_knowledgebase(
 
     to_process = list(current.values()) if force_rebuild else [rec for rec in current.values() if need_embedding(prev_manifest, rec)]
 
-    index: Optional[faiss.IndexFlatIP] = read_faiss_index(index_path) if (index_path.exists() and not force_rebuild) else None
+    index: Optional[faiss.IndexFlatIP] = None
+    if not force_rebuild and file_exists_any(index_path):
+        try:
+            index = read_faiss_index(index_path)
+        except Exception:
+            index = None
+    
     client = get_openai_client()
 
     results: Dict[str, dict] = {}
@@ -577,17 +635,28 @@ def build_or_update_knowledgebase(
 
 # ---------- Status / helpers ----------
 def status(project_root: str) -> Dict[str, any]:
-    root = Path(project_root).resolve()
+    # Don't resolve cloud paths to avoid converting to local filesystem
+    if project_root.startswith("/"):
+        root = Path(project_root)  # Keep as cloud path
+    else:
+        root = Path(project_root).resolve()  # Only resolve local paths
+    
     man = load_manifest(root / MANIFEST_REL)
     idx, ds, manp = root / INDEX_REL, root / DOCSTORE_REL, root / MANIFEST_REL
     return {
         "manifest_files": len(man),
-        "index_exists": idx.exists(),
-        "docstore_exists": ds.exists(),
+        "index_exists": file_exists_any(idx),
+        "docstore_exists": file_exists_any(ds),
+        "manifest_exists": file_exists_any(manp),
         "index_path": str(idx),
         "docstore_path": str(ds),
         "manifest_path": str(manp),
         "project_root": project_root,
+        "cloud_mode": str(root).startswith("/") and DBX_AVAILABLE,
+        "dbx_available": DBX_AVAILABLE,
+        "computed_project_root": PROJECT_ROOT,
+        "dropbox_root_detected": _root if '_root' in globals() else "not_detected",
+        "dropbox_namespace_detected": _namespace if '_namespace' in globals() else "not_detected",
     }
 
 # ---------- CLI ----------
@@ -611,14 +680,26 @@ def _cli_add(root: Path, files_csv: str):
     ensure_dirs(root)
     prev_manifest = load_manifest(manifest_path)
     docstore = load_docstore(docstore_path)
-    index = read_faiss_index(index_path) if index_path.exists() else None
+    
+    index = None
+    if file_exists_any(index_path):
+        try:
+            index = read_faiss_index(index_path)
+        except Exception:
+            index = None
+    
     client = get_openai_client()
 
     results, total_added = {}, 0
     for raw in [s.strip() for s in files_csv.split(",") if s.strip()]:
         p = Path(raw)
-        if not p.is_absolute(): p = (root / p).resolve()
-        if not p.exists():
+        # For cloud paths, don't resolve; for local paths, resolve relative to root
+        if not str(root).startswith("/"):
+            if not p.is_absolute(): 
+                p = (root / p).resolve()
+        
+        # For cloud mode, we can't check .exists() - skip this check
+        if not str(root).startswith("/") and not p.exists():
             results[raw] = {"status": "missing"}; continue
         try:
             stat = p.stat()
@@ -670,7 +751,12 @@ def _cli_add(root: Path, files_csv: str):
 
 def main():
     args = _parse_args()
-    root = Path(args.project_root).resolve()
+    # Don't resolve cloud paths to avoid converting to local filesystem
+    if args.project_root.startswith("/"):
+        root = Path(args.project_root)  # Keep as cloud path
+    else:
+        root = Path(args.project_root).resolve()  # Only resolve local paths
+    
     scans = [s.strip() for s in args.scan_folders.split(",") if s.strip()]
     include_text = not args.no_text
 
