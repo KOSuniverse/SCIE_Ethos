@@ -3,6 +3,18 @@ import json
 import pandas as pd
 import re
 
+# PY Files/alias_utils.py
+"""Legacy shim — canonical alias logic lives in column_alias.py."""
+from warnings import warn as _warn
+_warn("alias_utils.py is deprecated; use column_alias.py", stacklevel=1)
+from column_alias import (  # re-export for backward compatibility
+    load_alias_group,
+    build_reverse_alias_map,
+    normalize_columns,  # if present; safe to export even if unused
+)
+__all__ = ["load_alias_group", "build_reverse_alias_map", "normalize_columns"]
+
+
 def clean_column(col):
     col = str(col)
     return re.sub(r'\W+', '_', col).strip().lower()
