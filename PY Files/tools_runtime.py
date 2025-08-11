@@ -2,6 +2,7 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple, Union
 import io
+import os
 import json
 import pandas as pd
 import numpy as np
@@ -17,6 +18,44 @@ def _excel_bytes_to_frames(xlsx_bytes: bytes) -> Dict[str, pd.DataFrame]:
         frames = {sn: xls.parse(sn) for sn in xls.sheet_names}
     return frames
 
+def _csv_bytes_to_frame(csv_bytes: bytes, filename: str) -> Dict[str, pd.DataFrame]:
+    """Load a CSV byte blob into a DataFrame with the filename as sheet name."""
+    try:
+        # Try common encodings
+        for encoding in ['utf-8', 'latin-1', 'cp1252']:
+            try:
+                csv_text = csv_bytes.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            # If all encodings fail, use utf-8 with error handling
+            csv_text = csv_bytes.decode('utf-8', errors='replace')
+        
+        df = pd.read_csv(io.StringIO(csv_text))
+        # Use filename without extension as sheet name
+        sheet_name = os.path.splitext(filename)[0] if filename else "Sheet1"
+        return {sheet_name: df}
+    except Exception as e:
+        print(f"Error reading CSV: {e}")
+        return {"Sheet1": pd.DataFrame()}
+
+def _load_file_to_frames(file_path: str) -> Dict[str, pd.DataFrame]:
+    """Load either Excel or CSV file from Dropbox into DataFrame(s)."""
+    file_bytes = read_file_bytes(file_path)
+    filename = file_path.split('/')[-1]
+    
+    if filename.lower().endswith(('.xlsx', '.xls')):
+        return _excel_bytes_to_frames(file_bytes)
+    elif filename.lower().endswith('.csv'):
+        return _csv_bytes_to_frame(file_bytes, filename)
+    else:
+        raise ValueError(f"Unsupported file type: {filename}")
+
+def _excel_bytes_to_frames_legacy(xlsx_bytes: bytes) -> Dict[str, pd.DataFrame]:
+    """Legacy function name for backwards compatibility."""
+    return _excel_bytes_to_frames(xlsx_bytes)
+
 def _save_csv_to_dropbox(df: pd.DataFrame, dbx_folder: str, base: str) -> str:
     """Save DataFrame as CSV to Dropbox and return the path."""
     path = f"{dbx_folder.rstrip('/')}/{base}.csv"
@@ -24,6 +63,34 @@ def _save_csv_to_dropbox(df: pd.DataFrame, dbx_folder: str, base: str) -> str:
     df.to_csv(bio, index=False)
     upload_bytes(path, bio.getvalue())
     return path
+
+def _save_excel_to_dropbox(df: pd.DataFrame, dbx_folder: str, base: str, sheet_name: str = "Analysis") -> str:
+    """Save DataFrame as Excel to Dropbox and return the path."""
+    path = f"{dbx_folder.rstrip('/')}/{base}.xlsx"
+    bio = io.BytesIO()
+    with pd.ExcelWriter(bio, engine="xlsxwriter") as writer:
+        df.to_excel(writer, sheet_name=sheet_name, index=False)
+    bio.seek(0)
+    upload_bytes(path, bio.getvalue())
+    return path
+
+def _save_artifact(df: pd.DataFrame, dbx_folder: str, base: str, format: str = "csv") -> str:
+    """
+    Save DataFrame artifact in the specified format.
+    
+    Args:
+        df: DataFrame to save
+        dbx_folder: Target Dropbox folder
+        base: Base filename (without extension)
+        format: "csv" or "excel"
+    
+    Returns:
+        Path to saved file
+    """
+    if format.lower() == "excel":
+        return _save_excel_to_dropbox(df, dbx_folder, base)
+    else:
+        return _save_csv_to_dropbox(df, dbx_folder, base)
 
 def _save_png_to_dropbox(fig, dbx_folder: str, base: str) -> str:
     """Save a Matplotlib figure to Dropbox as PNG and return the path."""
@@ -45,17 +112,18 @@ def tool_specs() -> Dict[str, Dict[str, Any]]:
             "returns": "dict with 'cleansed_path', 'run_meta_path', 'sheets' (names only)."
         },
         "dataframe_query": {
-            "purpose": "Filter/group/aggregate/join cleansed sheets; save CSV artifact.",
+            "purpose": "Filter/group/aggregate/join cleansed sheets from Excel or CSV files; save artifact.",
             "args_schema": {
-                "cleansed_paths": ["dropbox://04_Data/01_Cleansed_Files/…xlsx"],
-                "sheet": "sheet name within workbook (optional; default first sheet)",
+                "cleansed_paths": ["dropbox://04_Data/01_Cleansed_Files/…xlsx or …csv"],
+                "sheet": "sheet name within workbook (optional for Excel; ignored for CSV)",
                 "filters": [{"col": "string", "op": "==|!=|>|>=|<|<=|in|contains", "value": "any"}],
                 "groupby": ["col1","col2"],
                 "metrics": [{"col": "extended_cost", "agg": "sum|min|max|mean|count"}],
                 "limit": 50,
-                "artifact_folder": "dropbox://04_Data/03_Summaries"
+                "artifact_folder": "dropbox://04_Data/03_Summaries",
+                "artifact_format": "csv (fast) or excel (OpenAI compatible)"
             },
-            "returns": "dict with 'preview' (rows), 'columns', 'artifact_path' (CSV)."
+            "returns": "dict with 'preview' (rows), 'columns', 'artifact_path'."
         },
         "chart": {
             "purpose": "Create bar/line chart from rows and save PNG to Dropbox.",
@@ -76,9 +144,9 @@ def tool_specs() -> Dict[str, Dict[str, Any]]:
             "returns": "dict with 'chunks': [], 'citations': []"
         },
         "list_sheets": {
-            "purpose": "List sheet names in a cleansed workbook from Dropbox.",
-            "args_schema": {"cleansed_path": "dropbox://04_Data/01_Cleansed_Files/…xlsx"},
-            "returns": "list of sheet names"
+            "purpose": "List sheet names in a cleansed workbook (Excel) or return filename for CSV from Dropbox.",
+            "args_schema": {"cleansed_path": "dropbox://04_Data/01_Cleansed_Files/…xlsx or …csv"},
+            "returns": "list of sheet names (or [filename] for CSV)"
         }
     }
 
@@ -144,16 +212,23 @@ def dataframe_query(
     metrics: Optional[List[Dict[str, str]]] = None,
     limit: int = 50,
     artifact_folder: Optional[str] = None,
+    artifact_format: str = "excel",  # "csv" or "excel" - excel for OpenAI compatibility
 ) -> Dict[str, Any]:
     """
-    Load the first cleansed workbook from Dropbox, run ops, save CSV, return preview.
+    Load the first cleansed workbook (Excel or CSV) from Dropbox, run ops, save artifact, return preview.
+    
+    Args:
+        artifact_format: "csv" (fast, for intermediate results) or "excel" (OpenAI compatible)
     """
     if not cleansed_paths:
         return {"error": "No cleansed paths provided."}
 
     first = cleansed_paths[0]
-    b = read_file_bytes(first)
-    frames = _excel_bytes_to_frames(b)
+    
+    try:
+        frames = _load_file_to_frames(first)
+    except Exception as e:
+        return {"error": f"Failed to load file {first}: {str(e)}"}
 
     # Choose sheet
     if sheet and sheet in frames:
@@ -195,7 +270,7 @@ def dataframe_query(
     artifact_path = None
     if artifact_folder:
         base = "df_query_result"
-        artifact_path = _save_csv_to_dropbox(df_out, artifact_folder, base)
+        artifact_path = _save_artifact(df_out, artifact_folder, base, artifact_format)
 
     # Preview
     prev = df_out.head(limit)
@@ -258,10 +333,16 @@ def kb_search(query: str, k: int = 5) -> Dict[str, Any]:
     return {"chunks": [], "citations": [], "k": k, "query": query}
 
 def list_sheets(cleansed_path: str) -> List[str]:
-    """List sheet names in a cleansed workbook from Dropbox."""
+    """List sheet names in a cleansed workbook (Excel) or return filename for CSV from Dropbox."""
     try:
-        b = read_file_bytes(cleansed_path)
-        frames = _excel_bytes_to_frames(b)
-        return list(frames.keys())
+        filename = cleansed_path.split('/')[-1].lower()
+        if filename.endswith('.csv'):
+            # For CSV files, return the filename without extension as the "sheet" name
+            sheet_name = os.path.splitext(cleansed_path.split('/')[-1])[0]
+            return [sheet_name]
+        else:
+            # For Excel files, list actual sheets
+            frames = _load_file_to_frames(cleansed_path)
+            return list(frames.keys())
     except Exception:
         return []
