@@ -74,6 +74,11 @@ def tool_specs() -> Dict[str, Dict[str, Any]]:
             "purpose": "Stub for knowledgebase; returns empty until Stage 6 is wired.",
             "args_schema": {"query": "string", "k": 5},
             "returns": "dict with 'chunks': [], 'citations': []"
+        },
+        "list_sheets": {
+            "purpose": "List sheet names in a cleansed workbook from Dropbox.",
+            "args_schema": {"cleansed_path": "dropbox://04_Data/01_Cleansed_Files/…xlsx"},
+            "returns": "list of sheet names"
         }
     }
 
@@ -251,3 +256,12 @@ def chart(
 def kb_search(query: str, k: int = 5) -> Dict[str, Any]:
     """Stub until Stage 6 (OpenAI File Search)."""
     return {"chunks": [], "citations": [], "k": k, "query": query}
+
+def list_sheets(cleansed_path: str) -> List[str]:
+    """List sheet names in a cleansed workbook from Dropbox."""
+    try:
+        b = read_file_bytes(cleansed_path)
+        frames = _excel_bytes_to_frames(b)
+        return list(frames.keys())
+    except Exception:
+        return []
