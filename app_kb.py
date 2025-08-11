@@ -1,7 +1,8 @@
 # streamlit app for building and querying a knowledge base
 
-import os, json, streamlit as st
+import os, json, sys, streamlit as st
 from pathlib import Path
+sys.path.append("PY Files")  # ensure PY Files/* is importable
 from phase4_knowledge.knowledgebase_builder import status, build_or_update_knowledgebase
 from phase4_knowledge.kb_qa import kb_answer
 
@@ -13,9 +14,11 @@ st.set_page_config(page_title="Ethos KB QA", layout="wide")
 st.title("📚 Ethos Knowledge Base — QA")
 
 # Key sanity
-if "OPENAI_API_KEY" not in st.secrets:
+api_key = st.secrets.get("OPENAI_API_KEY", "")
+if not api_key:
     st.warning("Add OPENAI_API_KEY to Streamlit secrets.")
-os.environ["OPENAI_API_KEY"] = st.secrets.get("OPENAI_API_KEY", "")
+else:
+    os.environ["OPENAI_API_KEY"] = api_key
 
 with st.sidebar:
     st.header("Build / Update")
@@ -34,7 +37,7 @@ with st.sidebar:
 
     st.divider()
     st.header("Status")
-    st.json(status(PROJECT_ROOT))
+    st.json(status(PROJECT_ROOT))  # uses updated relative paths inside Phase 4
 
 st.subheader("Ask the Knowledge Base")
 q = st.text_area("Question", placeholder="Ask anything contained in the uploaded docs…", height=100)
