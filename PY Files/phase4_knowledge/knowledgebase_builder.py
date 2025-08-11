@@ -36,6 +36,13 @@ except Exception: tiktoken = None
 # OpenAI client
 from openai import OpenAI
 
+# Cloud storage operations (optional)
+try:
+    from .dbx_utils import upload_bytes, read_file_bytes, upload_json
+    DBX_AVAILABLE = True
+except ImportError:
+    DBX_AVAILABLE = False
+
 # ---------- Dynamic path config ----------
 try:
     import streamlit as st
@@ -90,8 +97,31 @@ class Chunk:
 
 # ---------- Utils ----------
 def ensure_dirs(project_root: Path):
-    (project_root / "06_LLM_Knowledge_Base").mkdir(parents=True, exist_ok=True)
-    (project_root / "06_LLM_Knowledge_Base" / "chunks").mkdir(parents=True, exist_ok=True)
+    """Create directory structure. Handles both local and cloud paths."""
+    # For cloud paths (starting with /), we need to use Dropbox API calls
+    # For local paths, use regular filesystem operations
+    project_root_str = str(project_root)
+    
+    if project_root_str.startswith("/") and DBX_AVAILABLE:
+        # This is a Dropbox path - directories are created implicitly when files are uploaded
+        # We'll create a placeholder file to ensure the directories exist
+        try:
+            # Create placeholder files to ensure directories exist
+            kb_path = f"{project_root_str.rstrip('/')}/{KB_SUBDIR}"
+            chunks_path = f"{kb_path}/chunks"
+            
+            # Create .gitkeep files to ensure directories exist
+            upload_bytes(f"{kb_path}/.gitkeep", b"", mode="overwrite")
+            upload_bytes(f"{chunks_path}/.gitkeep", b"", mode="overwrite")
+        except Exception:
+            # If cloud operations fail, fall back to local operations
+            # This handles cases where dbx_utils isn't available or configured
+            (project_root / "06_LLM_Knowledge_Base").mkdir(parents=True, exist_ok=True)
+            (project_root / "06_LLM_Knowledge_Base" / "chunks").mkdir(parents=True, exist_ok=True)
+    else:
+        # Local filesystem operations
+        (project_root / "06_LLM_Knowledge_Base").mkdir(parents=True, exist_ok=True)
+        (project_root / "06_LLM_Knowledge_Base" / "chunks").mkdir(parents=True, exist_ok=True)
 
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
@@ -109,13 +139,39 @@ def list_source_files(project_root: Path, scan_folders: List[str]) -> List[Path]
     return sorted(set(files))
 
 def load_manifest(path: Path) -> Dict[str, FileRecord]:
-    if path.exists():
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return {k: FileRecord(**v) for k, v in data.items()}
-    return {}
+    """Load manifest from local or cloud storage."""
+    path_str = str(path)
+    
+    if path_str.startswith("/") and DBX_AVAILABLE:
+        # Cloud path - use Dropbox API
+        try:
+            data = json.loads(read_file_bytes(path_str).decode("utf-8"))
+            return {k: FileRecord(**v) for k, v in data.items()}
+        except Exception:
+            # File doesn't exist or other error
+            return {}
+    else:
+        # Local filesystem
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return {k: FileRecord(**v) for k, v in data.items()}
+        return {}
 
 def save_manifest(path: Path, manifest: Dict[str, FileRecord]):
-    path.write_text(json.dumps({k: asdict(v) for k, v in manifest.items()}, indent=2), encoding="utf-8")
+    """Save manifest to local or cloud storage."""
+    path_str = str(path)
+    data = json.dumps({k: asdict(v) for k, v in manifest.items()}, indent=2)
+    
+    if path_str.startswith("/") and DBX_AVAILABLE:
+        # Cloud path - use Dropbox API
+        try:
+            upload_bytes(path_str, data.encode("utf-8"), mode="overwrite")
+        except Exception:
+            # Fall back to local operations
+            path.write_text(data, encoding="utf-8")
+    else:
+        # Local filesystem
+        path.write_text(data, encoding="utf-8")
 
 def estimate_tokens(text: str) -> int:
     if not text: return 0
@@ -286,25 +342,122 @@ def embed_texts(client: OpenAI, texts: List[str], model: str = EMBED_MODEL, batc
         time.sleep(0.02)  # tiny pacing
     return np.array(vectors, dtype="float32")
 
-def write_faiss_index(path: Path, index: faiss.IndexFlatIP): faiss.write_index(index, str(path))
-def read_faiss_index(path: Path) -> faiss.IndexFlatIP: return faiss.read_index(str(path))
+def write_faiss_index(path: Path, index: faiss.IndexFlatIP): 
+    """Write FAISS index to local or cloud storage."""
+    path_str = str(path)
+    
+    if path_str.startswith("/") and DBX_AVAILABLE:
+        # Cloud path - write to temp file then upload
+        try:
+            import tempfile
+            
+            with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                faiss.write_index(index, tmp.name)
+                tmp.flush()
+                
+                with open(tmp.name, "rb") as f:
+                    data = f.read()
+                upload_bytes(path_str, data, mode="overwrite")
+                
+                os.unlink(tmp.name)
+        except Exception:
+            # Fall back to local operations
+            faiss.write_index(index, str(path))
+    else:
+        # Local filesystem
+        faiss.write_index(index, str(path))
+
+def read_faiss_index(path: Path) -> faiss.IndexFlatIP: 
+    """Read FAISS index from local or cloud storage."""
+    path_str = str(path)
+    
+    if path_str.startswith("/") and DBX_AVAILABLE:
+        # Cloud path - download to temp file then read
+        try:
+            import tempfile
+            
+            data = read_file_bytes(path_str)
+            with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                tmp.write(data)
+                tmp.flush()
+                
+                index = faiss.read_index(tmp.name)
+                os.unlink(tmp.name)
+                return index
+        except Exception:
+            # Fall back to local operations or raise
+            if Path(path_str).exists():
+                return faiss.read_index(str(path))
+            raise
+    else:
+        # Local filesystem
+        return faiss.read_index(str(path))
 
 def load_docstore(path: Path) -> Dict[str, list]:
-    if path.exists():
-        with path.open("rb") as f: return pickle.load(f)
-    return {}
+    """Load docstore from local or cloud storage."""
+    path_str = str(path)
+    
+    if path_str.startswith("/") and DBX_AVAILABLE:
+        # Cloud path - use Dropbox API
+        try:
+            data = read_file_bytes(path_str)
+            return pickle.loads(data)
+        except Exception:
+            # File doesn't exist or other error
+            return {}
+    else:
+        # Local filesystem
+        if path.exists():
+            with path.open("rb") as f: 
+                return pickle.load(f)
+        return {}
 
 def save_docstore(path: Path, docstore: Dict[str, list]):
-    with path.open("wb") as f: pickle.dump(docstore, f)
+    """Save docstore to local or cloud storage."""
+    path_str = str(path)
+    
+    if path_str.startswith("/") and DBX_AVAILABLE:
+        # Cloud path - use Dropbox API
+        try:
+            data = pickle.dumps(docstore)
+            upload_bytes(path_str, data, mode="overwrite")
+        except Exception:
+            # Fall back to local operations
+            with path.open("wb") as f: 
+                pickle.dump(docstore, f)
+    else:
+        # Local filesystem
+        with path.open("wb") as f: 
+            pickle.dump(docstore, f)
 
 def save_chunk_records(chunks_dir: Path, doc_id: str, chunks: List[Chunk]):
-    out = chunks_dir / f"{doc_id}.jsonl"
-    with out.open("w", encoding="utf-8") as f:
-        for c in chunks:
-            f.write(json.dumps({
-                "doc_id": c.doc_id, "file_path": c.file_path, "source_type": c.source_type,
-                "page_range": c.page_range, "tokens_est": c.tokens_est, "text": c.text
-            }) + "\n")
+    """Save chunk records to local or cloud storage."""
+    chunks_dir_str = str(chunks_dir)
+    file_path = f"{chunks_dir_str.rstrip('/')}/{doc_id}.jsonl"
+    
+    # Build JSONL content
+    lines = []
+    for c in chunks:
+        lines.append(json.dumps({
+            "doc_id": c.doc_id, "file_path": c.file_path, "source_type": c.source_type,
+            "page_range": c.page_range, "tokens_est": c.tokens_est, "text": c.text
+        }))
+    content = "\n".join(lines) + "\n"
+    
+    if chunks_dir_str.startswith("/") and DBX_AVAILABLE:
+        # Cloud path - use Dropbox API
+        try:
+            upload_bytes(file_path, content.encode("utf-8"), mode="overwrite")
+        except Exception:
+            # Fall back to local operations
+            out = chunks_dir / f"{doc_id}.jsonl"
+            with out.open("w", encoding="utf-8") as f:
+                f.write(content)
+    else:
+        # Local filesystem
+        out = chunks_dir / f"{doc_id}.jsonl"
+        with out.open("w", encoding="utf-8") as f:
+            f.write(content)
 
 def normalize_vectors_for_ip(vectors: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(vectors, axis=1, keepdims=True); norms[norms == 0] = 1.0
