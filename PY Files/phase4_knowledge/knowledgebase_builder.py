@@ -36,6 +36,19 @@ except Exception: tiktoken = None
 # OpenAI client
 from openai import OpenAI
 
+# ---------- Dynamic path config ----------
+try:
+    import streamlit as st
+    _root = st.secrets.get("DROPBOX_ROOT", os.getenv("DROPBOX_ROOT", "")).strip("/")
+except Exception:
+    _root = os.getenv("DROPBOX_ROOT", "").strip("/")
+# App‑root relative (no "/Apps/..."). Fallback to /Project_Root if unset.
+PROJECT_ROOT = f"/{_root}" if _root else "/Project_Root"
+KB_SUBDIR     = "06_LLM_Knowledge_Base"
+INDEX_REL     = f"{KB_SUBDIR}/document_index.faiss"
+DOCSTORE_REL  = f"{KB_SUBDIR}/docstore.pkl"
+MANIFEST_REL  = f"{KB_SUBDIR}/manifest.json"
+
 # ---------- Config ----------
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "text-embedding-3-small")
 CHUNK_TOKENS = int(os.environ.get("KB_CHUNK_TOKENS", "700"))
@@ -45,17 +58,15 @@ MIN_TEXT_CHARS_PER_PAGE = 40
 
 SUPPORTED_EXTS = {".pdf", ".docx", ".pptx", ".xlsx", ".xls", ".txt", ".md"}
 TEXT_EXTS = {".txt", ".md"}
+# --- Supported source extensions ---
+ALLOWED_EXTS = {".pdf", ".docx", ".pptx", ".txt", ".md"}
 DEFAULT_SCAN_FOLDERS = [
     "06_LLM_Knowledge_Base/Source_PDFs",
     "06_LLM_Knowledge_Base/Source_Docs",
     "06_LLM_Knowledge_Base/Source_Other",
 ]
 
-KB_FOLDER = "06_LLM_Knowledge_Base"
-INDEX_PATH = f"{KB_FOLDER}/document_index.faiss"
-DOCSTORE_PATH = f"{KB_FOLDER}/docstore.pkl"
-MANIFEST_PATH = f"{KB_FOLDER}/manifest.json"
-CHUNKS_DIR = f"{KB_FOLDER}/chunks"
+CHUNKS_REL = f"{KB_SUBDIR}/chunks"
 
 # ---------- Data ----------
 @dataclass
@@ -79,8 +90,8 @@ class Chunk:
 
 # ---------- Utils ----------
 def ensure_dirs(project_root: Path):
-    (project_root / KB_FOLDER).mkdir(parents=True, exist_ok=True)
-    (project_root / CHUNKS_DIR).mkdir(parents=True, exist_ok=True)
+    (project_root / "06_LLM_Knowledge_Base").mkdir(parents=True, exist_ok=True)
+    (project_root / "06_LLM_Knowledge_Base" / "chunks").mkdir(parents=True, exist_ok=True)
 
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
@@ -243,13 +254,23 @@ def _load_openai_key() -> str:
     try:
         import streamlit as st  # only if running inside Streamlit
         key = st.secrets.get("OPENAI_API_KEY")
-        if key: return key
+        if key: return key.strip()
     except Exception:
         pass
     # Fallback to env var
     key = os.environ.get("OPENAI_API_KEY")
-    if key: return key
-    raise RuntimeError("OPENAI_API_KEY not found in Streamlit secrets or environment.")
+    if key: return key.strip()
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        key = os.environ.get("OPENAI_API_KEY")
+        if key:
+            return key.strip()
+    except Exception:
+        pass
+    raise RuntimeError(
+        "OPENAI_API_KEY not found. Set it in Streamlit secrets, environment, or a .env file."
+    )
 
 # ---------- Embeddings / FAISS ----------
 def get_openai_client() -> OpenAI:
@@ -315,8 +336,8 @@ def build_or_update_knowledgebase(
     ensure_dirs(root)
 
     scans = scan_folders if scan_folders else DEFAULT_SCAN_FOLDERS
-    manifest_path, index_path = root / MANIFEST_PATH, root / INDEX_PATH
-    docstore_path, chunks_dir = root / DOCSTORE_PATH, root / CHUNKS_DIR
+    manifest_path, index_path = root / MANIFEST_REL, root / INDEX_REL
+    docstore_path, chunks_dir = root / DOCSTORE_REL, root / CHUNKS_REL
 
     prev_manifest = load_manifest(manifest_path)
     docstore = load_docstore(docstore_path)
@@ -404,14 +425,16 @@ def build_or_update_knowledgebase(
 # ---------- Status / helpers ----------
 def status(project_root: str) -> Dict[str, any]:
     root = Path(project_root).resolve()
-    man = load_manifest(root / MANIFEST_PATH)
+    man = load_manifest(root / MANIFEST_REL)
+    idx, ds, manp = root / INDEX_REL, root / DOCSTORE_REL, root / MANIFEST_REL
     return {
         "manifest_files": len(man),
-        "index_exists": (root / INDEX_PATH).exists(),
-        "docstore_exists": (root / DOCSTORE_PATH).exists(),
-        "index_path": str(root / INDEX_PATH),
-        "docstore_path": str(root / DOCSTORE_PATH),
-        "manifest_path": str(root / MANIFEST_PATH),
+        "index_exists": idx.exists(),
+        "docstore_exists": ds.exists(),
+        "index_path": str(idx),
+        "docstore_path": str(ds),
+        "manifest_path": str(manp),
+        "project_root": project_root,
     }
 
 # ---------- CLI ----------
@@ -430,8 +453,8 @@ def _parse_args():
     return ap.parse_args()
 
 def _cli_add(root: Path, files_csv: str):
-    manifest_path, index_path = root / MANIFEST_PATH, root / INDEX_PATH
-    docstore_path, chunks_dir = root / DOCSTORE_PATH, root / CHUNKS_DIR
+    manifest_path, index_path = root / MANIFEST_REL, root / INDEX_REL
+    docstore_path, chunks_dir = root / DOCSTORE_REL, root / CHUNKS_REL
     ensure_dirs(root)
     prev_manifest = load_manifest(manifest_path)
     docstore = load_docstore(docstore_path)
