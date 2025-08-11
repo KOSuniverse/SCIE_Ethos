@@ -5,7 +5,10 @@ from pathlib import Path
 from phase4_knowledge.knowledgebase_builder import status, build_or_update_knowledgebase
 from phase4_knowledge.kb_qa import kb_answer
 
-PROJECT_ROOT = st.secrets.get("PROJECT_ROOT", "/content/drive/MyDrive/Ethos LLM/Project_Root")
+# Dropbox-first default (app-root relative). Falls back to /Project_Root if unset.
+_dropbox_root = st.secrets.get("DROPBOX_ROOT", os.getenv("DROPBOX_ROOT", "")).strip("/")
+PROJECT_ROOT = f"/{_dropbox_root}" if _dropbox_root else "/Project_Root"
+
 st.set_page_config(page_title="Ethos KB QA", layout="wide")
 st.title("📚 Ethos Knowledge Base — QA")
 
