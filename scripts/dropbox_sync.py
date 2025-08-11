@@ -1,31 +1,23 @@
 # scripts/dropbox_sync.py
-import os, json, hashlib, tempfile, mimetypes
+import os, json, hashlib, mimetypes
 from datetime import datetime
 from typing import List, Tuple
 
-# --- SDK version info (optional caption shown in UI separately) ---
+# --- OpenAI SDK guard ---
 import openai as _openai
 try:
     from packaging import version as _v
 except Exception:
     _v = None
-
 MIN_VER = "1.52.0"
-_current = getattr(_openai, "__version__", "0")
-
 def _too_old(vstr: str, minv: str) -> bool:
     if _v:
-        try:
-            return _v.parse(vstr) < _v.parse(minv)
-        except Exception:
-            pass
-    def _parts(s): return [int(p) for p in s.split(".") if p.replace(".", "").isdigit()]
-    return _parts(vstr) < _parts(minv)
-
-if _too_old(_current, MIN_VER):
-    raise RuntimeError(
-        f"OpenAI SDK too old ({_current}). Please set openai>={MIN_VER} in requirements.txt and redeploy."
-    )
+        try: return _v.parse(vstr) < _v.parse(minv)
+        except Exception: pass
+    def _p(s): return [int(p) for p in s.split(".") if p.replace(".", "").isdigit()]
+    return _p(vstr) < _p(minv)
+if _too_old(getattr(_openai, "__version__", "0"), MIN_VER):
+    raise RuntimeError(f"OpenAI SDK too old ({getattr(_openai,'__version__','0')}). Please set openai>={MIN_VER}.")
 
 # --- Secrets loader (Streamlit or env/.env) ---
 try:
@@ -39,160 +31,127 @@ except Exception:
 import dropbox
 from openai import OpenAI
 
-# Resolve repo root regardless of CWD
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO_DIR = os.path.abspath(os.path.join(HERE, ".."))
-
-# Config
+# ----- Config / constants -----
 ALLOWED_EXTS = {".pdf", ".docx", ".pptx", ".txt", ".md", ".csv"}
-MANIFEST_PATH = os.path.join(REPO_DIR, "config", "dropbox_manifest.json")
-VECTOR_STORE_META_PATH = os.path.join(REPO_DIR, "config", "vector_store.json")
-ASSISTANT_META_PATH = os.path.join(REPO_DIR, "config", "assistant.json")  # optional fallback
 
 def must(key: str) -> str:
     v = SECRETS.get(key)
-    if not v:
-        raise EnvironmentError(f"Missing required secret: {key}")
+    if not v: raise EnvironmentError(f"Missing required secret: {key}")
     return v
-
 def get_optional(key: str, default: str = "") -> str:
-    v = SECRETS.get(key)
-    return v if v is not None else default
+    v = SECRETS.get(key); return v if v is not None else default
 
-# Required secrets
+# Required
 OPENAI_API_KEY = must("OPENAI_API_KEY")
-ASSISTANT_ID = SECRETS.get("ASSISTANT_ID")  # may be None; will fallback to assistant.json
-DBX_APP_KEY = must("DROPBOX_APP_KEY")
-DBX_APP_SECRET = must("DROPBOX_APP_SECRET")
+DBX_APP_KEY     = must("DROPBOX_APP_KEY")
+DBX_APP_SECRET  = must("DROPBOX_APP_SECRET")
 DBX_REFRESH_TOKEN = must("DROPBOX_REFRESH_TOKEN")
+ASSISTANT_ID = SECRETS.get("ASSISTANT_ID")  # optional; can fall back to assistant.json if you keep one in Dropbox later
 
 # Optional
-DROPBOX_ROOT = get_optional("DROPBOX_ROOT", "")  # e.g. "/Project_Root" or "" for root
+DROPBOX_ROOT = get_optional("DROPBOX_ROOT", "").strip("/")   # e.g. "Project_Root"
 OPENAI_MODEL = get_optional("OPENAI_MODEL", "gpt-4o")
 
-# Init OpenAI client (reads OPENAI_API_KEY from env OR set explicitly)
+# Dropbox config folder (APP-ROOT RELATIVE; no "/Apps/Ethos LLM" prefix)
+DBX_CONFIG_DIR = f"/{DROPBOX_ROOT}/config" if DROPBOX_ROOT else "/config"
+DBX_MANIFEST_PATH = f"{DBX_CONFIG_DIR}/dropbox_manifest.json"
+DBX_VECTOR_META_PATH = f"{DBX_CONFIG_DIR}/vector_store.json"
+
+# Init OpenAI client
 os.environ.setdefault("OPENAI_API_KEY", OPENAI_API_KEY)
 client = OpenAI()
 
-# ---------------- Vector Store adapter (handles SDK naming changes) ----------------
+# ---------------- Vector Store adapter ----------------
 class _VS:
-    """
-    Thin adapter that finds the vector store namespace across SDK variants:
-    - client.beta.vector_stores
-    - client.beta.vectorstores
-    - client.vector_stores
-    - client.vectorstores
-    And exposes create/retrieve/file_batches.upload_and_poll().
-    """
     def __init__(self, client: OpenAI):
         self.client = client
-        self.ns = None
-        # try candidates in order
         cand = [
             getattr(getattr(client, "beta", object()), "vector_stores", None),
             getattr(getattr(client, "beta", object()), "vectorstores", None),
             getattr(client, "vector_stores", None),
             getattr(client, "vectorstores", None),
         ]
-        for c in cand:
-            if c is not None:
-                self.ns = c
-                break
+        self.ns = next((c for c in cand if c is not None), None)
         if self.ns is None:
-            raise AttributeError(
-                "OpenAI vector store API not found on this SDK. "
-                "Tried beta.vector_stores/vectorstores and root vector_stores/vectorstores."
-            )
-
-        # file_batches namespace (snake_case / variants)
+            raise AttributeError("OpenAI vector store API not found on this SDK.")
         self.file_batches = getattr(self.ns, "file_batches", None) or getattr(self.ns, "fileBatches", None)
         if self.file_batches is None:
-            # Some SDKs may attach upload APIs differently in future; fail clearly if missing
             raise AttributeError("Vector store 'file_batches' API not found on this SDK.")
-
-    def create(self, **kwargs):
-        return self.ns.create(**kwargs)
-
-    def retrieve(self, vector_store_id: str):
-        return self.ns.retrieve(vector_store_id)
-
+    def create(self, **kwargs): return self.ns.create(**kwargs)
+    def retrieve(self, vector_store_id: str): return self.ns.retrieve(vector_store_id)
     def upload_batch_and_poll(self, vector_store_id: str, files):
-        # Standard path (1.5x–1.9x)
         if hasattr(self.file_batches, "upload_and_poll"):
             return self.file_batches.upload_and_poll(vector_store_id=vector_store_id, files=files)
-        # Fallback: try 'upload' + manual poll if present (future-proof)
         if hasattr(self.file_batches, "upload"):
             batch = self.file_batches.upload(vector_store_id=vector_store_id, files=files)
-            # If the returned object has .status=='completed', just return it; otherwise best-effort
             return getattr(batch, "status", "completed")
         raise AttributeError("No compatible upload method found on vector store file_batches.")
 
-def resolve_assistant_id() -> str:
-    if ASSISTANT_ID:
-        return ASSISTANT_ID
-    if os.path.exists(ASSISTANT_META_PATH):
-        with open(ASSISTANT_META_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)["assistant_id"]
-    raise FileNotFoundError(
-        "ASSISTANT_ID is not set in secrets and config/assistant.json was not found."
-    )
-
+# ---------------- Dropbox helpers ----------------
 def init_dropbox() -> dropbox.Dropbox:
     dbx = dropbox.Dropbox(
         oauth2_refresh_token=DBX_REFRESH_TOKEN,
         app_key=DBX_APP_KEY,
         app_secret=DBX_APP_SECRET,
     )
-    # fail fast if bad auth/path
-    dbx.files_list_folder(DROPBOX_ROOT or "", recursive=False)
+    dbx.files_list_folder(DROPBOX_ROOT and f"/{DROPBOX_ROOT}" or "", recursive=False)  # fail fast
     return dbx
 
-def file_hash(content: bytes) -> str:
-    return hashlib.sha256(content).hexdigest()
+def _ensure_dbx_folder(dbx: dropbox.Dropbox, folder: str):
+    folder = (folder or "/").rstrip("/") or "/"
+    if folder == "/": return
+    try:
+        dbx.files_get_metadata(folder)
+    except dropbox.exceptions.ApiError:
+        dbx.files_create_folder_v2(folder, autorename=False)
 
-def load_json(path: str, default):
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return default
+def dbx_read_json(path: str):
+    try:
+        dbx = init_dropbox()
+        _, res = dbx.files_download(path)
+        return json.loads(res.content.decode("utf-8"))
+    except Exception:
+        return None
 
-def save_json(path: str, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+def dbx_write_json(path: str, data: dict):
+    dbx = init_dropbox()
+    _ensure_dbx_folder(dbx, os.path.dirname(path.rstrip("/")) or "/")
+    dbx.files_upload(json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"),
+                     path, mode=dropbox.files.WriteMode.overwrite, mute=True)
 
 def list_dropbox_files(dbx: dropbox.Dropbox, path: str):
+    start = path and f"/{path.strip('/')}" or ""
     files = []
-    result = dbx.files_list_folder(path or "", recursive=True)
-    files.extend(result.entries)
-    while result.has_more:
-        result = dbx.files_list_folder_continue(result.cursor)
-        files.extend(result.entries)
+    res = dbx.files_list_folder(start, recursive=True)
+    files.extend(res.entries)
+    while res.has_more:
+        res = dbx.files_list_folder_continue(res.cursor)
+        files.extend(res.entries)
     return [f for f in files if isinstance(f, dropbox.files.FileMetadata)]
 
-# --- Vector store helpers ---
+# ---------------- Assistant / Vector store ----------------
+def resolve_assistant_id() -> str:
+    if ASSISTANT_ID:
+        return ASSISTANT_ID
+    raise FileNotFoundError("ASSISTANT_ID not set in secrets.")
+
 def get_or_create_vector_store() -> str:
-    vs_meta = load_json(VECTOR_STORE_META_PATH, {})
+    vs_meta = dbx_read_json(DBX_VECTOR_META_PATH) or {}
     vs_id = vs_meta.get("vector_store_id")
     vs = _VS(client)
-
     if vs_id:
         try:
-            vs.retrieve(vs_id)
-            return vs_id
+            vs.retrieve(vs_id); return vs_id
         except Exception:
-            pass  # recreate if deleted
-
+            pass  # recreate if missing
     created = vs.create(name="SCIE Ethos Source Docs")
-    # Some SDKs return object with .id; others dict-like; handle both
-    new_id = getattr(created, "id", None) or created.get("id")
+    new_id = getattr(created, "id", None) or (isinstance(created, dict) and created.get("id"))
     if not new_id:
         raise RuntimeError("Could not obtain vector_store.id from create().")
-    save_json(VECTOR_STORE_META_PATH, {"vector_store_id": new_id})
+    dbx_write_json(DBX_VECTOR_META_PATH, {"vector_store_id": new_id})
     return new_id
 
 def attach_vector_store_to_assistant(assistant_id: str, vs_id: str):
-    # Ensure assistant exists and attach file_search tool with the vector store
     a = client.beta.assistants.retrieve(assistant_id)
     existing_ids = []
     try:
@@ -200,7 +159,6 @@ def attach_vector_store_to_assistant(assistant_id: str, vs_id: str):
         existing_ids = (tr.get("file_search") or {}).get("vector_store_ids", []) or []
     except Exception:
         existing_ids = []
-
     new_ids = list(dict.fromkeys(existing_ids + [vs_id]))
     client.beta.assistants.update(
         assistant_id=assistant_id,
@@ -209,70 +167,62 @@ def attach_vector_store_to_assistant(assistant_id: str, vs_id: str):
         tool_resources={"file_search": {"vector_store_ids": new_ids}},
     )
 
+def file_hash(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
 def _upload_batch_to_vector_store(vs_id: str, file_tuples: List[Tuple[str, bytes]]):
-    """
-    file_tuples: list of (filename, content_bytes)
-    """
     import io as _io
     files = []
     for name, data in file_tuples:
         mime, _ = mimetypes.guess_type(name)
         files.append((name, _io.BytesIO(data), mime or "application/octet-stream"))
-
     vs = _VS(client)
-    status = vs.upload_batch_and_poll(vector_store_id=vs_id, files=files)
-    return status  # often "completed"
+    return vs.upload_batch_and_poll(vector_store_id=vs_id, files=files)
 
+# ---------------- Main sync ----------------
 def sync_dropbox_to_assistant(batch_size: int = 10):
     assistant_id = resolve_assistant_id()
     dbx = init_dropbox()
-    manifest = load_json(MANIFEST_PATH, {})
+    manifest = dbx_read_json(DBX_MANIFEST_PATH) or {}
     dropbox_files = list_dropbox_files(dbx, DROPBOX_ROOT)
 
     vs_id = get_or_create_vector_store()
     attach_vector_store_to_assistant(assistant_id, vs_id)
 
-    uploaded, skipped, unsupported = 0, 0, 0
+    uploaded = skipped = unsupported = 0
     buffer: List[Tuple[str, bytes, str, str]] = []  # (name, content, key, hash)
 
     for fmeta in dropbox_files:
         ext = os.path.splitext(fmeta.name)[1].lower()
         if ext not in ALLOWED_EXTS:
-            unsupported += 1
-            continue
-
+            unsupported += 1; continue
         _, resp = dbx.files_download(fmeta.path_lower)
         content = resp.content
         h = file_hash(content)
-        key = fmeta.path_lower  # stable key
-
+        key = fmeta.path_lower
         if key in manifest and manifest[key]["hash"] == h:
-            skipped += 1
-            continue
-
+            skipped += 1; continue
         buffer.append((fmeta.name, content, key, h))
-
         if len(buffer) >= batch_size:
             _upload_batch_to_vector_store(vs_id, [(n, c) for (n, c, _, _) in buffer])
             now = datetime.utcnow().isoformat()
             for _, _, k, hh in buffer:
-                manifest[k] = {"hash": hh, "last_sync": now}
-                uploaded += 1
+                manifest[k] = {"hash": hh, "last_sync": now}; uploaded += 1
             buffer = []
 
     if buffer:
         _upload_batch_to_vector_store(vs_id, [(n, c) for (n, c, _, _) in buffer])
         now = datetime.utcnow().isoformat()
         for _, _, k, hh in buffer:
-            manifest[k] = {"hash": hh, "last_sync": now}
-            uploaded += 1
+            manifest[k] = {"hash": hh, "last_sync": now}; uploaded += 1
 
-    save_json(MANIFEST_PATH, manifest)
+    dbx_write_json(DBX_MANIFEST_PATH, manifest)
     print(f"✅ Sync complete. Uploaded: {uploaded}, Skipped unchanged: {skipped}, Unsupported skipped: {unsupported}")
-    print(f"Vector store: {vs_id} (saved in {VECTOR_STORE_META_PATH})")
+    print(f"Vector store: {vs_id} (saved in Dropbox at {DBX_VECTOR_META_PATH})")
 
 if __name__ == "__main__":
     sync_dropbox_to_assistant()
+
 
 
 
