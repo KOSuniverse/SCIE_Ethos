@@ -32,7 +32,50 @@ import dropbox
 from openai import OpenAI
 
 # ----- Config / constants -----
-ALLOWED_EXTS = {".pdf", ".docx", ".pptx", ".txt", ".md", ".csv"}
+# Extensions allowed in Dropbox sync (all data files we support)
+ALL_SUPPORTED_EXTS = {".pdf", ".docx", ".pptx", ".txt", ".md", ".csv", ".xlsx", ".xls"}
+
+# Extensions supported by OpenAI File Search (no CSV/Excel - we handle those separately)
+OPENAI_FILE_SEARCH_EXTS = {".pdf", ".docx", ".pptx", ".txt", ".md"}
+
+# Extensions we support for tabular data (handled by our tools, not OpenAI File Search)
+TABULAR_EXTS = {".csv", ".xlsx", ".xls"}
+
+# Folders to exclude from OpenAI File Search sync (these contain generated artifacts)
+EXCLUDE_FOLDERS = {
+    "04_data/02_eda_charts",      # Generated charts
+    "04_data/03_summaries",       # Generated analysis artifacts (CSV files)
+    "04_data/05_merged_comparisons",  # Generated comparisons
+    "logs",                       # Log files
+    "__pycache__",               # Python cache
+}
+
+def should_exclude_file(file_path: str, file_name: str, ext: str) -> tuple[bool, str]:
+    """
+    Determine if a file should be excluded from OpenAI File Search sync.
+    Returns (should_exclude, reason)
+    
+    Architecture principle: "tabular files use Assistant File Search"
+    REALITY: OpenAI File Search doesn't support CSV/Excel (platform limitation)
+    SOLUTION: Tabular files available via our tools, documents via OpenAI File Search
+    """
+    # Normalize path for comparison
+    path_lower = file_path.lower().replace("\\", "/")
+    
+    # Exclude by folder location (generated artifacts)
+    for exclude_folder in EXCLUDE_FOLDERS:
+        if exclude_folder in path_lower:
+            return True, f"Generated artifact folder: {exclude_folder}"
+    
+    # Exclude tabular files (OpenAI limitation) - our tools handle these
+    if ext in TABULAR_EXTS:
+        return True, "Tabular file (OpenAI File Search doesn't support CSV/Excel)"
+    
+    # Exclude unsupported extensions 
+    if ext not in OPENAI_FILE_SEARCH_EXTS:
+        return True, f"Unsupported extension: {ext}"
+    
+    return False, "File approved for OpenAI File Search"
 
 def must(key: str) -> str:
     v = SECRETS.get(key)
@@ -189,13 +232,28 @@ def sync_dropbox_to_assistant(batch_size: int = 10):
     vs_id = get_or_create_vector_store()
     attach_vector_store_to_assistant(assistant_id, vs_id)
 
-    uploaded = skipped = unsupported = 0
+    uploaded = skipped = excluded_artifacts = excluded_tabular = unsupported = 0
     buffer: List[Tuple[str, bytes, str, str]] = []  # (name, content, key, hash)
 
     for fmeta in dropbox_files:
         ext = os.path.splitext(fmeta.name)[1].lower()
-        if ext not in ALLOWED_EXTS:
-            unsupported += 1; continue
+        
+        # Check if file should be excluded
+        should_exclude, reason = should_exclude_file(fmeta.path_lower, fmeta.name, ext)
+        
+        if should_exclude:
+            if "artifact" in reason.lower():
+                excluded_artifacts += 1
+                print(f"📁 Skipping artifact: {fmeta.name} ({reason})")
+            elif "tabular" in reason.lower():
+                excluded_tabular += 1
+                print(f"📊 Skipping tabular file: {fmeta.name} ({reason})")
+            else:
+                unsupported += 1
+                print(f"❌ Skipping unsupported: {fmeta.name} ({reason})")
+            continue
+            
+        # File approved for OpenAI File Search
         _, resp = dbx.files_download(fmeta.path_lower)
         content = resp.content
         h = file_hash(content)
@@ -217,8 +275,14 @@ def sync_dropbox_to_assistant(batch_size: int = 10):
             manifest[k] = {"hash": hh, "last_sync": now}; uploaded += 1
 
     dbx_write_json(DBX_MANIFEST_PATH, manifest)
-    print(f"✅ Sync complete. Uploaded: {uploaded}, Skipped unchanged: {skipped}, Unsupported skipped: {unsupported}")
-    print(f"Vector store: {vs_id} (saved in Dropbox at {DBX_VECTOR_META_PATH})")
+    print(f"✅ Sync complete!")
+    print(f"   📤 Uploaded to OpenAI: {uploaded}")
+    print(f"   ⏭️  Skipped (unchanged): {skipped}")
+    print(f"   📁 Excluded (artifacts): {excluded_artifacts}")
+    print(f"   📊 Excluded (tabular data): {excluded_tabular}")
+    print(f"   ❌ Excluded (unsupported): {unsupported}")
+    print(f"   🔗 Vector store: {vs_id}")
+    print(f"   💾 Manifest saved: {DBX_VECTOR_META_PATH}")
 
 if __name__ == "__main__":
     sync_dropbox_to_assistant()
