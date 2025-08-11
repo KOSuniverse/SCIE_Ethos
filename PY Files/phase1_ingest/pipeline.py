@@ -15,7 +15,7 @@ try:
     from column_alias import load_alias_group  # preferred
 except Exception:
     try:
-        from alias_utils import load_alias_group  # alt in your repo
+        from column_alias import load_alias_group  # updated import
     except Exception:
         def load_alias_group(path: str) -> dict:
             """Fallback: no alias mapping available."""
@@ -26,7 +26,7 @@ try:
     from column_alias import build_reverse_alias_map
 except Exception:
     try:
-        from alias_utils import build_reverse_alias_map
+        from column_alias import build_reverse_alias_map
     except Exception:
         def build_reverse_alias_map(alias_group: dict) -> dict:
             """Fallback reverse map builder."""
@@ -46,7 +46,7 @@ try:
     from column_alias import remap_columns
 except Exception:
     try:
-        from alias_utils import remap_columns
+        from column_alias import remap_columns
     except Exception:
         def remap_columns(df: pd.DataFrame, reverse_map: dict) -> pd.DataFrame:
             """Fallback: case-insensitive rename using reverse_map keys."""
