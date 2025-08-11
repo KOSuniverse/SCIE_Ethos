@@ -4,7 +4,9 @@ import os
 import sys
 import json
 import traceback
+import subprocess
 import streamlit as st
+import dropbox
 
 st.set_page_config(page_title="Admin: Dropbox Sync", page_icon="🛠️", layout="centered")
 st.title("🛠️ Admin — Dropbox → Assistant File Sync")
@@ -15,7 +17,6 @@ import openai as _openai
 st.caption(f"OpenAI SDK: {_openai.__version__}")
 
 # --- One-time inline upgrade button (useful on Streamlit Cloud if caching blocks requirements)
-import subprocess
 if st.button("Force-upgrade OpenAI SDK (one-time)"):
     with st.spinner("Upgrading openai…"):
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "openai==1.56.0", "packaging>=24.1"])
@@ -50,9 +51,11 @@ REQUIRED_SECRETS = [
     "DROPBOX_APP_SECRET",
     "DROPBOX_REFRESH_TOKEN",
 ]
-OPTIONAL_SECRETS = ["ASSISTANT_ID", "DROPBOX_ROOT"]
+OPTIONAL_SECRETS = ["ASSISTANT_ID", "DROPBOX_ROOT", "DROPBOX_NAMESPACE"]
 
-CONFIG_DIR = "config"
+namespace = st.secrets.get("DROPBOX_NAMESPACE", "").strip("/")
+root = st.secrets.get("DROPBOX_ROOT", "").strip("/")
+CONFIG_DIR = f"/{namespace}/{root}/config" if namespace and root else "/config"
 MANIFEST_PATH = os.path.join(CONFIG_DIR, "dropbox_manifest.json")
 VECTOR_META_PATH = os.path.join(CONFIG_DIR, "vector_store.json")
 
@@ -64,12 +67,32 @@ def _has_secret(key: str) -> bool:
 
 def _read_json(path: str):
     try:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+        dbx = init_dropbox()
+        _, res = dbx.files_download(path)
+        return json.loads(res.content.decode("utf-8"))
     except Exception:
-        pass
-    return None
+        return None
+
+def _ensure_dropbox_folder(dbx: dropbox.Dropbox, folder: str):
+    # Ensure parent folder exists (no-op if it already does)
+    folder = (folder or "/").rstrip("/") or "/"
+    if folder == "/":
+        return
+    try:
+        dbx.files_get_metadata(folder)
+    except dropbox.exceptions.ApiError:
+        dbx.files_create_folder_v2(folder, autorename=False)
+
+def _write_json(path: str, data: dict):
+    dbx = init_dropbox()
+    parent = os.path.dirname(path.rstrip("/")) or "/"
+    _ensure_dropbox_folder(dbx, parent)
+    dbx.files_upload(
+        json.dumps(data, ensure_ascii=False).encode("utf-8"),
+        path,
+        mode=dropbox.files.WriteMode.overwrite,
+        mute=True,
+    )
 
 # --- Preflight
 st.subheader("Preflight")
@@ -82,7 +105,6 @@ with c1:
         st.write(("ℹ️" if _has_secret(k) else "—"), k)
 with c2:
     st.markdown("**Config Folder**")
-    os.makedirs(CONFIG_DIR, exist_ok=True)
     mf = _read_json(MANIFEST_PATH)
     vm = _read_json(VECTOR_META_PATH)
     st.write("📄", MANIFEST_PATH, "(exists)" if mf is not None else "(missing)")
@@ -109,11 +131,11 @@ with left:
                 if override_root:
                     os.environ["DROPBOX_ROOT"] = override_root
                 dbx = init_dropbox()  # raises if creds/root invalid
-                root = os.getenv("DROPBOX_ROOT", st.secrets.get("DROPBOX_ROOT", ""))
-                st.success(f"Dropbox OK. Root: {root or '(account root)'}")
+                root_env = os.getenv("DROPBOX_ROOT", st.secrets.get("DROPBOX_ROOT", ""))
+                st.success(f"Dropbox OK. Root: {root_env or '(account root)'}")
 
                 # List a few entries
-                res = dbx.files_list_folder(root or "", recursive=False)
+                res = dbx.files_list_folder(root_env or "", recursive=False)
                 names = [e.name for e in res.entries[:10] if hasattr(e, "name")]
                 st.write("Found entries:" if names else "No entries at root.", names or [])
             except Exception as e:
@@ -146,5 +168,6 @@ with right:
 
 st.divider()
 st.caption("Uses Dropbox refresh-token auth and attaches files to the Assistant’s vector store for File Search.")
+
 
 
