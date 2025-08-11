@@ -45,8 +45,8 @@ from dbx_utils import (
 # Pipeline adapter (cloud runner expects bytes, filename, paths)
 from pipeline_adapter import run_pipeline_cloud as run_pipeline
 
-# (Optional) Knowledge Base modules (unchanged)
-from phase4_knowledge.knowledgebase_builder import status as kb_status, build_or_update_knowledgebase
+# (Optional) Knowledge Base modules (updated for cloud compatibility)
+from phase4_knowledge.knowledgebase_builder import status as kb_status, build_or_update_knowledgebase, PROJECT_ROOT as KB_PROJECT_ROOT
 from phase4_knowledge.knowledgebase_retriever import search_topk, pack_context
 from phase4_knowledge.response_composer import compose_response
 
@@ -448,10 +448,11 @@ else:
     st.info("No files in Cleansed yet. Run step 1 first (Dropbox mode).")
 
 # =============================================================================
-# Knowledge Base (optional, unchanged)
+# Knowledge Base (optional, cloud-aware)
 # =============================================================================
 st.header("3) Knowledge Base (optional)")
-PROJECT_ROOT = st.secrets.get("PROJECT_ROOT", str(Path(__file__).resolve().parent))
+# Use the computed cloud-aware PROJECT_ROOT from knowledgebase_builder
+PROJECT_ROOT = KB_PROJECT_ROOT
 with st.expander("Knowledge Base controls"):
     st.json(kb_status(PROJECT_ROOT))
     include_text = st.checkbox("Include .txt/.md", value=True)
