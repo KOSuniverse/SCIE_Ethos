@@ -267,14 +267,18 @@ def _build_excel_context(cleansed_paths: Optional[List[str]]) -> Dict[str, Any]:
             sheets = []
         sheets_by_file[f] = sheets
 
-        # lightweight type hints by heuristics
+        # lightweight type hints by heuristics  
         tmap: Dict[str, str] = {}
         for s in sheets:
             sl = s.lower()
-            if any(k in sl for k in ("wip", "aged wip", "g512", "work in progress")):
+            if any(k in sl for k in ("comparison", "compare", "vs", "q1", "q2")):
+                tmap[s] = "comparison"
+            elif any(k in sl for k in ("wip", "aged wip", "g512", "work in progress")):
                 tmap[s] = "wip"
             elif any(k in sl for k in ("inventory", "finished goods", "fg")):
                 tmap[s] = "inventory"
+            elif any(k in sl for k in ("aging", "aged", "shift", "analysis")):
+                tmap[s] = "aging_analysis"
             else:
                 tmap[s] = "unknown"
         sheet_types[f] = tmap
@@ -360,9 +364,14 @@ def _propose_tool_plan(
         f"{json.dumps(defaults, ensure_ascii=False)}\n\n"
         "Rules:\n"
         "- Use: dataframe_query, chart, kb_search ONLY.\n"
-        "- If both Inventory and WIP are relevant, include two dataframe_query steps and then a chart or combined summary.\n"
+        "- Analyze the available sheets and their names to select the MOST RELEVANT sheet for the question.\n"
+        "- For comparison/change questions, look for sheets with 'comparison', 'vs', 'q1 vs q2', or similar in their names.\n"
+        "- For inventory questions, prioritize sheets with 'inventory' in the name over 'wip' sheets.\n"
+        "- For aging/time-based questions, look for sheets with 'aging', 'aged', or time periods in their names.\n"
         "- Only use files from context.excel.files.\n"
-        "- If you specify 'sheet', it MUST be in context.excel.sheets_by_file[file]. If unsure, omit 'sheet'.\n"
+        "- If you specify 'sheet', it MUST be in context.excel.sheets_by_file[file].\n"
+        "- Use sheet_types and columns_by_sheet to understand what data each sheet contains.\n"
+        "- If multiple relevant sheets exist, create separate dataframe_query steps for each.\n"
         "- If kb_candidates not empty and the question is analytical/interpretive, include a kb_search step.\n"
         "- Keep args small; do not include large literal data.\n\n"
         f"USER QUESTION: {question}\n\n"
@@ -433,11 +442,8 @@ def _execute_plan(plan: List[Dict[str, Any]], app_paths: Any) -> Dict[str, Any]:
             except Exception:
                 available = []
 
-            if requested and requested not in available:
-                # Deterministic fallback: prefer WIP -> Inventory -> first
-                sheet_used = _pick_fallback_sheet(available, requested)
-            else:
-                sheet_used = requested or _pick_fallback_sheet(available, None)
+            # Use the sheet specified in the plan, or let the tool handle sheet selection
+            sheet_used = requested
 
             # Artifact folder by backend
             artifact_folder = args.get("artifact_folder")
@@ -516,25 +522,8 @@ def _execute_plan(plan: List[Dict[str, Any]], app_paths: Any) -> Dict[str, Any]:
     return {"calls": calls, "context": context, "artifacts": artifacts}
 
 
-def _pick_fallback_sheet(available_sheets: List[str], requested: Optional[str]) -> Optional[str]:
-    if not available_sheets:
-        return None
-    if requested in available_sheets:
-        return requested
-    lower = [s.lower() for s in available_sheets]
-    for key in ("wip", "aged wip", "g512", "work in progress"):
-        for i, s in enumerate(lower):
-            if key in s:
-                return available_sheets[i]
-    for key in ("inventory", "finished goods", "fg"):
-        for i, s in enumerate(lower):
-            if key in s:
-                return available_sheets[i]
-    return available_sheets[0]
-
-
 # =============================================================================
-# Quant/KB merging for final answer
+# Quant/KB merging for final answer  
 # =============================================================================
 def _summarize_exec(exec_result: Dict[str, Any]) -> Tuple[str, List[str]]:
     calls = exec_result["calls"]
