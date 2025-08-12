@@ -4,10 +4,20 @@ import os
 import json
 import datetime
 
+# Enhanced foundation imports
+try:
+    from assistant_bridge import assistant_summarize
+    ASSISTANT_AVAILABLE = True
+except ImportError:
+    ASSISTANT_AVAILABLE = False
+    def assistant_summarize(content_type, data, context=""): return data
+
 def generate_final_eda_summary(df, eda_text: str, paths: dict) -> str:
     """
     Generates a multi-section final EDA summary with inventory, E&O, cost allocation,
     subcontractor, financial, and data quality highlights.
+    
+    Enhanced to prefer assistant_summarize("final EDA", ...) with fallback to text as-is.
 
     Args:
         df (pd.DataFrame): Cleaned dataset for a sheet_type.
@@ -82,14 +92,51 @@ def generate_final_eda_summary(df, eda_text: str, paths: dict) -> str:
     summary.append("\n✅ Summary generated from latest EDA actions.")
     summary.append("📈 Recommended next step: Cross-file or cross-period comparison.")
 
-    full_summary = "\n".join(summary)
+    raw_summary = "\n".join(summary)
+    
+    # Enhanced: Prefer assistant_summarize("final EDA", ...) with fallback to text as-is
+    if ASSISTANT_AVAILABLE:
+        try:
+            # Prepare context for Assistant summarization
+            context = f"""
+            Dataset: {len(df)} rows, {len(df.columns)} columns
+            Analysis type: Supply chain EDA summary
+            Previous EDA text: {eda_text[:500]}...
+            """
+            
+            # Use Assistant to enhance the summary
+            enhanced_summary = assistant_summarize(
+                content_type="final EDA",
+                data=raw_summary,
+                context=context
+            )
+            
+            # Validate the enhanced summary
+            if enhanced_summary and len(enhanced_summary) > len(raw_summary) * 0.5:
+                full_summary = enhanced_summary
+            else:
+                # Fallback if Assistant response is too short or empty
+                full_summary = raw_summary
+                
+        except Exception as e:
+            print(f"Assistant summarization failed, using fallback: {e}")
+            full_summary = raw_summary
+    else:
+        # Fallback to text as-is when Assistant not available
+        full_summary = raw_summary
 
-    # Save to JSON file
+    # Save to JSON file with enhanced metadata
     record = {
         "timestamp": datetime.datetime.now().isoformat(),
         "file": paths.get("filename", ""),
         "summary": full_summary,
-        "raw_eda_text": eda_text
+        "raw_eda_text": eda_text,
+        "assistant_enhanced": ASSISTANT_AVAILABLE,
+        "data_stats": {
+            "rows": len(df),
+            "columns": len(df.columns),
+            "memory_usage_mb": round(df.memory_usage(deep=True).sum() / 1024 / 1024, 2)
+        }
     }
 
     exec_path = paths.get("summary_json", "")
@@ -99,3 +146,49 @@ def generate_final_eda_summary(df, eda_text: str, paths: dict) -> str:
             json.dump(record, f, indent=2)
 
     return full_summary
+
+def create_assistant_enhanced_summary(df, analysis_type: str = "supply_chain", context: str = "") -> str:
+    """
+    Create a summary using Assistant enhancement with supply chain domain knowledge.
+    """
+    
+    # Generate basic summary statistics
+    basic_summary = f"""
+    Dataset Overview:
+    - Total Records: {len(df):,}
+    - Total Columns: {len(df.columns)}
+    - Memory Usage: {df.memory_usage(deep=True).sum() / 1024 / 1024:.2f} MB
+    
+    Data Quality:
+    - Missing Data: {df.isnull().sum().sum():,} null values
+    - Complete Records: {len(df.dropna()):,}
+    
+    Numeric Analysis:
+    """
+    
+    # Add numeric column analysis
+    numeric_cols = df.select_dtypes(include=[float, int]).columns
+    for col in numeric_cols[:5]:  # Limit to top 5 numeric columns
+        basic_summary += f"\n    {col}: Mean={df[col].mean():.2f}, Std={df[col].std():.2f}"
+    
+    # Add categorical analysis
+    categorical_cols = df.select_dtypes(include=['object']).columns
+    if len(categorical_cols) > 0:
+        basic_summary += f"\n\nCategorical Columns: {len(categorical_cols)}"
+        for col in categorical_cols[:3]:  # Limit to top 3 categorical
+            unique_count = df[col].nunique()
+            basic_summary += f"\n    {col}: {unique_count} unique values"
+    
+    # Use Assistant enhancement if available
+    if ASSISTANT_AVAILABLE:
+        try:
+            enhanced = assistant_summarize(
+                content_type=f"{analysis_type} data analysis",
+                data=basic_summary,
+                context=context
+            )
+            return enhanced
+        except Exception as e:
+            print(f"Assistant enhancement failed: {e}")
+    
+    return basic_summary
