@@ -204,8 +204,9 @@ def _to_num(x: Any) -> float:
         return np.nan
 
 def dataframe_query(
-    cleansed_paths: List[str],
+    cleansed_paths: Optional[List[str]] = None,
     *,
+    files: Optional[List[str]] = None,
     sheet: Optional[str] = None,
     filters: Optional[List[Dict[str, Any]]] = None,
     groupby: Optional[List[str]] = None,
@@ -218,12 +219,16 @@ def dataframe_query(
     Load the first cleansed workbook (Excel or CSV) from Dropbox, run ops, save artifact, return preview.
     
     Args:
+        cleansed_paths: Legacy parameter name (for backward compatibility)
+        files: New parameter name (takes precedence over cleansed_paths)
         artifact_format: "csv" (fast, for intermediate results) or "excel" (OpenAI compatible)
     """
-    if not cleansed_paths:
-        return {"error": "No cleansed paths provided."}
+    # Handle parameter compatibility: files takes precedence, fallback to cleansed_paths
+    paths = files if files is not None else cleansed_paths
+    if not paths:
+        return {"error": "No cleansed paths or files provided."}
 
-    first = cleansed_paths[0]
+    first = paths[0]
     
     try:
         frames = _load_file_to_frames(first)

@@ -19,6 +19,16 @@ except Exception:
     def chat_completion(client, messages, model: str):
         raise RuntimeError("llm_client.chat_completion not available")
 
+# Simplified imports for thin orchestrator
+try:
+    from assistant_bridge import run_query as assistants_answer
+    from intent import classify_intent
+    from executor import run_intent_task
+    from file_utils import list_cleaned_files
+    from loader import load_excel_file
+except Exception as e:
+    print(f"Import warning: {e}")
+
 # Optional: file listing utility (auto-scan cleansed files)
 try:
     from file_utils import list_cleaned_files  # your helper in main.py context
