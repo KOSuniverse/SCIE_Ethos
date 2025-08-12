@@ -701,7 +701,7 @@ if raw_files:
                     
                     # Fallback to basic analysis if enhanced EDA not available
                     
-                    if eda_available and len(df) > 0:
+                    if enhanced_eda_available and len(df) > 0:
                         # Generate suggested EDA actions
                         step_status.write(f"🔄 Step 2/5: Generating visualizations for {sheet_name}...")
                         progress_bar.progress(60)
