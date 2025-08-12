@@ -523,6 +523,7 @@ if raw_files:
             st.warning(f"Preview failed: {e}")
 
     if st.button("🧹 Process & Save to Cleansed"):
+        processing_start_time = time.time()  # Track processing time
         try:
             sel = raw_files[labels.index(choice)]["path_lower"]
             filename = raw_files[labels.index(choice)]["name"]
@@ -544,7 +545,16 @@ if raw_files:
                 step_status.write("🔄 Step 1/5: Running data cleansing pipeline...")
                 progress_bar.progress(20)
                 
+                # Add heartbeat indicator for long-running operations
+                heartbeat_container = st.container()
+                with heartbeat_container:
+                    heartbeat_status = st.empty()
+                    heartbeat_status.write("💓 Processing... (this may take a moment)")
+                
                 cleaned_sheets, metadata = run_pipeline(b, filename, app_paths)
+                
+                # Clear heartbeat
+                heartbeat_status.empty()
                 
                 step_status.write("✅ Step 1/5: Data cleansing completed")
                 progress_bar.progress(40)
@@ -648,10 +658,20 @@ if raw_files:
                             plt.style.use('default')
                             sns.set_palette("husl")
                             
+                            # Create a progress container for chart generation
+                            chart_progress_container = st.container()
+                            with chart_progress_container:
+                                chart_status = st.empty()
+                                chart_progress = st.progress(0)
+                                total_charts = min(3, len(numeric_cols)) + (1 if len(numeric_cols) >= 2 else 0) + (1 if len(numeric_cols) >= 3 else 0) + (1 if categorical_cols and numeric_cols else 0)
+                                current_chart = 0
+                            
                             # Generate histograms for numeric columns (top 3)
                             for i, col in enumerate(numeric_cols[:3]):
                                 if df[col].notna().sum() > 0:  # Only if we have data
                                     try:
+                                        chart_status.write(f"🎨 Creating histogram for {col}...")
+                                        
                                         fig, ax = plt.subplots(figsize=(10, 6))
                                         
                                         # Create histogram
@@ -670,6 +690,10 @@ if raw_files:
                                         upload_bytes(chart_path, chart_buffer.getvalue())
                                         chart_paths.append(chart_path)
                                         charts_generated += 1
+                                        current_chart += 1
+                                        
+                                        chart_progress.progress(current_chart / total_charts)
+                                        chart_status.write(f"✅ Histogram for {col} completed")
                                         
                                         plt.close(fig)
                                         
@@ -680,6 +704,7 @@ if raw_files:
                             if len(numeric_cols) >= 2:
                                 try:
                                     x_col, y_col = numeric_cols[0], numeric_cols[1]
+                                    chart_status.write(f"🎨 Creating scatter plot: {x_col} vs {y_col}...")
                                     clean_data = df[[x_col, y_col]].dropna()
                                     
                                     if len(clean_data) > 0:
@@ -700,6 +725,10 @@ if raw_files:
                                         upload_bytes(chart_path, chart_buffer.getvalue())
                                         chart_paths.append(chart_path)
                                         charts_generated += 1
+                                        current_chart += 1
+                                        
+                                        chart_progress.progress(current_chart / total_charts)
+                                        chart_status.write(f"✅ Scatter plot completed")
                                         
                                         plt.close(fig)
                                         
@@ -709,6 +738,7 @@ if raw_files:
                             # Generate correlation heatmap if enough numeric columns
                             if len(numeric_cols) >= 3:
                                 try:
+                                    chart_status.write("🎨 Creating correlation heatmap...")
                                     corr_data = df[numeric_cols].corr()
                                     
                                     fig, ax = plt.subplots(figsize=(12, 8))
@@ -726,6 +756,10 @@ if raw_files:
                                     upload_bytes(chart_path, chart_buffer.getvalue())
                                     chart_paths.append(chart_path)
                                     charts_generated += 1
+                                    current_chart += 1
+                                    
+                                    chart_progress.progress(current_chart / total_charts)
+                                    chart_status.write(f"✅ Correlation heatmap completed")
                                     
                                     plt.close(fig)
                                     
@@ -736,6 +770,7 @@ if raw_files:
                             if categorical_cols and numeric_cols:
                                 try:
                                     group_col, metric_col = categorical_cols[0], numeric_cols[0]
+                                    chart_status.write(f"🎨 Creating top 10 analysis: {group_col} by {metric_col}...")
                                     top_data = df.groupby(group_col)[metric_col].sum().sort_values(ascending=False).head(10)
                                     
                                     if len(top_data) > 0:
@@ -757,11 +792,20 @@ if raw_files:
                                         upload_bytes(chart_path, chart_buffer.getvalue())
                                         chart_paths.append(chart_path)
                                         charts_generated += 1
+                                        current_chart += 1
+                                        
+                                        chart_progress.progress(1.0)  # Complete
+                                        chart_status.write(f"✅ All visualizations completed!")
                                         
                                         plt.close(fig)
                                         
                                 except Exception as chart_e:
                                     st.warning(f"Could not generate top N analysis: {chart_e}")
+                            
+                            # Clear the progress indicators after completion
+                            time.sleep(1)  # Brief pause to show completion
+                            chart_status.empty()
+                            chart_progress.empty()
                             
                         except ImportError:
                             st.warning("⚠️ Matplotlib/Seaborn not available. Skipping chart generation.")
@@ -817,11 +861,37 @@ if raw_files:
                                 if info.get("total_value", 0) > 0:
                                     st.write(f"- **{category.title()}**: ${info['total_value']:,.2f} across {len(info['columns_found'])} columns")
                         
-                        # Show chart generation results
+                        # Show chart generation results with display and progress
                         if chart_paths:
                             st.success(f"✅ Generated {charts_generated} visualizations")
-                            for path in chart_paths[:3]:  # Show first 3
-                                st.write(f"📊 {path.split('/')[-1]}")
+                            
+                            # Display charts inline if possible
+                            st.write("**📊 Generated Visualizations:**")
+                            
+                            chart_display_container = st.container()
+                            with chart_display_container:
+                                # Show downloadable links and try to display charts
+                                for i, path in enumerate(chart_paths):
+                                    chart_name = path.split('/')[-1]
+                                    
+                                    col1, col2 = st.columns([3, 1])
+                                    with col1:
+                                        st.write(f"📊 {chart_name}")
+                                    with col2:
+                                        # Create a download link hint
+                                        st.caption("💾 Saved to Dropbox")
+                                    
+                                    # Try to display the chart by reading it back from Dropbox
+                                    try:
+                                        chart_bytes = dbx_read_bytes(path)
+                                        st.image(chart_bytes, caption=chart_name, use_column_width=True)
+                                    except Exception as display_e:
+                                        st.caption(f"⚠️ Chart saved but display failed: {display_e}")
+                                    
+                                    # Add some spacing between charts
+                                    if i < len(chart_paths) - 1:
+                                        st.write("---")
+                                        
                         else:
                             st.info("ℹ️ No charts generated (insufficient data or columns)")
                     
@@ -850,6 +920,7 @@ if raw_files:
 
             # 5) Update master metadata on Dropbox
             step_status.write("🔄 Step 4/5: Updating metadata...")
+            progress_bar.progress(85)
             
             # Add EDA insights to metadata
             if all_insights:
@@ -859,43 +930,102 @@ if raw_files:
             meta_path = getattr(app_paths, "dbx_master_metadata_path", None) or getattr(app_paths, "master_metadata_path", None)
             if not meta_path:
                 raise RuntimeError("No metadata path available (neither Dropbox nor local).")
-            try:
-                existing = json.loads(dbx_read_bytes(meta_path).decode("utf-8"))
-                if not isinstance(existing, list):
+            
+            # Add retry logic for network issues
+            metadata_updated = False
+            max_retries = 3
+            
+            for attempt in range(max_retries):
+                try:
+                    step_status.write(f"🔄 Step 4/5: Updating metadata (attempt {attempt + 1}/{max_retries})...")
+                    
                     existing = []
-            except Exception:
-                existing = []
-            existing.append(metadata)
-            upload_json(meta_path, existing)
-            step_status.write("✅ Step 4/5: Metadata updated")
-            progress_bar.progress(95)
+                    try:
+                        existing = json.loads(dbx_read_bytes(meta_path).decode("utf-8"))
+                        if not isinstance(existing, list):
+                            existing = []
+                    except Exception:
+                        existing = []
+                    
+                    existing.append(metadata)
+                    upload_json(meta_path, existing)
+                    metadata_updated = True
+                    step_status.write("✅ Step 4/5: Metadata updated successfully")
+                    break
+                    
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        step_status.write(f"⚠️ Metadata update attempt {attempt + 1} failed, retrying...")
+                        time.sleep(2)  # Wait before retry
+                    else:
+                        st.warning(f"⚠️ Metadata update failed after {max_retries} attempts: {e}")
+                        st.info("📊 Data processing completed successfully, but metadata sync had network issues.")
+            
+            progress_bar.progress(90)
 
             # 6) Save per-file summaries to Dropbox (JSON + Markdown)
             step_status.write("🔄 Step 5/5: Saving summaries...")
+            progress_bar.progress(95)
+            
             summaries_dbx = getattr(app_paths, "dbx_summaries_folder", None)
             if summaries_dbx:
-                # reuse the same base you used for cleansed output naming
-                run_meta_path = f"{summaries_dbx}/{out_base}_run_metadata.json"
-                upload_json(run_meta_path, metadata)
-
-                exec_md_bytes = _build_summary_markdown(metadata).encode("utf-8")
-                exec_md_path = f"{summaries_dbx}/{out_base}_executive_summary.md"
-                upload_bytes(exec_md_path, exec_md_bytes)
+                summary_saved = False
+                
+                # Save run metadata with retry
+                for attempt in range(max_retries):
+                    try:
+                        step_status.write(f"🔄 Step 5/5: Saving metadata summary (attempt {attempt + 1}/{max_retries})...")
+                        run_meta_path = f"{summaries_dbx}/{out_base}_run_metadata.json"
+                        upload_json(run_meta_path, metadata)
+                        break
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            time.sleep(1)
+                        else:
+                            st.warning(f"⚠️ Metadata summary save failed: {e}")
+                
+                # Save executive summary with retry  
+                for attempt in range(max_retries):
+                    try:
+                        step_status.write(f"🔄 Step 5/5: Saving executive summary (attempt {attempt + 1}/{max_retries})...")
+                        exec_md_bytes = _build_summary_markdown(metadata).encode("utf-8")
+                        exec_md_path = f"{summaries_dbx}/{out_base}_executive_summary.md"
+                        upload_bytes(exec_md_path, exec_md_bytes)
+                        summary_saved = True
+                        break
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            time.sleep(1)
+                        else:
+                            st.warning(f"⚠️ Executive summary save failed: {e}")
 
                 step_status.write("✅ Step 5/5: All processing completed!")
                 progress_bar.progress(100)
                 
                 # Final success message
                 st.success("🎉 **Processing Complete!**")
-                st.info(f"""
-                **Files Created:**
-                - 📊 Cleansed Data: `{out_path}`
-                - 📈 Charts: {len(all_chart_paths)} visualizations generated
-                - 📝 Metadata: `{meta_path}`
-                - 📋 Summary: `{exec_md_path}`
-                """)
+                
+                # Create final summary with better formatting
+                success_info = f"""
+                **📊 Files Created:**
+                - **Cleansed Data**: `{out_path}`
+                - **Charts Generated**: {len(all_chart_paths)} visualizations 
+                - **Metadata**: `{meta_path}` {"✅" if metadata_updated else "⚠️"}
+                """
+                
+                if summary_saved:
+                    success_info += f"- **Summary**: `{exec_md_path}` ✅"
+                
+                st.info(success_info)
+                
+                # Show processing time if available
+                processing_time = time.time() - processing_start_time
+                st.caption(f"⏱️ Total processing time: {processing_time:.1f} seconds")
+                
             else:
                 st.warning("Summaries folder not set on Dropbox (03_Summaries). Skipping summaries save.")
+                step_status.write("✅ Step 5/5: Processing completed (summaries skipped)")
+                progress_bar.progress(100)
 
             # Display final insights summary
             if all_insights:
