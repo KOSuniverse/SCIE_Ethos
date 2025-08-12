@@ -4,12 +4,16 @@ import os
 try:
     import streamlit as st
     _DBX = st.secrets.get("DROPBOX_ROOT", os.getenv("DROPBOX_ROOT", "")).strip("/")
+    _NS = st.secrets.get("DROPBOX_NAMESPACE", os.getenv("DROPBOX_NAMESPACE", "")).strip("/")
 except Exception:
     _DBX = os.getenv("DROPBOX_ROOT", "").strip("/")
+    _NS = os.getenv("DROPBOX_NAMESPACE", "").strip("/")
 
-# Dropbox-first root; handle full path or fallback
-if _DBX:
-    PROJECT_ROOT = f"/{_DBX}" if not _DBX.startswith("/") else _DBX
+# Construct full Dropbox path from namespace and root
+if _DBX and _NS:
+    PROJECT_ROOT = f"/{_NS}/{_DBX}"
+elif _DBX:
+    PROJECT_ROOT = f"/{_DBX}"
 else:
     PROJECT_ROOT = "/Apps/Ethos LLM/Project_Root"  # Default fallback matching Dropbox structure
 
