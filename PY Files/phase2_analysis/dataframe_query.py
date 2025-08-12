@@ -14,8 +14,8 @@ try:
     from logger import log_event
 except ImportError:
     # Fallback for standalone usage
-    DATA_ROOT = "/Project_Root/04_Data"
-    def canon_path(p): return str(Path(p).resolve())
+    DATA_ROOT = "/project_root/04_Data"
+    def canon_path(p): return p  # Don't resolve filesystem paths for cloud storage
     def log_event(msg, path=None): print(f"LOG: {msg}")
 
 # AI integration for intelligent analytics
