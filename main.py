@@ -112,8 +112,69 @@ def _detect_dropbox_root(list_func):
 # =============================================================================
 # App setup
 # =============================================================================
-st.set_page_config(page_title="LLM Inventory Assistant", layout="wide")
-st.title("📊 LLM Inventory + KB-Enhanced Assistant")
+st.set_page_config(page_title="SCIE Ethos LLM", layout="wide")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Interface Mode Selection
+# ─────────────────────────────────────────────────────────────────────────────
+interface_mode = st.sidebar.radio(
+    "🎛️ Interface Mode",
+    ["💬 Chat Assistant", "🔧 Data Processing"],
+    index=0,
+    help="Choose between chat interface (architecture-compliant) or data processing workflows"
+)
+
+if interface_mode == "💬 Chat Assistant":
+    # Redirect to chat interface
+    st.markdown("""
+    ## 🧠 SCIE Ethos Chat Assistant
+    
+    **Architecture-Compliant Interface**
+    - Assistants API as brain
+    - File Search integration  
+    - Confidence badges & model routing
+    - Citation tracking & export capabilities
+    
+    ### 🚀 Launch Chat Interface
+    
+    The chat interface is available as a separate Streamlit app for optimal performance.
+    """)
+    
+    if st.button("🚀 Launch Chat Assistant", type="primary", use_container_width=True):
+        st.markdown("""
+        **To launch the chat interface, run:**
+        ```bash
+        streamlit run chat_ui.py
+        ```
+        
+        Or use the VS Code terminal and run the command above.
+        """)
+        
+        # Show preview of chat features
+        with st.expander("� Chat Interface Features"):
+            st.markdown("""
+            **Core Features:**
+            - 🧠 **Assistants API Integration**: Full OpenAI Assistant with File Search
+            - �📊 **File Selection**: Choose specific cleansed files for analysis  
+            - 🎯 **Intent Classification**: Auto-routing to appropriate models
+            - 📈 **Confidence Scoring**: R/A/V/C methodology with abstention
+            - 💬 **Conversation Management**: Named conversations with history
+            - 📎 **Artifact Handling**: Charts, data files, and analysis results
+            - 📚 **Knowledge Base**: Integrated KB search and citations
+            - 📄 **Export Options**: Markdown and JSON conversation exports
+            
+            **Architecture Compliance:**
+            - ✅ Assistants API as primary brain
+            - ✅ Dropbox → Assistant File Store sync
+            - ✅ Cloud-first file handling
+            - ✅ Confidence & abstention policies
+            - ✅ Model auto-upgrade (mini → 4o) 
+            - ✅ Citation tracking & sources
+            """)
+    
+    st.stop()  # Don't show data processing interface
+
+st.title("📊 SCIE Ethos — Data Processing Workflows")
 
 # Resolve canonical cloud paths (diagnostic/manifest usage)
 cloud_paths = get_project_paths()  # keep separate from AppPaths below

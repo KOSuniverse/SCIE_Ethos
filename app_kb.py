@@ -1,14 +1,13 @@
 # streamlit app for building and querying a knowledge base
 
-import os, json, sys, streamlit as st
+import os, sys, json, streamlit as st
 from pathlib import Path
 sys.path.append("PY Files")  # ensure PY Files/* is importable
+
+# Enterprise foundation imports
+from constants import PROJECT_ROOT
 from phase4_knowledge.knowledgebase_builder import status, build_or_update_knowledgebase
 from phase4_knowledge.kb_qa import kb_answer
-
-# Dropbox-first default (app-root relative). Falls back to /Project_Root if unset.
-_dropbox_root = st.secrets.get("DROPBOX_ROOT", os.getenv("DROPBOX_ROOT", "")).strip("/")
-PROJECT_ROOT = f"/{_dropbox_root}" if _dropbox_root else "/Project_Root"
 
 st.set_page_config(page_title="Ethos KB QA", layout="wide")
 st.title("📚 Ethos Knowledge Base — QA")
