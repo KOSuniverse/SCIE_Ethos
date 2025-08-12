@@ -22,5 +22,5 @@ seaborn>=0.13
 XlsxWriter>=3.2
 scipy>=1.11
 scikit-learn>=1.4
-ydata-profiling>=4.6
+# ydata-profiling>=4.6  # Commented out - requires Python <3.13
 plotly>=5.17
