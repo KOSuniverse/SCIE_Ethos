@@ -13,8 +13,8 @@ try:
     from path_utils import canon_path
     from logger import log_event
 except ImportError:
-    # Fallback for standalone usage
-    DATA_ROOT = "/project_root/04_Data"
+    # Fallback for standalone usage - use proper Dropbox path
+    DATA_ROOT = "/Apps/Ethos LLM/Project_Root/04_Data"
     def canon_path(p): return p  # Don't resolve filesystem paths for cloud storage
     def log_event(msg, path=None): print(f"LOG: {msg}")
 
