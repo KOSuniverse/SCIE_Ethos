@@ -27,9 +27,21 @@ except ImportError:
 
 # Cloud storage integration
 try:
+    import sys
+    import os
+    
+    # Ensure PY Files directory is in path for imports
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    py_files_dir = os.path.dirname(current_dir)
+    if py_files_dir not in sys.path:
+        sys.path.insert(0, py_files_dir)
+    
     from dbx_utils import read_file_bytes, upload_bytes
     from tools_runtime import _load_file_to_frames, _apply_filters, _save_artifact
-except ImportError:
+    TOOLS_AVAILABLE = True
+except ImportError as e:
+    print(f"WARNING: Import failed in dataframe_query: {e}")
+    TOOLS_AVAILABLE = False
     def read_file_bytes(path): raise NotImplementedError("Cloud storage not available")
     def upload_bytes(path, data, mode="overwrite"): raise NotImplementedError("Cloud storage not available")
     def _load_file_to_frames(path): raise NotImplementedError("tools_runtime not available")
@@ -90,6 +102,15 @@ def dataframe_query(
     if not paths:
         return {
             "error": "No file paths provided",
+            "rowcount": 0,
+            "sheet_used": None,
+            "total_wip": None
+        }
+    
+    # Check if tools are available
+    if not TOOLS_AVAILABLE:
+        return {
+            "error": "Cloud storage tools not available - check imports and dependencies",
             "rowcount": 0,
             "sheet_used": None,
             "total_wip": None
