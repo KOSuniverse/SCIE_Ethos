@@ -884,7 +884,7 @@ if raw_files:
                                     # Try to display the chart by reading it back from Dropbox
                                     try:
                                         chart_bytes = dbx_read_bytes(path)
-                                        st.image(chart_bytes, caption=chart_name, use_column_width=True)
+                                        st.image(chart_bytes, caption=chart_name, use_container_width=True)
                                     except Exception as display_e:
                                         st.caption(f"⚠️ Chart saved but display failed: {display_e}")
                                     
@@ -1040,6 +1040,56 @@ if raw_files:
                     st.metric("Sheets Analyzed", len(cleaned_sheets))
                 with insight_col3:
                     st.metric("Charts Generated", total_charts)
+
+            # Display Executive Summary on screen
+            st.subheader("📋 Executive Summary")
+            try:
+                # Generate and display the executive summary
+                summary_markdown = _build_summary_markdown(metadata)
+                st.markdown(summary_markdown)
+                
+                # Also show key insights in a more digestible format
+                st.subheader("🔍 Key Insights by Sheet")
+                
+                if "sheets" in metadata:
+                    for sheet_info in metadata["sheets"]:
+                        sheet_name = sheet_info.get("sheet_name", "Unknown")
+                        sheet_type = sheet_info.get("normalized_sheet_type", "Unknown")
+                        record_count = sheet_info.get("record_count", 0)
+                        summary_text = sheet_info.get("summary_text", "No summary available")
+                        eda_text = sheet_info.get("eda_text", "")
+                        
+                        with st.expander(f"📊 {sheet_name} ({sheet_type}) - {record_count:,} records"):
+                            if summary_text and summary_text != "No summary available":
+                                st.write("**Summary:**")
+                                st.write(summary_text)
+                            
+                            if eda_text:
+                                st.write("**Analysis:**")
+                                st.write(eda_text)
+                            
+                            # Show supply chain insights if available
+                            if sheet_name in all_insights:
+                                insights = all_insights[sheet_name]
+                                if insights.get("supply_chain_insights"):
+                                    st.write("**Supply Chain Metrics:**")
+                                    for category, info in insights["supply_chain_insights"].items():
+                                        if info.get("total_value", 0) > 0:
+                                            st.write(f"- **{category.title()}**: ${info['total_value']:,.2f}")
+                                
+                                # Show dataset overview
+                                if insights.get("dataset_overview"):
+                                    overview = insights["dataset_overview"]
+                                    st.write("**Data Quality:**")
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        st.metric("Missing Data", f"{overview.get('missing_data_percentage', 0):.1f}%")
+                                    with col2:
+                                        chart_count = len(insights.get("charts_generated", []))
+                                        st.metric("Charts Generated", chart_count)
+                
+            except Exception as e:
+                st.warning(f"Could not display executive summary: {e}")
 
             with st.expander("📋 View Raw Metadata"):
                 st.json(metadata)
