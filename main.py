@@ -81,11 +81,20 @@ def _build_summary_markdown(metadata: dict) -> str:
         lines.append(f"### {s.get('sheet_name')}")
         lines.append(f"- Type: `{s.get('normalized_sheet_type')}`")
         lines.append(f"- Records: {s.get('record_count')}")
+        
+        # Only include EDA text if it's actual analysis, not raw metadata
         eda = (s.get("eda_text") or "").strip()
-        if eda:
+        if eda and not eda.startswith('{') and len(eda) > 50:  # Filter out raw JSON and short text
             lines.append("")
             lines.append(eda)
             lines.append("")
+        else:
+            # If no meaningful EDA text, show basic summary
+            summary = s.get("summary_text", "").strip()
+            if summary:
+                lines.append("")
+                lines.append(summary)
+                lines.append("")
     return "\n".join(lines)
 
 
@@ -559,26 +568,29 @@ if raw_files:
                 step_status.write("✅ Step 1/5: Data cleansing completed")
                 progress_bar.progress(40)
 
-            # 3) Enhanced EDA Generation and Display
-            st.subheader("📈 Data Analysis & Insights")
+            # 3) Enhanced EDA Generation and Display (Comprehensive Colab-style workflow)
+            st.subheader("📈 Comprehensive Data Analysis & Insights")
             
-            # Import enhanced EDA tools
+            # Import enhanced EDA tools matching Colab workflow
             try:
-                from phase2_analysis.eda_runner import run_gpt_eda_actions, create_enhanced_eda_summary
-                from eda import generate_eda_summary
-                eda_available = True
-            except ImportError:
-                st.warning("⚠️ Enhanced EDA modules not available. Using basic analysis.")
-                eda_available = False
+                from phase2_analysis.enhanced_eda_system import run_enhanced_eda
+                from phase2_analysis.gpt_summary_generator import generate_comprehensive_summary
+                from phase2_analysis.smart_autofix_system import run_smart_autofix
+                enhanced_eda_available = True
+                st.success("✅ Enhanced EDA system loaded (Colab-style workflow)")
+            except ImportError as e:
+                st.warning(f"⚠️ Enhanced EDA modules not available: {e}")
+                enhanced_eda_available = False
 
             all_insights = {}
             all_chart_paths = []
+            all_eda_results = {}
             
             for sheet_name, df in cleaned_sheets.items():
-                with st.expander(f"📊 Analysis: {sheet_name} ({len(df)} rows, {len(df.columns)} columns)"):
+                with st.expander(f"📊 Comprehensive Analysis: {sheet_name} ({len(df)} rows, {len(df.columns)} columns)", expanded=True):
                     
                     # Basic stats display
-                    col1, col2, col3 = st.columns(3)
+                    col1, col2, col3, col4 = st.columns(4)
                     with col1:
                         st.metric("Total Rows", f"{len(df):,}")
                     with col2:
@@ -586,10 +598,108 @@ if raw_files:
                     with col3:
                         missing_pct = round((df.isnull().sum().sum() / (len(df) * len(df.columns))) * 100, 1)
                         st.metric("Missing Data", f"{missing_pct}%")
+                    with col4:
+                        data_quality_score = round(100 - missing_pct, 1)
+                        st.metric("Quality Score", f"{data_quality_score}%")
                     
                     # Show sample data
-                    st.write("**Sample Data:**")
+                    st.write("**Sample Data Preview:**")
                     st.dataframe(df.head(10), use_container_width=True)
+                    
+                    # STEP 1: Smart Auto-Fix (matching Colab workflow)
+                    if enhanced_eda_available:
+                        st.write("---")
+                        st.write("🧹 **STEP 1: Smart Auto-Fix & Data Cleaning**")
+                        
+                        with st.spinner("Running intelligent auto-fix system..."):
+                            try:
+                                # Run comprehensive auto-fix
+                                df_cleaned, cleaning_operations, cleaning_report = run_smart_autofix(
+                                    df.copy(), sheet_name, aggressive_mode=False
+                                )
+                                
+                                if len(cleaning_operations) > 0:
+                                    st.success(f"✅ Applied {len(cleaning_operations)} auto-fix operations")
+                                    
+                                    # Show key improvements
+                                    improvement_col1, improvement_col2 = st.columns(2)
+                                    with improvement_col1:
+                                        original_missing = df.isnull().sum().sum()
+                                        cleaned_missing = df_cleaned.isnull().sum().sum()
+                                        missing_reduction = original_missing - cleaned_missing
+                                        st.metric("Missing Values Reduced", f"{missing_reduction:,}")
+                                    
+                                    with improvement_col2:
+                                        original_quality = 100 - (original_missing / (len(df) * len(df.columns))) * 100
+                                        cleaned_quality = 100 - (cleaned_missing / (len(df_cleaned) * len(df_cleaned.columns))) * 100
+                                        quality_improvement = cleaned_quality - original_quality
+                                        st.metric("Quality Improvement", f"+{quality_improvement:.1f}%")
+                                    
+                                    # Show cleaning operations summary
+                                    with st.expander("🔍 View Auto-Fix Operations"):
+                                        for i, operation in enumerate(cleaning_operations[:10], 1):
+                                            st.write(f"{i}. {operation}")
+                                        if len(cleaning_operations) > 10:
+                                            st.write(f"... and {len(cleaning_operations) - 10} more operations")
+                                    
+                                    # Use cleaned data for further analysis
+                                    df = df_cleaned
+                                    
+                                else:
+                                    st.info("ℹ️ No auto-fix operations needed - data quality is good")
+                                    
+                            except Exception as e:
+                                st.warning(f"⚠️ Auto-fix failed: {e}")
+                    
+                    # STEP 2: Comprehensive EDA (matching Colab workflow)
+                    if enhanced_eda_available:
+                        st.write("---")
+                        st.write("📊 **STEP 2: Comprehensive Multi-Round EDA**")
+                        
+                        with st.spinner("Running comprehensive EDA analysis..."):
+                            try:
+                                # Run enhanced EDA system
+                                eda_results = run_enhanced_eda(
+                                    df, 
+                                    sheet_name=sheet_name,
+                                    filename=filename,
+                                    charts_folder=getattr(app_paths, "dbx_eda_folder", "/Project_Root/04_Data/02_EDA_Charts"),
+                                    summaries_folder=getattr(app_paths, "dbx_summaries_folder", "/Project_Root/04_Data/03_Summaries"),
+                                    max_rounds=3
+                                )
+                                
+                                all_eda_results[sheet_name] = eda_results
+                                chart_paths = eda_results.get("chart_paths", [])
+                                all_chart_paths.extend(chart_paths)
+                                
+                                # Display EDA results summary
+                                rounds_completed = len(eda_results.get("rounds", []))
+                                charts_generated = len(chart_paths)
+                                
+                                eda_col1, eda_col2, eda_col3 = st.columns(3)
+                                with eda_col1:
+                                    st.metric("Analysis Rounds", rounds_completed)
+                                with eda_col2:
+                                    st.metric("Charts Generated", charts_generated)
+                                with eda_col3:
+                                    business_insights = eda_results.get("business_insights", {})
+                                    supply_metrics = len(business_insights.get("supply_chain_metrics", {}))
+                                    st.metric("Supply Chain Metrics", supply_metrics)
+                                
+                                # Display business insights
+                                supply_chain_metrics = business_insights.get("supply_chain_metrics", {})
+                                if supply_chain_metrics:
+                                    st.write("**📦 Supply Chain Financial Overview:**")
+                                    for category, metrics in supply_chain_metrics.items():
+                                        if metrics.get("total_value", 0) > 0:
+                                            st.write(f"- **{category.title()}**: ${metrics['total_value']:,.2f} across {metrics.get('column_count', 0)} columns")
+                                
+                            except Exception as e:
+                                st.error(f"❌ Enhanced EDA failed: {e}")
+                                # Fallback to basic analysis
+                                enhanced_eda_available = False
+                    
+                    # Fallback to basic analysis if enhanced EDA not available
                     
                     if eda_available and len(df) > 0:
                         # Generate suggested EDA actions
@@ -865,32 +975,39 @@ if raw_files:
                         if chart_paths:
                             st.success(f"✅ Generated {charts_generated} visualizations")
                             
-                            # Display charts inline if possible
+                            # Display charts inline in a compact grid layout
                             st.write("**📊 Generated Visualizations:**")
                             
                             chart_display_container = st.container()
                             with chart_display_container:
-                                # Show downloadable links and try to display charts
-                                for i, path in enumerate(chart_paths):
-                                    chart_name = path.split('/')[-1]
+                                # Group charts in rows of 2
+                                for i in range(0, len(chart_paths), 2):
+                                    # Create columns for side-by-side display
+                                    if i + 1 < len(chart_paths):
+                                        col1, col2 = st.columns(2)
+                                        charts_in_row = [chart_paths[i], chart_paths[i + 1]]
+                                        columns = [col1, col2]
+                                    else:
+                                        col1, col2 = st.columns(2)
+                                        charts_in_row = [chart_paths[i]]
+                                        columns = [col1]
                                     
-                                    col1, col2 = st.columns([3, 1])
-                                    with col1:
-                                        st.write(f"📊 {chart_name}")
-                                    with col2:
-                                        # Create a download link hint
-                                        st.caption("💾 Saved to Dropbox")
+                                    # Display charts in this row
+                                    for j, (path, col) in enumerate(zip(charts_in_row, columns)):
+                                        with col:
+                                            chart_name = path.split('/')[-1]
+                                            st.caption(f"� {chart_name}")
+                                            
+                                            # Try to display the chart by reading it back from Dropbox
+                                            try:
+                                                chart_bytes = dbx_read_bytes(path)
+                                                st.image(chart_bytes, caption=None, use_container_width=True)
+                                            except Exception as display_e:
+                                                st.caption(f"⚠️ Chart saved but display failed: {display_e}")
                                     
-                                    # Try to display the chart by reading it back from Dropbox
-                                    try:
-                                        chart_bytes = dbx_read_bytes(path)
-                                        st.image(chart_bytes, caption=chart_name, use_container_width=True)
-                                    except Exception as display_e:
-                                        st.caption(f"⚠️ Chart saved but display failed: {display_e}")
-                                    
-                                    # Add some spacing between charts
-                                    if i < len(chart_paths) - 1:
-                                        st.write("---")
+                                    # Add spacing between rows
+                                    if i + 2 < len(chart_paths):
+                                        st.write("")
                                         
                         else:
                             st.info("ℹ️ No charts generated (insufficient data or columns)")
@@ -903,11 +1020,44 @@ if raw_files:
                             if "descriptive_stats" in basic_summary:
                                 st.dataframe(pd.DataFrame(basic_summary["descriptive_stats"]).T)
 
-            step_status.write("✅ Step 2/5: Data analysis completed")
-            progress_bar.progress(70)
+            # STEP 3: Generate Comprehensive AI Summaries (matching Colab workflow)
+            if enhanced_eda_available:
+                step_status.write("🔄 Step 3/5: Generating comprehensive AI summaries...")
+                progress_bar.progress(75)
+                
+                try:
+                    # Generate comprehensive summaries for all sheets
+                    comprehensive_summaries = {}
+                    
+                    for sheet_name, df in cleaned_sheets.items():
+                        sheet_metadata = metadata.get("sheets", [])
+                        sheet_meta = next((s for s in sheet_metadata if s.get("sheet_name") == sheet_name), {})
+                        
+                        sheet_eda_results = all_eda_results.get(sheet_name, {})
+                        
+                        summaries = generate_comprehensive_summary(
+                            df=df,
+                            sheet_name=sheet_name,
+                            filename=filename,
+                            metadata=sheet_meta,
+                            eda_results=sheet_eda_results
+                        )
+                        
+                        comprehensive_summaries[sheet_name] = summaries
+                    
+                    # Store summaries in metadata
+                    metadata["comprehensive_summaries"] = comprehensive_summaries
+                    
+                    st.success("✅ AI-powered comprehensive summaries generated")
+                    
+                except Exception as e:
+                    st.warning(f"⚠️ AI summary generation failed: {e}")
+            
+            step_status.write("✅ Step 2/5: Comprehensive analysis completed")
+            progress_bar.progress(80)
 
             # 4) Save cleansed workbook back to Dropbox
-            step_status.write("🔄 Step 3/5: Saving cleansed workbook...")
+            step_status.write("🔄 Step 4/5: Saving cleansed workbook...")
             out_bytes = build_xlsx_bytes_from_sheets(cleaned_sheets)
             out_base = filename.rsplit(".xlsx", 1)[0]
             cleansed_dbx = getattr(app_paths, "dbx_cleansed_folder", None)
@@ -915,15 +1065,18 @@ if raw_files:
                 raise RuntimeError("Dropbox cleansed folder not set (switch to 'Dropbox' mode).")
             out_path = f"{cleansed_dbx}/{out_base}_cleansed.xlsx"
             upload_bytes(out_path, out_bytes)
-            step_status.write("✅ Step 3/5: Cleansed workbook saved")
+            step_status.write("✅ Step 4/5: Cleansed workbook saved")
             progress_bar.progress(85)
 
             # 5) Update master metadata on Dropbox
-            step_status.write("🔄 Step 4/5: Updating metadata...")
+            step_status.write("🔄 Step 5/5: Updating metadata...")
             progress_bar.progress(85)
             
-            # Add EDA insights to metadata
-            if all_insights:
+            # Add comprehensive results to metadata
+            if enhanced_eda_available:
+                metadata["enhanced_eda_results"] = all_eda_results
+                metadata["total_charts_generated"] = len(all_chart_paths)
+            else:
                 metadata["eda_insights"] = all_insights
                 metadata["chart_paths"] = all_chart_paths
             
@@ -937,7 +1090,7 @@ if raw_files:
             
             for attempt in range(max_retries):
                 try:
-                    step_status.write(f"🔄 Step 4/5: Updating metadata (attempt {attempt + 1}/{max_retries})...")
+                    step_status.write(f"🔄 Step 5/5: Updating metadata (attempt {attempt + 1}/{max_retries})...")
                     
                     existing = []
                     try:
@@ -950,7 +1103,7 @@ if raw_files:
                     existing.append(metadata)
                     upload_json(meta_path, existing)
                     metadata_updated = True
-                    step_status.write("✅ Step 4/5: Metadata updated successfully")
+                    step_status.write("✅ Step 5/5: Metadata updated successfully")
                     break
                     
                 except Exception as e:
@@ -961,10 +1114,10 @@ if raw_files:
                         st.warning(f"⚠️ Metadata update failed after {max_retries} attempts: {e}")
                         st.info("📊 Data processing completed successfully, but metadata sync had network issues.")
             
-            progress_bar.progress(90)
+            progress_bar.progress(95)
 
             # 6) Save per-file summaries to Dropbox (JSON + Markdown)
-            step_status.write("🔄 Step 5/5: Saving summaries...")
+            step_status.write("🔄 Step 6/6: Saving comprehensive summaries...")
             progress_bar.progress(95)
             
             summaries_dbx = getattr(app_paths, "dbx_summaries_folder", None)
@@ -974,7 +1127,7 @@ if raw_files:
                 # Save run metadata with retry
                 for attempt in range(max_retries):
                     try:
-                        step_status.write(f"🔄 Step 5/5: Saving metadata summary (attempt {attempt + 1}/{max_retries})...")
+                        step_status.write(f"🔄 Step 6/6: Saving metadata summary (attempt {attempt + 1}/{max_retries})...")
                         run_meta_path = f"{summaries_dbx}/{out_base}_run_metadata.json"
                         upload_json(run_meta_path, metadata)
                         break
@@ -987,7 +1140,7 @@ if raw_files:
                 # Save executive summary with retry  
                 for attempt in range(max_retries):
                     try:
-                        step_status.write(f"🔄 Step 5/5: Saving executive summary (attempt {attempt + 1}/{max_retries})...")
+                        step_status.write(f"🔄 Step 6/6: Saving executive summary (attempt {attempt + 1}/{max_retries})...")
                         exec_md_bytes = _build_summary_markdown(metadata).encode("utf-8")
                         exec_md_path = f"{summaries_dbx}/{out_base}_executive_summary.md"
                         upload_bytes(exec_md_path, exec_md_bytes)
@@ -999,7 +1152,7 @@ if raw_files:
                         else:
                             st.warning(f"⚠️ Executive summary save failed: {e}")
 
-                step_status.write("✅ Step 5/5: All processing completed!")
+                step_status.write("✅ Step 6/6: All processing completed!")
                 progress_bar.progress(100)
                 
                 # Final success message
@@ -1024,11 +1177,40 @@ if raw_files:
                 
             else:
                 st.warning("Summaries folder not set on Dropbox (03_Summaries). Skipping summaries save.")
-                step_status.write("✅ Step 5/5: Processing completed (summaries skipped)")
+                step_status.write("✅ Step 6/6: Processing completed (summaries skipped)")
                 progress_bar.progress(100)
 
-            # Display final insights summary
-            if all_insights:
+            # Display comprehensive insights summary (enhanced for Colab-style results)
+            if enhanced_eda_available and all_eda_results:
+                st.subheader("🎯 Comprehensive Analysis Results")
+                
+                total_rows = sum(len(df) for df in cleaned_sheets.values())
+                total_charts = len(all_chart_paths)
+                total_rounds = sum(len(results.get("rounds", [])) for results in all_eda_results.values())
+                
+                result_col1, result_col2, result_col3, result_col4 = st.columns(4)
+                with result_col1:
+                    st.metric("Records Processed", f"{total_rows:,}")
+                with result_col2:
+                    st.metric("Sheets Analyzed", len(cleaned_sheets))
+                with result_col3:
+                    st.metric("Analysis Rounds", total_rounds)
+                with result_col4:
+                    st.metric("Charts Generated", total_charts)
+                
+                # Show business insights from enhanced analysis
+                st.write("**🎯 Key Business Insights:**")
+                for sheet_name, eda_results in all_eda_results.items():
+                    business_insights = eda_results.get("business_insights", {})
+                    supply_metrics = business_insights.get("supply_chain_metrics", {})
+                    
+                    if supply_metrics:
+                        st.write(f"**{sheet_name}:**")
+                        for category, metrics in supply_metrics.items():
+                            if metrics.get("total_value", 0) > 0:
+                                st.write(f"  - {category.title()}: ${metrics['total_value']:,.2f}")
+                
+            elif all_insights:
                 st.subheader("🎯 Final Insights Summary")
                 total_rows = sum(len(df) for df in cleaned_sheets.values())
                 total_charts = len(all_chart_paths)
@@ -1041,12 +1223,37 @@ if raw_files:
                 with insight_col3:
                     st.metric("Charts Generated", total_charts)
 
-            # Display Executive Summary on screen
+            # Display Enhanced Executive Summary (Colab-style)
             st.subheader("📋 Executive Summary")
             try:
-                # Generate and display the executive summary
-                summary_markdown = _build_summary_markdown(metadata)
-                st.markdown(summary_markdown)
+                if enhanced_eda_available and metadata.get("comprehensive_summaries"):
+                    # Display AI-generated comprehensive summaries
+                    st.write("**🧠 AI-Powered Analysis Results:**")
+                    
+                    for sheet_name, summaries in metadata["comprehensive_summaries"].items():
+                        with st.expander(f"� {sheet_name} - Comprehensive Analysis", expanded=True):
+                            
+                            executive_summary = summaries.get("executive_summary", "")
+                            if executive_summary:
+                                st.markdown("### Executive Summary")
+                                st.write(executive_summary)
+                                st.write("")
+                            
+                            data_quality_report = summaries.get("data_quality_report", "")
+                            if data_quality_report:
+                                st.markdown("### Data Quality Assessment")
+                                st.write(data_quality_report)
+                                st.write("")
+                            
+                            eda_insights = summaries.get("eda_insights", "")
+                            if eda_insights:
+                                st.markdown("### EDA Insights")
+                                st.write(eda_insights)
+                
+                else:
+                    # Fallback to generate and display the basic executive summary
+                    summary_markdown = _build_summary_markdown(metadata)
+                    st.markdown(summary_markdown)
                 
                 # Also show key insights in a more digestible format
                 st.subheader("🔍 Key Insights by Sheet")
@@ -1066,46 +1273,73 @@ if raw_files:
                                 st.write("")  # Add spacing
                             
                             # Show supply chain insights if available - FIRST, as these are most important
-                            if sheet_name in all_insights:
-                                insights = all_insights[sheet_name]
-                                if insights.get("supply_chain_insights"):
-                                    st.write("**📦 Supply Chain Metrics:**")
-                                    for category, info in insights["supply_chain_insights"].items():
-                                        if info.get("total_value", 0) > 0:
-                                            st.write(f"- **{category.title()}**: ${info['total_value']:,.2f}")
-                                    st.write("")  # Add spacing
-                                
-                                # Show dataset overview in a cleaner format
-                                if insights.get("dataset_overview"):
-                                    overview = insights["dataset_overview"]
-                                    st.write("**📈 Data Quality Overview:**")
-                                    
-                                    qual_col1, qual_col2, qual_col3 = st.columns(3)
-                                    with qual_col1:
-                                        st.metric("Total Records", f"{overview.get('total_rows', 0):,}")
-                                    with qual_col2:
-                                        st.metric("Columns", overview.get('total_columns', 0))
-                                    with qual_col3:
-                                        missing_pct = overview.get('missing_data_percentage', 0)
-                                        st.metric("Missing Data", f"{missing_pct:.1f}%")
-                                    
-                                    chart_count = len(insights.get("charts_generated", []))
-                                    if chart_count > 0:
-                                        st.write(f"📊 **{chart_count} visualizations generated** for this sheet")
-                                    st.write("")  # Add spacing
+                            sheet_insights = None
+                            if enhanced_eda_available and all_eda_results.get(sheet_name):
+                                sheet_insights = all_eda_results[sheet_name].get("business_insights", {})
+                            elif all_insights.get(sheet_name):
+                                sheet_insights = all_insights[sheet_name]
                             
-                            # Only show EDA text if it's different from metadata and actually useful
-                            if eda_text and eda_text.strip() and not eda_text.startswith('{'):
+                            if sheet_insights and sheet_insights.get("supply_chain_insights"):
+                                st.write("**📦 Supply Chain Metrics:**")
+                                for category, info in sheet_insights["supply_chain_insights"].items():
+                                    if info.get("total_value", 0) > 0:
+                                        st.write(f"- **{category.title()}**: ${info['total_value']:,.2f}")
+                                st.write("")  # Add spacing
+                            
+                            # Show dataset overview in a cleaner format
+                            if sheet_insights and sheet_insights.get("dataset_overview"):
+                                overview = sheet_insights["dataset_overview"]
+                                st.write("**📈 Data Quality Overview:**")
+                                
+                                qual_col1, qual_col2, qual_col3 = st.columns(3)
+                                with qual_col1:
+                                    st.metric("Total Records", f"{overview.get('total_rows', 0):,}")
+                                with qual_col2:
+                                    st.metric("Columns", overview.get('total_columns', 0))
+                                with qual_col3:
+                                    missing_pct = overview.get('missing_data_percentage', 0)
+                                    st.metric("Missing Data", f"{missing_pct:.1f}%")
+                                
+                                chart_count = len(sheet_insights.get("charts_generated", []))
+                                if chart_count > 0:
+                                    st.write(f"📊 **{chart_count} visualizations generated** for this sheet")
+                                st.write("")  # Add spacing
+                            
+                            # Enhanced EDA results display
+                            if enhanced_eda_available and sheet_name in all_eda_results:
+                                eda_result = all_eda_results[sheet_name]
+                                final_summary = eda_result.get("final_summary", {})
+                                
+                                if final_summary.get("summary_text"):
+                                    st.write("**🔍 AI Analysis Summary:**")
+                                    st.write(final_summary["summary_text"])
+                                    st.write("")
+                                
+                                # Show round-by-round insights
+                                rounds = eda_result.get("rounds", [])
+                                if rounds:
+                                    st.write("**📊 Analysis Rounds:**")
+                                    for round_data in rounds:
+                                        round_num = round_data.get("round_number", 0)
+                                        analysis_type = round_data.get("analysis_type", "")
+                                        chart_count = len(round_data.get("chart_paths", []))
+                                        ai_summary = round_data.get("ai_summary", "")
+                                        
+                                        st.write(f"- **Round {round_num}** ({analysis_type}): {chart_count} charts")
+                                        if ai_summary:
+                                            st.write(f"  {ai_summary}")
+                            
+                            # Only show basic EDA text if enhanced results not available and actually useful
+                            elif eda_text and eda_text.strip() and not eda_text.startswith('{'):
                                 st.write("**🔍 Detailed Analysis:**")
                                 st.write(eda_text)
-                            elif sheet_name in all_insights:
+                            elif sheet_insights:
                                 # Generate a more meaningful analysis summary
-                                insights = all_insights[sheet_name]
                                 st.write("**🔍 Key Data Insights:**")
                                 
                                 # If we have supply chain data, focus on that
-                                if insights.get("supply_chain_insights"):
-                                    supply_insights = insights["supply_chain_insights"]
+                                if sheet_insights.get("supply_chain_insights"):
+                                    supply_insights = sheet_insights["supply_chain_insights"]
                                     meaningful_categories = [cat for cat, info in supply_insights.items() 
                                                            if info.get("total_value", 0) > 0]
                                     
@@ -1118,7 +1352,7 @@ if raw_files:
                                             st.write(f"- **{category.title()}**: ${value:,.2f} across columns: {', '.join(cols[:3])}")
                                 
                                 # Add data quality insights
-                                overview = insights.get("dataset_overview", {})
+                                overview = sheet_insights.get("dataset_overview", {})
                                 missing_pct = overview.get('missing_data_percentage', 0)
                                 if missing_pct > 10:
                                     st.warning(f"⚠️ High missing data rate ({missing_pct:.1f}%) - may need data cleaning")

@@ -20,3 +20,7 @@ PyYAML>=6.0
 boto3>=1.34
 seaborn>=0.13
 XlsxWriter>=3.2
+scipy>=1.11
+scikit-learn>=1.4
+ydata-profiling>=4.6
+plotly>=5.17
