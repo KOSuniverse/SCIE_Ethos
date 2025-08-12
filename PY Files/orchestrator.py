@@ -546,7 +546,46 @@ def _summarize_exec(exec_result: Dict[str, Any]) -> Tuple[str, List[str]]:
             lines.append(f"Tool error: {c['error']}")
         elif c["tool"] == "dataframe_query":
             meta = c.get("result_meta", {})
-            lines.append(f"Dataframe Query • rows={meta.get('rowcount','?')} • sheet={meta.get('sheet_used')}")
+            result = c.get("result", {})
+            
+            # Basic info
+            lines.append(f"Dataframe Query Results:")
+            lines.append(f"• Sheet: {meta.get('sheet_used')}")
+            lines.append(f"• Total rows: {meta.get('rowcount','?')}")
+            
+            # Include actual data preview for LLM context
+            preview_data = result.get("preview", [])
+            if preview_data:
+                lines.append(f"• Top results found:")
+                
+                # Convert preview to readable format
+                for i, row in enumerate(preview_data[:10]):  # Limit to top 10 for context
+                    if i == 0:
+                        # Show column headers
+                        lines.append(f"   Row {i+1}: {dict(row)}")
+                    else:
+                        # Show subsequent rows more compactly
+                        key_fields = {}
+                        for k, v in row.items():
+                            if k in ['Part No', 'Part Description', 'Age', 'Total Cost'] or 'age' in k.lower():
+                                key_fields[k] = v
+                        if key_fields:
+                            lines.append(f"   Row {i+1}: {key_fields}")
+                        elif len(str(row)) < 200:  # Show full row if short
+                            lines.append(f"   Row {i+1}: {dict(row)}")
+                        else:  # Truncate very long rows
+                            lines.append(f"   Row {i+1}: [data truncated - {len(row)} fields]")
+            
+            if meta.get("artifact_path"):
+                lines.append(f"• Full results saved to: {meta.get('artifact_path')}")
+                
+        elif c["tool"] == "chart":
+            meta = c.get("result_meta", {})
+            lines.append(f"Chart Generated • type={meta.get('chart_type','?')} • saved={meta.get('chart_path','?')}")
+        else:
+            # Other tools
+            lines.append(f"Tool: {c['tool']} executed")
+            
     if not lines:
         lines.append("No data operations executed.")
 
