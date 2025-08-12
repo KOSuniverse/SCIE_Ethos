@@ -7,6 +7,7 @@ import uuid
 import time
 import ast
 import datetime
+import requests
 from pathlib import Path
 import pandas as pd
 import streamlit as st
@@ -144,6 +145,7 @@ if interface_mode == "💬 Chat Assistant":
         import webbrowser
         import time
         import socket
+        import requests
         from pathlib import Path
         
         def find_free_port():
@@ -153,6 +155,19 @@ if interface_mode == "💬 Chat Assistant":
                 s.listen(1)
                 port = s.getsockname()[1]
             return port
+        
+        def wait_for_server(url, timeout=30):
+            """Wait for the server to start responding"""
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                try:
+                    response = requests.get(url, timeout=2)
+                    if response.status_code == 200:
+                        return True
+                except:
+                    pass
+                time.sleep(1)
+            return False
         
         try:
             # Find free port
@@ -166,33 +181,70 @@ if interface_mode == "💬 Chat Assistant":
                 st.error("chat_ui.py not found. Please ensure it's in the same directory as main.py")
                 st.stop()
             
-            # Start chat interface on different port
-            process = subprocess.Popen([
-                "streamlit", "run", str(chat_ui_path),
-                "--server.port", str(chat_port),
-                "--server.headless", "true"
-            ], shell=True)
-            
-            # Wait a moment for server to start
-            time.sleep(3)
-            
-            # Open in new browser tab
-            chat_url = f"http://localhost:{chat_port}"
-            webbrowser.open(chat_url)
-            
-            st.success(f"✅ Chat Assistant launched at: {chat_url}")
-            st.info("The chat interface should open in a new browser tab automatically.")
+            with st.spinner(f"Starting chat interface on port {chat_port}..."):
+                # Start chat interface on different port
+                process = subprocess.Popen([
+                    "streamlit", "run", str(chat_ui_path),
+                    "--server.port", str(chat_port),
+                    "--server.headless", "true",
+                    "--server.enableCORS", "false"
+                ], shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                
+                # Build URL
+                chat_url = f"http://localhost:{chat_port}"
+                
+                # Wait for server to be ready
+                st.info(f"Waiting for server to start at {chat_url}...")
+                if wait_for_server(chat_url, timeout=30):
+                    # Server is ready, open browser
+                    webbrowser.open(chat_url)
+                    st.success(f"✅ Chat Assistant launched successfully!")
+                    st.info(f"🌐 Interface URL: {chat_url}")
+                    st.info("The chat interface should open in a new browser tab automatically.")
+                else:
+                    # Server failed to start
+                    process.terminate()
+                    st.error("❌ Failed to start chat interface server")
+                    
+                    # Try to get error output
+                    try:
+                        stdout, stderr = process.communicate(timeout=5)
+                        if stderr:
+                            st.error(f"Error output: {stderr.decode()}")
+                    except:
+                        pass
+                    
+                    st.markdown(f"""
+                    **Manual Launch Options:**
+                    
+                    1. **Option 1 - Try different port:**
+                    ```bash
+                    streamlit run chat_ui.py --server.port 8502
+                    ```
+                    Then visit: http://localhost:8502
+                    
+                    2. **Option 2 - Default port:**
+                    ```bash
+                    streamlit run chat_ui.py
+                    ```
+                    Then visit: http://localhost:8501
+                    
+                    3. **Option 3 - Check if port {chat_port} is available:**
+                    ```bash
+                    netstat -an | findstr {chat_port}
+                    ```
+                    """)
             
         except Exception as e:
             st.error(f"Failed to launch chat interface: {e}")
             st.markdown("""
             **Fallback: Manual Launch**
             
-            If automatic launch failed, you can manually open a new terminal and run:
+            Open a new terminal/command prompt and run:
             ```bash
-            streamlit run chat_ui.py --server.port 8502
+            streamlit run chat_ui.py
             ```
-            Then visit: http://localhost:8502
+            Then visit: http://localhost:8501
             """)
         
         # Show preview of chat features
