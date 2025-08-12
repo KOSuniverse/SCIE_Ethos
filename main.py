@@ -625,23 +625,189 @@ if raw_files:
                                 "title": f"Supply Chain Analysis: {sheet_name}"
                             })
                         
-                        # Generate charts
+                        # Generate charts - Use Dropbox-compatible approach
                         charts_folder = getattr(app_paths, "dbx_eda_folder", None)
                         if not charts_folder:
-                            charts_folder = f"{getattr(app_paths, 'dbx_metadata_folder', '/Project_Root/04_Data')}/02_EDA_Charts"
+                            # Default to metadata folder since we know that exists
+                            charts_folder = f"{getattr(app_paths, 'dbx_metadata_folder', '/Project_Root/04_Data/04_Metadata')}"
                         
                         suffix = f"_{sheet_name.replace(' ', '_').replace('/', '_')}"
-                        chart_paths = run_gpt_eda_actions(
-                            df=df,
-                            actions=suggested_actions,
-                            charts_folder=charts_folder,
-                            suffix=suffix
-                        )
+                        
+                        # Use cloud-safe chart generation
+                        chart_paths = []
+                        charts_generated = 0
+                        
+                        try:
+                            # Instead of using run_gpt_eda_actions which tries to create local dirs,
+                            # let's create charts using cloud-compatible methods
+                            import matplotlib.pyplot as plt
+                            import seaborn as sns
+                            from io import BytesIO
+                            
+                            # Set style for better looking charts
+                            plt.style.use('default')
+                            sns.set_palette("husl")
+                            
+                            # Generate histograms for numeric columns (top 3)
+                            for i, col in enumerate(numeric_cols[:3]):
+                                if df[col].notna().sum() > 0:  # Only if we have data
+                                    try:
+                                        fig, ax = plt.subplots(figsize=(10, 6))
+                                        
+                                        # Create histogram
+                                        df[col].hist(bins=30, ax=ax, alpha=0.7, color='skyblue', edgecolor='black')
+                                        ax.set_title(f'Distribution: {col}', fontsize=14, fontweight='bold')
+                                        ax.set_xlabel(col, fontsize=12)
+                                        ax.set_ylabel('Frequency', fontsize=12)
+                                        ax.grid(True, alpha=0.3)
+                                        
+                                        # Save to Dropbox via bytes
+                                        chart_buffer = BytesIO()
+                                        plt.savefig(chart_buffer, format='png', dpi=300, bbox_inches='tight')
+                                        chart_buffer.seek(0)
+                                        
+                                        chart_path = f"{charts_folder}/hist_{col.replace(' ', '_')}{suffix}.png"
+                                        upload_bytes(chart_path, chart_buffer.getvalue())
+                                        chart_paths.append(chart_path)
+                                        charts_generated += 1
+                                        
+                                        plt.close(fig)
+                                        
+                                    except Exception as chart_e:
+                                        st.warning(f"Could not generate histogram for {col}: {chart_e}")
+                            
+                            # Generate scatter plot for first two numeric columns
+                            if len(numeric_cols) >= 2:
+                                try:
+                                    x_col, y_col = numeric_cols[0], numeric_cols[1]
+                                    clean_data = df[[x_col, y_col]].dropna()
+                                    
+                                    if len(clean_data) > 0:
+                                        fig, ax = plt.subplots(figsize=(10, 6))
+                                        
+                                        ax.scatter(clean_data[x_col], clean_data[y_col], alpha=0.6, color='coral')
+                                        ax.set_title(f'Relationship: {x_col} vs {y_col}', fontsize=14, fontweight='bold')
+                                        ax.set_xlabel(x_col, fontsize=12)
+                                        ax.set_ylabel(y_col, fontsize=12)
+                                        ax.grid(True, alpha=0.3)
+                                        
+                                        # Save to Dropbox
+                                        chart_buffer = BytesIO()
+                                        plt.savefig(chart_buffer, format='png', dpi=300, bbox_inches='tight')
+                                        chart_buffer.seek(0)
+                                        
+                                        chart_path = f"{charts_folder}/scatter_{x_col.replace(' ', '_')}_vs_{y_col.replace(' ', '_')}{suffix}.png"
+                                        upload_bytes(chart_path, chart_buffer.getvalue())
+                                        chart_paths.append(chart_path)
+                                        charts_generated += 1
+                                        
+                                        plt.close(fig)
+                                        
+                                except Exception as chart_e:
+                                    st.warning(f"Could not generate scatter plot: {chart_e}")
+                            
+                            # Generate correlation heatmap if enough numeric columns
+                            if len(numeric_cols) >= 3:
+                                try:
+                                    corr_data = df[numeric_cols].corr()
+                                    
+                                    fig, ax = plt.subplots(figsize=(12, 8))
+                                    
+                                    sns.heatmap(corr_data, annot=True, fmt='.2f', cmap='RdBu_r', 
+                                              center=0, square=True, ax=ax, cbar_kws={"shrink": .8})
+                                    ax.set_title('Correlation Analysis', fontsize=16, fontweight='bold', pad=20)
+                                    
+                                    # Save to Dropbox
+                                    chart_buffer = BytesIO()
+                                    plt.savefig(chart_buffer, format='png', dpi=300, bbox_inches='tight')
+                                    chart_buffer.seek(0)
+                                    
+                                    chart_path = f"{charts_folder}/correlation_heatmap{suffix}.png"
+                                    upload_bytes(chart_path, chart_buffer.getvalue())
+                                    chart_paths.append(chart_path)
+                                    charts_generated += 1
+                                    
+                                    plt.close(fig)
+                                    
+                                except Exception as chart_e:
+                                    st.warning(f"Could not generate correlation heatmap: {chart_e}")
+                            
+                            # Generate top N analysis if we have categorical and numeric
+                            if categorical_cols and numeric_cols:
+                                try:
+                                    group_col, metric_col = categorical_cols[0], numeric_cols[0]
+                                    top_data = df.groupby(group_col)[metric_col].sum().sort_values(ascending=False).head(10)
+                                    
+                                    if len(top_data) > 0:
+                                        fig, ax = plt.subplots(figsize=(12, 6))
+                                        
+                                        top_data.plot(kind='bar', ax=ax, color='lightgreen', edgecolor='black')
+                                        ax.set_title(f'Top 10 {group_col} by {metric_col}', fontsize=14, fontweight='bold')
+                                        ax.set_xlabel(group_col, fontsize=12)
+                                        ax.set_ylabel(metric_col, fontsize=12)
+                                        ax.tick_params(axis='x', rotation=45)
+                                        ax.grid(True, alpha=0.3)
+                                        
+                                        # Save to Dropbox
+                                        chart_buffer = BytesIO()
+                                        plt.savefig(chart_buffer, format='png', dpi=300, bbox_inches='tight')
+                                        chart_buffer.seek(0)
+                                        
+                                        chart_path = f"{charts_folder}/top10_{group_col.replace(' ', '_')}_by_{metric_col.replace(' ', '_')}{suffix}.png"
+                                        upload_bytes(chart_path, chart_buffer.getvalue())
+                                        chart_paths.append(chart_path)
+                                        charts_generated += 1
+                                        
+                                        plt.close(fig)
+                                        
+                                except Exception as chart_e:
+                                    st.warning(f"Could not generate top N analysis: {chart_e}")
+                            
+                        except ImportError:
+                            st.warning("⚠️ Matplotlib/Seaborn not available. Skipping chart generation.")
+                            chart_paths = []
+                            charts_generated = 0
+                        
+                        except Exception as e:
+                            st.warning(f"⚠️ Chart generation failed: {e}")
+                            chart_paths = []
+                            charts_generated = 0
                         
                         all_chart_paths.extend(chart_paths)
                         
-                        # Generate enhanced summary
-                        enhanced_summary = create_enhanced_eda_summary(df, chart_paths, charts_folder)
+                        # Create basic enhanced summary
+                        enhanced_summary = {
+                            "dataset_overview": {
+                                "total_rows": len(df),
+                                "total_columns": len(df.columns),
+                                "missing_data_percentage": round((df.isnull().sum().sum() / (len(df) * len(df.columns))) * 100, 2)
+                            },
+                            "charts_generated": chart_paths,
+                            "charts_folder": charts_folder
+                        }
+                        
+                        # Add supply chain insights
+                        supply_chain_cols = {
+                            'wip': [col for col in df.columns if 'wip' in str(col).lower()],
+                            'cost': [col for col in df.columns if any(term in str(col).lower() for term in ['cost', 'value', 'price'])],
+                            'quantity': [col for col in df.columns if any(term in str(col).lower() for term in ['qty', 'quantity', 'count'])]
+                        }
+                        
+                        enhanced_summary["supply_chain_insights"] = {}
+                        for category, cols in supply_chain_cols.items():
+                            if cols:
+                                try:
+                                    total_value = float(df[cols].sum().sum()) if cols else 0
+                                    enhanced_summary["supply_chain_insights"][category] = {
+                                        "columns_found": cols,
+                                        "total_value": total_value
+                                    }
+                                except:
+                                    enhanced_summary["supply_chain_insights"][category] = {
+                                        "columns_found": cols,
+                                        "total_value": 0
+                                    }
+                        
                         all_insights[sheet_name] = enhanced_summary
                         
                         # Display key insights
@@ -653,7 +819,7 @@ if raw_files:
                         
                         # Show chart generation results
                         if chart_paths:
-                            st.success(f"✅ Generated {len(chart_paths)} visualizations")
+                            st.success(f"✅ Generated {charts_generated} visualizations")
                             for path in chart_paths[:3]:  # Show first 3
                                 st.write(f"📊 {path.split('/')[-1]}")
                         else:
