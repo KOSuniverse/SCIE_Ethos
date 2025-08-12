@@ -6,7 +6,41 @@ import re
 import json
 import pandas as pd
 from datetime import datetime
-from typing import Dict, Tuple, Union, Optional, Any
+from pathlib import Path
+from typing import Dict, Tuple, Union, Optional, Any, List
+
+# Import enhanced foundation utilities
+try:
+    from constants import PROJECT_ROOT, DATA_ROOT
+    from path_utils import canon_path
+except ImportError:
+    # Fallback for standalone usage
+    PROJECT_ROOT = "/Project_Root"
+    DATA_ROOT = f"{PROJECT_ROOT}/04_Data"
+    def canon_path(p): return p
+
+# Import phase1 utilities
+try:
+    from .sheet_utils import normalize_sheet_type, extract_locations_and_context, load_sheet_aliases
+    from .smart_cleaning import smart_auto_fixer
+except ImportError:
+    # Fallback imports
+    try:
+        from phase1_ingest.sheet_utils import normalize_sheet_type, extract_locations_and_context, load_sheet_aliases
+        from phase1_ingest.smart_cleaning import smart_auto_fixer
+    except ImportError:
+        def normalize_sheet_type(sheet, df, aliases): return df, sheet
+        def extract_locations_and_context(f, s, df): return {"file": f, "sheet": s}
+        def load_sheet_aliases(path): return {}
+        def smart_auto_fixer(df, log, actions=None): return df
+
+# Import column utilities
+try:
+    from column_alias import get_reverse_alias_map, load_alias_group, remap_columns
+except ImportError:
+    def get_reverse_alias_map(aliases): return {}
+    def load_alias_group(path): return {}
+    def remap_columns(df, rev_map): return df
 
 # --- Import helpers from whichever module actually defines them, with safe fallbacks ---
 
@@ -456,41 +490,120 @@ def _hardened_process_excel(
     return cleaned_sheets, per_sheet_meta, gpt_client_error
 
 
-# ---------------- Legacy disk-writing entrypoint (kept, now hardened) ----------------
+# ---------------- Enterprise-Grade Pipeline with Validation ----------------
+
+def _validate_cleansed(df: pd.DataFrame) -> Tuple[bool, List[str]]:
+    """
+    Enterprise validation for cleansed data.
+    
+    Returns:
+        Tuple[bool, List[str]]: (cleansed_ok, validation_issues)
+    """
+    issues = []
+    
+    # Basic structure validation
+    if df.empty:
+        issues.append("No rows after cleansing.")
+    if df.shape[1] < 3:
+        issues.append("Too few columns (<3).")
+    
+    # Data quality validation
+    null_rate = float(df.isna().mean().mean())
+    if null_rate > 0.35:
+        issues.append(f"High overall null rate ({null_rate:.0%}).")
+    
+    dup_rate = float(df.duplicated().mean())
+    if dup_rate > 0.15:
+        issues.append(f"High duplicate row rate ({dup_rate:.0%}).")
+    
+    # Business logic validation for supply chain data
+    value_qty_candidates = [c for c in df.columns if re.search(r"(wip|value|amount|cost|usd|ext\s*price|total|qty)", str(c), re.I)]
+    numeric_ok_count = sum(
+        pd.to_numeric(df[c], errors="coerce").notna().mean() >= 0.85 
+        for c in value_qty_candidates[:8]
+    )
+    
+    if value_qty_candidates and numeric_ok_count == 0:
+        issues.append("No numeric columns parsed among likely value/qty fields.")
+    
+    # Return validation result
+    cleansed_ok = len(issues) == 0
+    return cleansed_ok, issues
 
 def run_pipeline_on_file(xls_path, alias_path, output_prefix, output_folder):
+    """
+    Enterprise-grade file processing with validation and canonical paths.
+    
+    Combines enterprise validation (required) with optional AI intelligence.
+    """
+    # Use canonical path handling
+    xls_path = canon_path(xls_path)
     xls = pd.ExcelFile(xls_path)
-    cleaned_sheets_dict, per_sheet_meta, gpt_err = _hardened_process_excel(
-        xls=xls,
-        filename=os.path.basename(xls_path),
-        alias_path=alias_path,
-        paths=None  # legacy path variant doesn't pass full paths; that's fine
+    
+    # Prefer WIP/Inventory sheets if present (business logic priority)
+    target_sheet = next(
+        (s for s in xls.sheet_names if re.search(r"(wip|inventory)", s, re.I)), 
+        xls.sheet_names[0]
     )
-
-    # Save metadata (both per-sheet and top-level)
-    metadata = {
-        "run_started": datetime.utcnow().isoformat() + "Z",
-        "run_completed": datetime.utcnow().isoformat() + "Z",
-        "source_filename": os.path.basename(xls_path),
-        "sheet_count": len(xls.sheet_names),
-        "processed_sheets": list(cleaned_sheets_dict.keys()),
-        "sheets": per_sheet_meta,
+    
+    df = xls.parse(target_sheet).copy()
+    
+    # --- Enhanced Cleaning with Validation ---
+    aliases = load_sheet_aliases(alias_path) if alias_path else {}
+    rev_map = get_reverse_alias_map(aliases)
+    
+    # Apply column remapping
+    if rev_map:
+        df = remap_columns(df, rev_map)
+    
+    # Normalize sheet type
+    sheet_alias = normalize_sheet_type(target_sheet, df, aliases)
+    
+    # Smart auto-fixing with enterprise settings
+    log = []
+    df, log = smart_auto_fixer(df, log, actions={"numeric_cast": True, "trim": True})
+    
+    # --- Optional AI Enhancement ---
+    ai_insights = {}
+    try:
+        # Check if AI enhancement is available
+        from smart_cleaning import ai_analyze_data_quality
+        ai_insights = ai_analyze_data_quality(df)
+        log.append(f"AI analysis completed: {len(ai_insights.get('insights', []))} insights")
+    except (ImportError, Exception) as e:
+        log.append(f"AI enhancement unavailable: {str(e)}")
+        ai_insights = {"status": "unavailable", "reason": str(e)}
+    
+    # --- Enterprise Validation (Required) ---
+    cleansed_ok, validation_issues = _validate_cleansed(df)
+    
+    # --- Save to Canonical Location ---
+    out_dir = Path(DATA_ROOT) / "01_Cleansed_Files"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{output_prefix}_cleansed.xlsx"
+    
+    with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name=sheet_alias or target_sheet, index=False)
+    
+    # --- Enhanced Return with Enterprise Contract + AI Insights ---
+    result = {
+        "cleansed_path": str(out_path),
+        "sheet_summaries": {
+            "sheet": sheet_alias or target_sheet, 
+            "rows": int(len(df)),
+            "columns": len(df.columns)
+        },
+        "schema": {"columns": list(df.columns)[:100]},
+        "cleansed_ok": cleansed_ok,
+        "validation_issues": validation_issues,
+        "processing_log": log
     }
-    if gpt_err:
-        metadata["gpt_client_error"] = gpt_err
-
-    # If your save_master_metadata_index expects a master structure, keep compatibility:
-    metadata_path = os.path.join(output_folder, f"{output_prefix}_metadata.json")
-    save_master_metadata_index({"files": metadata.get("sheets", [])}, metadata_path)
-
-    # Save cleaned file
-    cleaned_file_path = os.path.join(output_folder, f"{output_prefix}_cleaned.xlsx")
-    with pd.ExcelWriter(cleaned_file_path, engine="xlsxwriter") as writer:
-        for sheet_name, df in cleaned_sheets_dict.items():
-            writer_sheet = (sheet_name or "Sheet1")[:31]
-            df.to_excel(writer, sheet_name=writer_sheet, index=False)
-
-    return cleaned_file_path, metadata_path
+    
+    # Add AI insights if available
+    if ai_insights.get("status") != "unavailable":
+        result["ai_insights"] = ai_insights
+    
+    return result
 
 
 # ---------------- In‑memory wrapper for Streamlit/Dropbox ----------------
@@ -501,8 +614,10 @@ def run_pipeline(
     paths: Optional[Any] = None
 ) -> Tuple[Dict[str, pd.DataFrame], dict]:
     """
-    Returns in-memory cleaned sheets + metadata (no local writes).
-    Keeps your legacy run_pipeline_on_file intact.
+    Enterprise in-memory pipeline with validation and optional AI enhancement.
+    
+    Returns:
+        Tuple[Dict[str, pd.DataFrame], dict]: (cleaned_sheets, metadata_with_validation)
     """
     # Open Excel from path or bytes
     if isinstance(source, (bytes, bytearray)):
@@ -510,7 +625,7 @@ def run_pipeline(
     elif isinstance(source, io.BytesIO):
         xls = pd.ExcelFile(source)
     elif isinstance(source, str):
-        xls = pd.ExcelFile(source)
+        xls = pd.ExcelFile(canon_path(source))  # Use canonical path
         if filename is None:
             filename = os.path.basename(source)
     else:
@@ -525,6 +640,36 @@ def run_pipeline(
         paths=paths
     )
 
+    # --- Enterprise Validation for Each Sheet ---
+    sheet_validation = {}
+    overall_cleansed_ok = True
+    overall_validation_issues = []
+    
+    for sheet_name, df in cleaned_sheets.items():
+        cleansed_ok, validation_issues = _validate_cleansed(df)
+        sheet_validation[sheet_name] = {
+            "cleansed_ok": cleansed_ok,
+            "validation_issues": validation_issues,
+            "rows": len(df),
+            "columns": len(df.columns)
+        }
+        
+        if not cleansed_ok:
+            overall_cleansed_ok = False
+            overall_validation_issues.extend([f"{sheet_name}: {issue}" for issue in validation_issues])
+
+    # --- Optional AI Enhancement ---
+    ai_file_insights = {}
+    try:
+        from smart_cleaning import ai_analyze_data_quality
+        # Analyze the largest sheet for file-level insights
+        if cleaned_sheets:
+            largest_sheet = max(cleaned_sheets.items(), key=lambda x: len(x[1]))
+            ai_file_insights = ai_analyze_data_quality(largest_sheet[1])
+            ai_file_insights["analyzed_sheet"] = largest_sheet[0]
+    except (ImportError, Exception) as e:
+        ai_file_insights = {"status": "unavailable", "reason": str(e)}
+
     metadata = {
         "run_started": datetime.utcnow().isoformat() + "Z",
         "run_completed": datetime.utcnow().isoformat() + "Z",
@@ -532,9 +677,19 @@ def run_pipeline(
         "sheet_count": len(xls.sheet_names),
         "processed_sheets": list(cleaned_sheets.keys()),
         "sheets": per_sheet_meta,
+        # Enterprise validation fields
+        "overall_cleansed_ok": overall_cleansed_ok,
+        "overall_validation_issues": overall_validation_issues,
+        "sheet_validation": sheet_validation,
+        "validation_pass_rate": sum(1 for v in sheet_validation.values() if v["cleansed_ok"]) / len(sheet_validation) if sheet_validation else 0
     }
+    
     if gpt_err:
         metadata["gpt_client_error"] = gpt_err
+    
+    # Add AI insights if available
+    if ai_file_insights.get("status") != "unavailable":
+        metadata["ai_file_insights"] = ai_file_insights
 
     # --- Executive summary for the whole file (top-level metadata) ---
     def _compact_one_liner(text: str, max_chars: int = 480, max_sents: int = 2) -> str:
@@ -573,5 +728,92 @@ def run_pipeline(
         metadata["executive_summary"] = "Summary unavailable."
 
     return cleaned_sheets, metadata
+
+
+def run_bulk_pipeline(input_folder: str, alias_path: str, output_folder: str) -> Dict[str, Any]:
+    """
+    Enterprise bulk processing with validation and AI enhancement.
+    
+    Args:
+        input_folder: Source folder containing Excel files
+        alias_path: Path to column aliases configuration
+        output_folder: Destination folder for processed files
+        
+    Returns:
+        Dict: Bulk processing summary with enterprise validation status
+    """
+    # Use canonical paths
+    input_folder = canon_path(input_folder)
+    output_folder = canon_path(output_folder)
+    
+    # Ensure output folder exists
+    Path(output_folder).mkdir(parents=True, exist_ok=True)
+    
+    # Find Excel files
+    excel_files = []
+    for ext in ["*.xlsx", "*.xls"]:
+        excel_files.extend(Path(input_folder).glob(ext))
+    
+    if not excel_files:
+        return {
+            "status": "no_files",
+            "message": "No Excel files found in input folder",
+            "processed_count": 0,
+            "success_count": 0,
+            "validation_pass_rate": 0,
+            "files": []
+        }
+    
+    # Process each file with enterprise validation
+    results = []
+    success_count = 0
+    
+    for excel_file in excel_files:
+        try:
+            output_prefix = excel_file.stem
+            result = run_pipeline_on_file(
+                str(excel_file), 
+                alias_path, 
+                output_prefix, 
+                output_folder
+            )
+            
+            # Track enterprise validation status
+            file_result = {
+                "filename": excel_file.name,
+                "status": "success" if result.get("cleansed_ok", False) else "validation_failed",
+                "cleansed_ok": result.get("cleansed_ok", False),
+                "validation_issues": result.get("validation_issues", []),
+                "rows": result.get("sheet_summaries", {}).get("rows", 0),
+                "columns": result.get("sheet_summaries", {}).get("columns", 0),
+                "cleansed_path": result.get("cleansed_path")
+            }
+            
+            # Add AI insights if available
+            if "ai_insights" in result:
+                file_result["ai_insights"] = result["ai_insights"]
+            
+            results.append(file_result)
+            
+            if result.get("cleansed_ok", False):
+                success_count += 1
+                
+        except Exception as e:
+            results.append({
+                "filename": excel_file.name,
+                "status": "error",
+                "error": str(e),
+                "cleansed_ok": False
+            })
+    
+    # Enterprise summary
+    return {
+        "status": "completed",
+        "total_files": len(excel_files),
+        "processed_count": len(results),
+        "success_count": success_count,
+        "validation_pass_rate": success_count / len(results) if results else 0,
+        "files": results
+    }
 
 
