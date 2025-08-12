@@ -3,12 +3,42 @@ import os
 import json
 import io
 from typing import List, Optional, Dict, Any
+from datetime import datetime
 import boto3
 from botocore.exceptions import ClientError
 
-AWS_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-2")
-S3_BUCKET = os.getenv("S3_BUCKET")
-S3_PREFIX = os.getenv("S3_PREFIX", "").strip("/")
+# Enterprise foundation imports
+try:
+    import streamlit as st
+    STREAMLIT_AVAILABLE = True
+except ImportError:
+    STREAMLIT_AVAILABLE = False
+    st = None
+
+# Configuration from secrets.toml or environment
+def _get_config():
+    """Get S3 configuration from Streamlit secrets or environment variables."""
+    if STREAMLIT_AVAILABLE and hasattr(st, "secrets"):
+        return {
+            "region": st.secrets.get("AWS_DEFAULT_REGION", "us-east-2"),
+            "bucket": st.secrets.get("S3_BUCKET"),
+            "prefix": st.secrets.get("S3_PREFIX", "").strip("/"),
+            "access_key": st.secrets.get("AWS_ACCESS_KEY_ID"),
+            "secret_key": st.secrets.get("AWS_SECRET_ACCESS_KEY")
+        }
+    else:
+        return {
+            "region": os.getenv("AWS_DEFAULT_REGION", "us-east-2"),
+            "bucket": os.getenv("S3_BUCKET"),
+            "prefix": os.getenv("S3_PREFIX", "").strip("/"),
+            "access_key": os.getenv("AWS_ACCESS_KEY_ID"),
+            "secret_key": os.getenv("AWS_SECRET_ACCESS_KEY")
+        }
+
+config = _get_config()
+AWS_REGION = config["region"]
+S3_BUCKET = config["bucket"]
+S3_PREFIX = config["prefix"]
 
 _session = None
 _client = None
@@ -17,10 +47,11 @@ _client = None
 def _get_session():
     global _session
     if _session is None:
+        config = _get_config()
         _session = boto3.Session(
-            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-            region_name=AWS_REGION,
+            aws_access_key_id=config["access_key"],
+            aws_secret_access_key=config["secret_key"],
+            region_name=config["region"],
         )
     return _session
 
@@ -125,3 +156,121 @@ def exists(key: str) -> bool:
 def delete_object(key: str) -> None:
     s3 = get_client()
     s3.delete_object(Bucket=S3_BUCKET, Key=_k(key))
+
+
+def upload_manifest(manifest_data: Dict[str, Any], manifest_key: str = None) -> str:
+    """
+    Upload a manifest file to S3 with enterprise metadata.
+    
+    Args:
+        manifest_data: Manifest dictionary to upload
+        manifest_key: Optional S3 key. If None, generates timestamped key.
+        
+    Returns:
+        str: S3 key where manifest was uploaded
+    """
+    if manifest_key is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        manifest_key = f"manifests/sync_manifest_{timestamp}.json"
+    
+    # Enhance manifest with S3-specific metadata
+    enhanced_manifest = manifest_data.copy()
+    enhanced_manifest["cloud_sync"] = {
+        "s3_bucket": S3_BUCKET,
+        "s3_prefix": S3_PREFIX,
+        "s3_region": AWS_REGION,
+        "upload_timestamp": datetime.now().isoformat(),
+        "manifest_key": _k(manifest_key)
+    }
+    
+    return upload_json(enhanced_manifest, manifest_key, indent=2)
+
+
+def list_manifests(prefix: str = "manifests/") -> List[Dict[str, Any]]:
+    """
+    List all manifest files in S3 with metadata.
+    
+    Args:
+        prefix: S3 prefix to search for manifests
+        
+    Returns:
+        List of manifest metadata dictionaries
+    """
+    s3 = get_client()
+    manifests = []
+    
+    try:
+        keys = list_objects(prefix)
+        
+        for key in keys:
+            if key.endswith('.json') and 'manifest' in key.lower():
+                try:
+                    # Get object metadata
+                    response = s3.head_object(Bucket=S3_BUCKET, Key=key)
+                    
+                    manifests.append({
+                        "key": key,
+                        "size": response.get("ContentLength", 0),
+                        "last_modified": response.get("LastModified"),
+                        "content_type": response.get("ContentType"),
+                        "relative_key": key.replace(_k(""), "").lstrip("/")
+                    })
+                except ClientError:
+                    # Skip files we can't access
+                    continue
+                    
+    except Exception as e:
+        print(f"Warning: Could not list manifests: {e}")
+    
+    # Sort by last modified, newest first
+    manifests.sort(key=lambda x: x.get("last_modified", datetime.min), reverse=True)
+    return manifests
+
+
+def validate_s3_config() -> Dict[str, Any]:
+    """
+    Validate S3 configuration and connectivity.
+    
+    Returns:
+        Dict with validation results
+    """
+    config = _get_config()
+    validation = {
+        "config_valid": False,
+        "connectivity": False,
+        "bucket_accessible": False,
+        "errors": [],
+        "config_source": "secrets.toml" if STREAMLIT_AVAILABLE else "environment"
+    }
+    
+    # Check configuration completeness
+    required_fields = ["bucket", "access_key", "secret_key", "region"]
+    missing_fields = [field for field in required_fields if not config.get(field)]
+    
+    if missing_fields:
+        validation["errors"].append(f"Missing configuration: {', '.join(missing_fields)}")
+        return validation
+    
+    validation["config_valid"] = True
+    
+    # Test connectivity
+    try:
+        s3 = get_client()
+        
+        # Test basic connectivity
+        s3.list_objects_v2(Bucket=config["bucket"], MaxKeys=1)
+        validation["connectivity"] = True
+        validation["bucket_accessible"] = True
+        
+    except ClientError as e:
+        error_code = e.response["Error"]["Code"]
+        if error_code in ["NoSuchBucket", "404"]:
+            validation["errors"].append(f"Bucket '{config['bucket']}' does not exist")
+        elif error_code in ["AccessDenied", "403"]:
+            validation["errors"].append("Access denied - check credentials and permissions")
+        else:
+            validation["errors"].append(f"S3 error: {error_code}")
+    except Exception as e:
+        validation["errors"].append(f"Connection error: {str(e)}")
+    
+    return validation

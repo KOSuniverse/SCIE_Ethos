@@ -214,19 +214,44 @@ def dataframe_query(
     limit: int = 50,
     artifact_folder: Optional[str] = None,
     artifact_format: str = "excel",  # "csv" or "excel" - excel for OpenAI compatibility
+    **kwargs  # Accept additional arguments for compatibility
 ) -> Dict[str, Any]:
     """
-    Load the first cleansed workbook (Excel or CSV) from Dropbox, run ops, save artifact, return preview.
+    Enhanced dataframe_query shim (accepts legacy arg or kwargs) for backward compatibility.
     
-    Args:
-        cleansed_paths: Legacy parameter name (for backward compatibility)
-        files: New parameter name (takes precedence over cleansed_paths)
-        artifact_format: "csv" (fast, for intermediate results) or "excel" (OpenAI compatible)
+    This function maintains compatibility with existing code while supporting new parameters.
+    Delegates to phase2_analysis.dataframe_query for enterprise functionality.
     """
+    
     # Handle parameter compatibility: files takes precedence, fallback to cleansed_paths
     paths = files if files is not None else cleansed_paths
     if not paths:
         return {"error": "No cleansed paths or files provided."}
+
+    # Try to use enhanced dataframe_query if available
+    try:
+        from phase2_analysis.dataframe_query import dataframe_query as enhanced_query
+        
+        # Map parameters for enhanced function
+        enhanced_kwargs = {
+            "files": paths,
+            "sheet": sheet,
+            "filters": filters,
+            "groupby": groupby,
+            "metrics": metrics,
+            "limit": limit,
+            "artifact_folder": artifact_folder,
+            "artifact_format": artifact_format
+        }
+        
+        # Add any additional kwargs
+        enhanced_kwargs.update(kwargs)
+        
+        return enhanced_query(**enhanced_kwargs)
+        
+    except ImportError:
+        # Fallback to original implementation if enhanced version not available
+        pass
 
     first = paths[0]
     
@@ -288,6 +313,83 @@ def dataframe_query(
         "note": "All operations executed in cloud against Dropbox-hosted cleansed workbook."
     }
 
+def list_sheets(cleansed_path: str) -> List[str]:
+    """
+    Enhanced list_sheets function - List sheet names in a cleansed workbook (Excel) or return filename for CSV from Dropbox.
+    
+    Now exposed as a primary function per ChatGPT enterprise plan.
+    """
+    try:
+        filename = cleansed_path.split('/')[-1].lower()
+        if filename.endswith('.csv'):
+            # For CSV files, return the filename without extension as the "sheet" name
+            sheet_name = os.path.splitext(cleansed_path.split('/')[-1])[0]
+            return [sheet_name]
+        else:
+            # For Excel files, list actual sheets
+            frames = _load_file_to_frames(cleansed_path)
+            return list(frames.keys())
+    except Exception as e:
+        print(f"Error listing sheets for {cleansed_path}: {e}")
+        return []
+
+def get_sheet_schema(cleansed_path: str, sheet_name: str = None) -> Dict[str, Any]:
+    """
+    NEW: Get schema information for a specific sheet.
+    Useful for choose_aggregation() function in assistant_bridge.
+    """
+    try:
+        frames = _load_file_to_frames(cleansed_path)
+        
+        # Choose sheet
+        if sheet_name and sheet_name in frames:
+            df = frames[sheet_name]
+        else:
+            # Use first sheet
+            df = next(iter(frames.values()))
+        
+        # Build schema
+        schema = {}
+        for col in df.columns:
+            schema[col] = {
+                "dtype": str(df[col].dtype),
+                "null_count": int(df[col].isnull().sum()),
+                "unique_count": int(df[col].nunique()),
+                "sample_values": df[col].dropna().head(3).tolist()
+            }
+        
+        return {
+            "columns": list(df.columns),
+            "schema": schema,
+            "row_count": len(df),
+            "sheet_name": sheet_name or "(first sheet)"
+        }
+        
+    except Exception as e:
+        return {"error": f"Failed to get schema: {str(e)}"}
+
+def get_sample_data(cleansed_path: str, sheet_name: str = None, limit: int = 5) -> List[Dict]:
+    """
+    NEW: Get sample data rows for assistant analysis.
+    Used by choose_aggregation() to understand data structure.
+    """
+    try:
+        frames = _load_file_to_frames(cleansed_path)
+        
+        # Choose sheet
+        if sheet_name and sheet_name in frames:
+            df = frames[sheet_name]
+        else:
+            # Use first sheet
+            df = next(iter(frames.values()))
+        
+        # Return sample as list of dictionaries
+        sample = df.head(limit).to_dict(orient='records')
+        return sample
+        
+    except Exception as e:
+        return [{"error": f"Failed to get sample data: {str(e)}"}]
+
 def chart(
     *,
     kind: str,
@@ -336,18 +438,3 @@ def chart(
 def kb_search(query: str, k: int = 5) -> Dict[str, Any]:
     """Stub until Stage 6 (OpenAI File Search)."""
     return {"chunks": [], "citations": [], "k": k, "query": query}
-
-def list_sheets(cleansed_path: str) -> List[str]:
-    """List sheet names in a cleansed workbook (Excel) or return filename for CSV from Dropbox."""
-    try:
-        filename = cleansed_path.split('/')[-1].lower()
-        if filename.endswith('.csv'):
-            # For CSV files, return the filename without extension as the "sheet" name
-            sheet_name = os.path.splitext(cleansed_path.split('/')[-1])[0]
-            return [sheet_name]
-        else:
-            # For Excel files, list actual sheets
-            frames = _load_file_to_frames(cleansed_path)
-            return list(frames.keys())
-    except Exception:
-        return []

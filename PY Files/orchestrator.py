@@ -8,6 +8,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
+# Enterprise foundation imports
+from constants import PROJECT_ROOT, DATA_ROOT, EDA_CHART, COMPARES
+from path_utils import join_root, canon_path
+
+# ChatGPT's simplified approach with enterprise foundations
+from executor import run_intent_task
+from file_utils import list_cleaned_files
+from loader import load_excel_file
+
 # --- Core deps (safe imports, with fallbacks) ---
 try:
     from llm_client import get_openai_client, chat_completion
@@ -96,11 +105,11 @@ def _s3_prefix() -> str:
 def _dbx_default_charts(app_paths: Any) -> Optional[str]:
     return getattr(app_paths, "dbx_charts_folder", 
                    getattr(app_paths, "dbx_eda_charts_folder", 
-                          getattr(app_paths, "default_charts_path", "/04_Data/02_EDA_Charts")))
+                          getattr(app_paths, "default_charts_path", EDA_CHART)))
 
 def _dbx_default_summaries(app_paths: Any) -> Optional[str]:
     return getattr(app_paths, "dbx_summaries_folder", 
-                   getattr(app_paths, "default_summaries_path", "/04_Data/03_Summaries"))
+                   getattr(app_paths, "default_summaries_path", join_root(DATA_ROOT, "03_Summaries")))
 
 def _artifact_folder(kind: str, app_paths: Any) -> Optional[str]:
     """
@@ -118,7 +127,7 @@ def _artifact_folder(kind: str, app_paths: Any) -> Optional[str]:
             return f"{base}/{charts_path}"
         summaries_path = getattr(app_paths, "s3_summaries_path", "04_Data/03_Summaries")
         return f"{base}/{summaries_path}"
-    # default dropbox pathing
+    # default dropbox pathing with enterprise foundations
     return _normalize_dbx_path(_dbx_default_charts(app_paths) if kind == "charts" else _dbx_default_summaries(app_paths))
 
 
@@ -142,7 +151,31 @@ def _normalize_dbx_paths(paths: Optional[List[str]]) -> List[str]:
 
 
 # =============================================================================
-# COMBINED CONTEXT Orchestration (Excel + KB, no dropdowns)
+# SIMPLIFIED ORCHESTRATION (ChatGPT approach with enterprise foundations)
+# =============================================================================
+def answer_question_simple(user_question: str) -> str:
+    """
+    ChatGPT's simplified orchestration approach, but using enterprise foundations.
+    Stay thin: build df_dict, call run_intent_task, return JSON result.
+    """
+    # Build lightweight context for executor
+    df_dict = {}
+    for p in list_cleaned_files():
+        try:
+            df_dict[p] = load_excel_file(p, "xlsx")
+        except Exception:
+            continue
+    
+    metadata_index = {}  # hook up if you load it elsewhere
+    client = None
+    
+    # Delegate to executor with enterprise foundations
+    res = run_intent_task(user_question, df_dict, metadata_index, client)
+    return json.dumps(res, indent=2, ensure_ascii=False)
+
+
+# =============================================================================
+# COMBINED CONTEXT Orchestration (Original enterprise approach - keep both)
 # =============================================================================
 def answer_question(
     user_question: str,

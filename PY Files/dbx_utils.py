@@ -1,18 +1,23 @@
 # PY Files/dbx_utils.py
 import io, json
 import os
-from typing import List, Dict, Optional, Union
+from typing import List, Dict, Optional, Union, Any
+from datetime import datetime
 import pandas as pd
 
+# Enterprise foundation imports
 try:
     import streamlit as st
+    STREAMLIT_AVAILABLE = True
 except ImportError:
+    STREAMLIT_AVAILABLE = False
     st = None
 
 # ---------------- internal helpers ----------------
 
 def _secret(name: str, default: Optional[str] = None) -> Optional[str]:
-    if st is not None and hasattr(st, "secrets"):
+    """Get secret from Streamlit secrets.toml or environment variables."""
+    if STREAMLIT_AVAILABLE and hasattr(st, "secrets"):
         v = st.secrets.get(name)
         if v is not None:
             return v
@@ -149,4 +154,135 @@ def upload_json(path_lower: str, obj: dict, mode: str = "overwrite"):
     """Upload a JSON object to Dropbox."""
     data = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
     upload_bytes(path_lower, data, mode=mode)
+
+
+def upload_manifest(manifest_data: Dict[str, Any], manifest_path: str = None) -> str:
+    """
+    Upload a manifest file to Dropbox with enterprise metadata.
+    
+    Args:
+        manifest_data: Manifest dictionary to upload
+        manifest_path: Optional Dropbox path. If None, generates timestamped path.
+        
+    Returns:
+        str: Dropbox path where manifest was uploaded
+    """
+    if manifest_path is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        manifest_path = f"/manifests/sync_manifest_{timestamp}.json"
+    
+    # Enhance manifest with Dropbox-specific metadata
+    enhanced_manifest = manifest_data.copy()
+    enhanced_manifest["cloud_sync"] = enhanced_manifest.get("cloud_sync", {})
+    enhanced_manifest["cloud_sync"].update({
+        "dropbox_path": manifest_path,
+        "dropbox_root": _secret("DROPBOX_ROOT", ""),
+        "upload_timestamp": datetime.now().isoformat()
+    })
+    
+    upload_json(manifest_path, enhanced_manifest)
+    return manifest_path
+
+
+def list_manifests(folder_path: str = "/manifests") -> List[Dict[str, Any]]:
+    """
+    List all manifest files in a Dropbox folder.
+    
+    Args:
+        folder_path: Dropbox folder to search for manifests
+        
+    Returns:
+        List of manifest metadata dictionaries
+    """
+    import dropbox
+    
+    try:
+        dbx = _get_dbx_client()
+        manifests = []
+        
+        try:
+            resp = dbx.files_list_folder(folder_path)
+            entries = list(resp.entries)
+            
+            while resp.has_more:
+                resp = dbx.files_list_folder_continue(resp.cursor)
+                entries.extend(resp.entries)
+            
+            for entry in entries:
+                if isinstance(entry, dropbox.files.FileMetadata) and entry.name.lower().endswith('.json'):
+                    manifests.append({
+                        "name": entry.name,
+                        "path": entry.path_lower,
+                        "size": entry.size,
+                        "server_modified": entry.server_modified,
+                        "content_hash": getattr(entry, "content_hash", None)
+                    })
+            
+            # Sort by modification date, newest first
+            manifests.sort(key=lambda x: x.get("server_modified", datetime.min), reverse=True)
+            
+        except dropbox.exceptions.ApiError as e:
+            if e.error.is_path_not_found():
+                # Folder doesn't exist yet
+                return []
+            else:
+                raise
+                
+    except Exception as e:
+        print(f"Warning: Could not list Dropbox manifests: {e}")
+        return []
+    
+    return manifests
+
+
+def validate_dropbox_config() -> Dict[str, Any]:
+    """
+    Validate Dropbox configuration and connectivity.
+    
+    Returns:
+        Dict with validation results
+    """
+    validation = {
+        "config_valid": False,
+        "connectivity": False,
+        "errors": [],
+        "config_source": "secrets.toml" if STREAMLIT_AVAILABLE else "environment"
+    }
+    
+    # Check configuration completeness
+    app_key = _secret("DROPBOX_APP_KEY")
+    app_secret = _secret("DROPBOX_APP_SECRET") 
+    refresh_token = _secret("DROPBOX_REFRESH_TOKEN")
+    
+    missing_config = []
+    if not app_key:
+        missing_config.append("DROPBOX_APP_KEY")
+    if not app_secret:
+        missing_config.append("DROPBOX_APP_SECRET")
+    if not refresh_token:
+        missing_config.append("DROPBOX_REFRESH_TOKEN")
+    
+    if missing_config:
+        validation["errors"].append(f"Missing configuration: {', '.join(missing_config)}")
+        return validation
+    
+    validation["config_valid"] = True
+    
+    # Test connectivity
+    try:
+        dbx = _get_dbx_client()
+        
+        # Test basic connectivity with account info
+        account_info = dbx.users_get_current_account()
+        validation["connectivity"] = True
+        validation["account_info"] = {
+            "name": account_info.name.display_name,
+            "email": account_info.email,
+            "account_id": account_info.account_id
+        }
+        
+    except Exception as e:
+        validation["errors"].append(f"Dropbox connection error: {str(e)}")
+    
+    return validation
 
