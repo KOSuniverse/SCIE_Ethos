@@ -84,10 +84,13 @@ def _s3_prefix() -> str:
     return (os.getenv("S3_PREFIX") or "project-root").strip().strip("/")
 
 def _dbx_default_charts(app_paths: Any) -> Optional[str]:
-    return getattr(app_paths, "dbx_charts_folder", getattr(app_paths, "dbx_eda_charts_folder", "/04_Data/02_EDA_Charts"))
+    return getattr(app_paths, "dbx_charts_folder", 
+                   getattr(app_paths, "dbx_eda_charts_folder", 
+                          getattr(app_paths, "default_charts_path", "/04_Data/02_EDA_Charts")))
 
 def _dbx_default_summaries(app_paths: Any) -> Optional[str]:
-    return getattr(app_paths, "dbx_summaries_folder", "/04_Data/03_Summaries")
+    return getattr(app_paths, "dbx_summaries_folder", 
+                   getattr(app_paths, "default_summaries_path", "/04_Data/03_Summaries"))
 
 def _artifact_folder(kind: str, app_paths: Any) -> Optional[str]:
     """
@@ -101,8 +104,10 @@ def _artifact_folder(kind: str, app_paths: Any) -> Optional[str]:
             raise RuntimeError("ARTIFACT_BACKEND=s3 requires S3_BUCKET env")
         base = f"s3://{bucket}/{_s3_prefix()}"
         if kind == "charts":
-            return f"{base}/04_Data/02_EDA_Charts"
-        return f"{base}/04_Data/03_Summaries"
+            charts_path = getattr(app_paths, "s3_charts_path", "04_Data/02_EDA_Charts")
+            return f"{base}/{charts_path}"
+        summaries_path = getattr(app_paths, "s3_summaries_path", "04_Data/03_Summaries")
+        return f"{base}/{summaries_path}"
     # default dropbox pathing
     return _normalize_dbx_path(_dbx_default_charts(app_paths) if kind == "charts" else _dbx_default_summaries(app_paths))
 
@@ -149,15 +154,22 @@ def answer_question(
     intent = intent_info["intent"]
     model_size = intent_info.get("model_size", "large" if intent in {"root_cause", "forecast"} else "small")
     model = "gpt-4o" if model_size == "large" else "gpt-4o-mini"
+    
+    print(f"🧠 ORCHESTRATOR DEBUG: Intent={intent}, Model={model}, Confidence={intent_info.get('confidence')}")
 
     client = get_openai_client()
 
     # 1) Assemble global context
     excel_ctx = _build_excel_context(cleansed_paths)   # files -> sheets (+types) (+columns)
     kb_ctx_preview = _kb_candidates(user_question)     # doc titles or brief refs
+    
+    print(f"📊 ORCHESTRATOR DEBUG: Excel files found: {len(excel_ctx.get('files', []))}")
+    print(f"📚 ORCHESTRATOR DEBUG: KB candidates: {len(kb_ctx_preview)}")
 
     # 2) Propose a plan with hard guardrails
     tools_catalog = _safe_tool_specs()
+    print(f"🔧 ORCHESTRATOR DEBUG: Available tools: {list(tools_catalog.keys())}")
+    
     plan = _propose_tool_plan(
         client=client,
         question=user_question,
@@ -166,9 +178,14 @@ def answer_question(
         kb_candidates=kb_ctx_preview,
         app_paths=app_paths,
     )
+    
+    print(f"📋 ORCHESTRATOR DEBUG: Proposed plan has {len(plan)} steps")
+    for i, step in enumerate(plan):
+        print(f"   Step {i+1}: {step.get('tool', 'unknown')} - {step.get('purpose', 'no purpose')}")
 
     # 3) Execute plan (guarded)
     exec_result = _execute_plan(plan, app_paths)
+    print(f"⚡ ORCHESTRATOR DEBUG: Execution completed with {len(exec_result)} results")
 
     # Build quantitative context (compact)
     quantitative_context, matched_artifacts = _summarize_exec(exec_result)
@@ -196,10 +213,20 @@ def answer_question(
         "artifacts": matched_artifacts,
         "kb_citations": kb_citations,
         "debug": {
+            "orchestrator_flow": {
+                "intent_classification": intent_info,
+                "model_selected": model,
+                "tools_available": list(tools_catalog.keys()),
+                "plan_steps": len(plan),
+                "execution_results": len(exec_result["calls"]),
+                "excel_files_found": len(excel_ctx.get("files", [])),
+                "kb_candidates_found": len(kb_ctx_preview),
+            },
             "plan_raw": plan,
             "excel_context": excel_ctx,
             "kb_candidates": kb_ctx_preview,
             "quantitative_context": quantitative_context,
+            "execution_details": exec_result,
         },
     }
 
@@ -211,7 +238,7 @@ def _build_excel_context(cleansed_paths: Optional[List[str]]) -> Dict[str, Any]:
     """
     Returns a dict:
     {
-      "files": ["/04_Data/01_Cleansed_Files/a.xlsx", ...],
+      "files": ["dropbox://cleansed_folder/a.xlsx", ...],
       "sheets_by_file": {file: ["Inventory", "Aged WIP", ...]},
       "sheet_types": {file: {"Inventory":"inventory", "Aged WIP":"wip"}},
       "columns_by_sheet": {file: {"Aged WIP": ["job","extended_cost",...], ...}}  # if available

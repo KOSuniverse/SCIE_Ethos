@@ -113,22 +113,31 @@ def _normalize_storage(storage: Optional[str], paths: Any) -> str:
 
 def _load_by_filename(filename: str, paths: Any, storage_name: str) -> bytes:
     """
-    Load bytes using filename + paths + storage hint, without assuming local raw_folder exists.
+    Load bytes using filename + paths + storage hint. 
+    Cloud-first architecture: prioritize Dropbox, fallback to local for development.
     """
-    if storage_name == "dropbox":
-        dbx_raw = getattr(paths, "dbx_raw_folder", None)
-        if not dbx_raw:
-            raise RuntimeError("Dropbox mode requested but 'dbx_raw_folder' is not set on paths.")
+    # Try Dropbox first if available (cloud-native preference)
+    dbx_raw = getattr(paths, "dbx_raw_folder", None)
+    if dbx_raw and (storage_name == "dropbox" or storage_name != "local"):
         dbx_path = f"{dbx_raw.rstrip('/')}/{filename}"
         return dbx_read_bytes(dbx_path)
 
-    # local
-    local_raw = getattr(paths, "raw_folder", None)
-    if not local_raw:
-        raise RuntimeError("Local mode requested but 'raw_folder' is not set on paths.")
-    local_path = os.path.join(local_raw, filename)
-    with open(local_path, "rb") as f:
-        return f.read()
+    # Local fallback for development/testing
+    if storage_name == "local" or not dbx_raw:
+        local_raw = getattr(paths, "raw_folder", None)
+        if local_raw:
+            local_path = os.path.join(local_raw, filename)
+            with open(local_path, "rb") as f:
+                return f.read()
+        elif storage_name == "local":
+            raise RuntimeError("Local storage requested but 'raw_folder' is not set on paths.")
+    
+    # No valid storage found
+    raise RuntimeError(
+        f"No storage configuration found for file '{filename}'. "
+        f"Set either 'dbx_raw_folder' (cloud) or 'raw_folder' (local) in paths. "
+        f"Storage hint: {storage_name}"
+    )
 
 def _normalize_pipeline_output(out: Any, filename: str) -> Tuple[Dict[str, "pd.DataFrame"], dict]:
     # Tuple already
