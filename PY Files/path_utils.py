@@ -1,6 +1,7 @@
 # PY Files/path_utils.py
 from __future__ import annotations
 import os
+import re
 from dataclasses import dataclass
 
 try:
@@ -14,6 +15,46 @@ def _secret(key: str, default: str = "") -> str:
         if v is not None:
             return str(v)
     return os.getenv(key, default)
+
+def canon_path(p: str) -> str:
+    """
+    Canonicalize path with proper case normalization for folder names.
+    
+    Args:
+        p: Path string to normalize
+        
+    Returns:
+        str: Canonicalized path with proper case
+    """
+    if not p:
+        return p
+    
+    # Normalize slashes
+    p = p.replace("\\", "/")
+    
+    # Replace project_root variations
+    p = p.replace("/project_root", _secret("DROPBOX_ROOT", "/Project_Root"))
+    
+    # Case-insensitive folder normalization
+    p = re.sub(r"/04_data/", "/04_Data/", p, flags=re.I)
+    p = re.sub(r"/06_llm_knowledge_base/", "/06_LLM_Knowledge_Base/", p, flags=re.I)
+    
+    return p
+
+def join_root(*parts: str) -> str:
+    """
+    Join path parts with PROJECT_ROOT and canonicalize.
+    
+    Args:
+        *parts: Path parts to join
+        
+    Returns:
+        str: Canonicalized full path
+    """
+    root = _secret("DROPBOX_ROOT", "/Project_Root").strip("/")
+    parts_clean = [s.strip("/") for s in parts if s]
+    joined = "/" + "/".join([root] + parts_clean)
+    return canon_path(joined)
 
 @dataclass
 class ProjectPaths:
@@ -63,4 +104,7 @@ def get_project_paths() -> ProjectPaths:
         s3_prefix=s3_prefix,
         s3_base=s3_base,
     )
+
+# Export main functions for clean imports
+__all__ = ["canon_path", "join_root", "get_project_paths", "ProjectPaths"]
 

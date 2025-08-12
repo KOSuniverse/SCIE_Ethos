@@ -2,31 +2,51 @@
 
 import os
 import json
+from typing import Optional
+from .path_utils import get_project_paths
 
-def load_master_metadata_index(metadata_path: str) -> dict:
+def get_master_metadata_path() -> str:
+    """
+    Returns the standardized path to master metadata index.
+    
+    Returns:
+        str: Full path to master_metadata_index.json in metadata folder
+    """
+    project_paths = get_project_paths()
+    return project_paths.master_metadata_path
+
+def load_master_metadata_index(metadata_path: Optional[str] = None) -> dict:
     """
     Loads the master metadata index from JSON file.
+    Uses standardized metadata folder if no path specified.
 
     Args:
-        metadata_path (str): Path to metadata JSON.
+        metadata_path (str): Optional custom path. Uses standard path if None.
 
     Returns:
         dict: Parsed metadata dictionary.
     """
+    if metadata_path is None:
+        metadata_path = get_master_metadata_path()
+    
     if not os.path.exists(metadata_path):
         return {"files": []}
 
     with open(metadata_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def save_master_metadata_index(metadata_index: dict, metadata_path: str):
+def save_master_metadata_index(metadata_index: dict, metadata_path: Optional[str] = None):
     """
     Saves the updated metadata index to disk.
+    Uses standardized metadata folder if no path specified.
 
     Args:
         metadata_index (dict): Metadata dictionary to write.
-        metadata_path (str): Destination path.
+        metadata_path (str): Optional custom path. Uses standard path if None.
     """
+    if metadata_path is None:
+        metadata_path = get_master_metadata_path()
+    
     os.makedirs(os.path.dirname(metadata_path), exist_ok=True)
 
     with open(metadata_path, "w", encoding="utf-8") as f:

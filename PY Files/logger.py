@@ -2,48 +2,51 @@
 
 import os
 import json
+import time
 from datetime import datetime
+from pathlib import Path
+from typing import Optional
 
-def log_event(message: str, log_path: str):
+# Import constants
+try:
+    from .constants import META_DIR
+except ImportError:
+    # Fallback for standalone usage
+    from constants import META_DIR
+
+def log_event(message: str, log_path: Optional[str] = None):
     """
-    Appends a timestamped message to a log file.
+    Appends a timestamped message to a log file using JSONL format.
+    Uses standardized metadata folder if no path specified.
 
     Args:
         message (str): Message to log.
-        log_path (str): Path to the log file.
+        log_path (str): Optional custom path. Uses metadata folder if None.
     """
-    os.makedirs(os.path.dirname(log_path), exist_ok=True)
-
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    entry = f"[{timestamp}] {message}\n"
-
+    if log_path is None:
+        log_path = f"{META_DIR}/app_events.jsonl"
+    
+    rec = {"ts": time.time(), "message": message}
+    Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+    
     with open(log_path, "a", encoding="utf-8") as f:
-        f.write(entry)
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
-def log_query_result(query: str, result: dict, save_path: str):
+def log_query_result(query: str, result: dict, save_path: Optional[str] = None):
     """
-    Saves the full query and result to a structured JSON log.
+    Saves the full query and result to a structured JSONL log.
+    Uses standardized metadata folder if no path specified.
 
     Args:
         query (str): User question.
         result (dict): Output from orchestrator.
-        save_path (str): JSON file path.
+        save_path (str): Optional custom path. Uses metadata folder if None.
     """
-    log_entry = {
-        "timestamp": datetime.now().isoformat(),
-        "query": query,
-        "result": result
-    }
-
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
-    if os.path.exists(save_path):
-        with open(save_path, "r", encoding="utf-8") as f:
-            existing = json.load(f)
-    else:
-        existing = []
-
-    existing.append(log_entry)
-
-    with open(save_path, "w", encoding="utf-8") as f:
-        json.dump(existing, f, indent=2)
+    if save_path is None:
+        save_path = f"{META_DIR}/query_results.jsonl"
+    
+    rec = {"ts": time.time(), "query": query, "result": result}
+    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(save_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")

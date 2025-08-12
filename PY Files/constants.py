@@ -1,6 +1,24 @@
 # constants.py
 
-# --- Root Data Paths ---
+import os
+try:
+    import streamlit as st
+    _DBX = st.secrets.get("DROPBOX_ROOT", os.getenv("DROPBOX_ROOT", "")).strip("/")
+except Exception:
+    _DBX = os.getenv("DROPBOX_ROOT", "").strip("/")
+
+# Dropbox-first root; fallback to /Project_Root
+PROJECT_ROOT = f"/{_DBX}" if _DBX else "/Project_Root"  # type: str
+
+# Canonical subfolders (case-stable)
+DATA_ROOT = f"{PROJECT_ROOT}/04_Data"                    # type: str
+KB_ROOT   = f"{PROJECT_ROOT}/06_LLM_Knowledge_Base"      # type: str
+META_DIR  = f"{DATA_ROOT}/04_Metadata"                   # type: str
+CLEANSED  = f"{DATA_ROOT}/01_Cleansed_Files"             # type: str
+EDA_CHART = f"{DATA_ROOT}/02_EDA_Charts"                 # type: str
+COMPARES  = f"{DATA_ROOT}/05_Merged_Comparisons"         # type: str
+
+# --- Legacy Directory Constants (for backward compatibility) ---
 RAW_FILES_DIR = "04_Data/00_Raw_Files"
 CLEANSED_FILES_DIR = "04_Data/01_Cleansed_Files"
 EDA_CHARTS_DIR = "04_Data/02_EDA_Charts"
