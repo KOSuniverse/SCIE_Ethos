@@ -96,7 +96,7 @@ confidence_scoring:
     low: abstain or request clarification
 
 glossary_and_alias_injection:
-  source: /04_Data/04_Metadata/global_column_aliases.json
+  source: "{{METADATA_PATH}}/global_column_aliases.json"  # Dynamic path resolved at runtime
   glossary_terms:
     - WIP: Work In Progress
     - E&O: Excess and Obsolete inventory
@@ -160,5 +160,5 @@ code_interpreter:
     - "Sheet selection order: WIP/Aged WIP/G512 > Inventory/Finished Goods > first available."
     - "Use glossary/alias map for column names; if a requested column alias maps to a real column, use it."
     - "If the question mentions both inventory and WIP, compute both and summarize together."
-    - "Save tables to s3://{{S3_BUCKET}}/{{S3_PREFIX}}/04_Data/03_Summaries and charts to .../02_EDA_Charts."
+    - "Save tables to s3://{{S3_BUCKET}}/{{S3_PREFIX}}/{{SUMMARIES_PATH}} and charts to {{CHARTS_PATH}}."
     - "Return a Markdown section with: Numbers summary, Drivers/notes, Confidence badge, and Citations (file → sheet)."
