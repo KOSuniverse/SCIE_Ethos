@@ -19,7 +19,23 @@ def load_excel_file(file_path, file_type=None):
             - 'file_type': passed type or inferred
     """
     filename = os.path.basename(file_path)
-    sheets = pd.read_excel(file_path, sheet_name=None)
+    
+    # Use Dropbox API for cloud paths
+    try:
+        from dbx_utils import read_file_bytes
+        import io
+        
+        # Check if this is a Dropbox path
+        if file_path.startswith('/'):
+            # Use Dropbox API to read the file
+            file_bytes = read_file_bytes(file_path)
+            sheets = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None)
+        else:
+            # Local file path - use direct pandas
+            sheets = pd.read_excel(file_path, sheet_name=None)
+    except ImportError:
+        # Fallback to direct pandas if dbx_utils not available
+        sheets = pd.read_excel(file_path, sheet_name=None)
 
     # Detect quarter from filename
     match = re.search(r"Q[1-4]", filename.upper())
