@@ -672,13 +672,13 @@ if raw_files:
                                     try:
                                         chart_status.write(f"🎨 Creating histogram for {col}...")
                                         
-                                        fig, ax = plt.subplots(figsize=(10, 6))
+                                        fig, ax = plt.subplots(figsize=(8, 4))  # Smaller size: was (10, 6)
                                         
                                         # Create histogram
                                         df[col].hist(bins=30, ax=ax, alpha=0.7, color='skyblue', edgecolor='black')
-                                        ax.set_title(f'Distribution: {col}', fontsize=14, fontweight='bold')
-                                        ax.set_xlabel(col, fontsize=12)
-                                        ax.set_ylabel('Frequency', fontsize=12)
+                                        ax.set_title(f'Distribution: {col}', fontsize=12, fontweight='bold')  # Smaller font
+                                        ax.set_xlabel(col, fontsize=10)  # Smaller font
+                                        ax.set_ylabel('Frequency', fontsize=10)  # Smaller font
                                         ax.grid(True, alpha=0.3)
                                         
                                         # Save to Dropbox via bytes
@@ -708,12 +708,12 @@ if raw_files:
                                     clean_data = df[[x_col, y_col]].dropna()
                                     
                                     if len(clean_data) > 0:
-                                        fig, ax = plt.subplots(figsize=(10, 6))
+                                        fig, ax = plt.subplots(figsize=(8, 4))  # Smaller size: was (10, 6)
                                         
                                         ax.scatter(clean_data[x_col], clean_data[y_col], alpha=0.6, color='coral')
-                                        ax.set_title(f'Relationship: {x_col} vs {y_col}', fontsize=14, fontweight='bold')
-                                        ax.set_xlabel(x_col, fontsize=12)
-                                        ax.set_ylabel(y_col, fontsize=12)
+                                        ax.set_title(f'Relationship: {x_col} vs {y_col}', fontsize=12, fontweight='bold')  # Smaller font
+                                        ax.set_xlabel(x_col, fontsize=10)  # Smaller font
+                                        ax.set_ylabel(y_col, fontsize=10)  # Smaller font
                                         ax.grid(True, alpha=0.3)
                                         
                                         # Save to Dropbox
@@ -741,11 +741,11 @@ if raw_files:
                                     chart_status.write("🎨 Creating correlation heatmap...")
                                     corr_data = df[numeric_cols].corr()
                                     
-                                    fig, ax = plt.subplots(figsize=(12, 8))
+                                    fig, ax = plt.subplots(figsize=(10, 6))  # Smaller size: was (12, 8)
                                     
                                     sns.heatmap(corr_data, annot=True, fmt='.2f', cmap='RdBu_r', 
                                               center=0, square=True, ax=ax, cbar_kws={"shrink": .8})
-                                    ax.set_title('Correlation Analysis', fontsize=16, fontweight='bold', pad=20)
+                                    ax.set_title('Correlation Analysis', fontsize=14, fontweight='bold', pad=15)  # Smaller padding
                                     
                                     # Save to Dropbox
                                     chart_buffer = BytesIO()
@@ -774,12 +774,12 @@ if raw_files:
                                     top_data = df.groupby(group_col)[metric_col].sum().sort_values(ascending=False).head(10)
                                     
                                     if len(top_data) > 0:
-                                        fig, ax = plt.subplots(figsize=(12, 6))
+                                        fig, ax = plt.subplots(figsize=(10, 4))  # Smaller size: was (12, 6)
                                         
                                         top_data.plot(kind='bar', ax=ax, color='lightgreen', edgecolor='black')
-                                        ax.set_title(f'Top 10 {group_col} by {metric_col}', fontsize=14, fontweight='bold')
-                                        ax.set_xlabel(group_col, fontsize=12)
-                                        ax.set_ylabel(metric_col, fontsize=12)
+                                        ax.set_title(f'Top 10 {group_col} by {metric_col}', fontsize=12, fontweight='bold')  # Smaller font
+                                        ax.set_xlabel(group_col, fontsize=10)  # Smaller font
+                                        ax.set_ylabel(metric_col, fontsize=10)  # Smaller font
                                         ax.tick_params(axis='x', rotation=45)
                                         ax.grid(True, alpha=0.3)
                                         
@@ -1061,32 +1061,71 @@ if raw_files:
                         
                         with st.expander(f"📊 {sheet_name} ({sheet_type}) - {record_count:,} records"):
                             if summary_text and summary_text != "No summary available":
-                                st.write("**Summary:**")
+                                st.write("**📄 Summary:**")
                                 st.write(summary_text)
+                                st.write("")  # Add spacing
                             
-                            if eda_text:
-                                st.write("**Analysis:**")
-                                st.write(eda_text)
-                            
-                            # Show supply chain insights if available
+                            # Show supply chain insights if available - FIRST, as these are most important
                             if sheet_name in all_insights:
                                 insights = all_insights[sheet_name]
                                 if insights.get("supply_chain_insights"):
-                                    st.write("**Supply Chain Metrics:**")
+                                    st.write("**📦 Supply Chain Metrics:**")
                                     for category, info in insights["supply_chain_insights"].items():
                                         if info.get("total_value", 0) > 0:
                                             st.write(f"- **{category.title()}**: ${info['total_value']:,.2f}")
+                                    st.write("")  # Add spacing
                                 
-                                # Show dataset overview
+                                # Show dataset overview in a cleaner format
                                 if insights.get("dataset_overview"):
                                     overview = insights["dataset_overview"]
-                                    st.write("**Data Quality:**")
-                                    col1, col2 = st.columns(2)
-                                    with col1:
-                                        st.metric("Missing Data", f"{overview.get('missing_data_percentage', 0):.1f}%")
-                                    with col2:
-                                        chart_count = len(insights.get("charts_generated", []))
-                                        st.metric("Charts Generated", chart_count)
+                                    st.write("**📈 Data Quality Overview:**")
+                                    
+                                    qual_col1, qual_col2, qual_col3 = st.columns(3)
+                                    with qual_col1:
+                                        st.metric("Total Records", f"{overview.get('total_rows', 0):,}")
+                                    with qual_col2:
+                                        st.metric("Columns", overview.get('total_columns', 0))
+                                    with qual_col3:
+                                        missing_pct = overview.get('missing_data_percentage', 0)
+                                        st.metric("Missing Data", f"{missing_pct:.1f}%")
+                                    
+                                    chart_count = len(insights.get("charts_generated", []))
+                                    if chart_count > 0:
+                                        st.write(f"📊 **{chart_count} visualizations generated** for this sheet")
+                                    st.write("")  # Add spacing
+                            
+                            # Only show EDA text if it's different from metadata and actually useful
+                            if eda_text and eda_text.strip() and not eda_text.startswith('{'):
+                                st.write("**🔍 Detailed Analysis:**")
+                                st.write(eda_text)
+                            elif sheet_name in all_insights:
+                                # Generate a more meaningful analysis summary
+                                insights = all_insights[sheet_name]
+                                st.write("**🔍 Key Data Insights:**")
+                                
+                                # If we have supply chain data, focus on that
+                                if insights.get("supply_chain_insights"):
+                                    supply_insights = insights["supply_chain_insights"]
+                                    meaningful_categories = [cat for cat, info in supply_insights.items() 
+                                                           if info.get("total_value", 0) > 0]
+                                    
+                                    if meaningful_categories:
+                                        st.write(f"This sheet contains **{sheet_type}** data with {len(meaningful_categories)} key financial metrics:")
+                                        for category in meaningful_categories:
+                                            info = supply_insights[category]
+                                            cols = info.get("columns_found", [])
+                                            value = info.get("total_value", 0)
+                                            st.write(f"- **{category.title()}**: ${value:,.2f} across columns: {', '.join(cols[:3])}")
+                                
+                                # Add data quality insights
+                                overview = insights.get("dataset_overview", {})
+                                missing_pct = overview.get('missing_data_percentage', 0)
+                                if missing_pct > 10:
+                                    st.warning(f"⚠️ High missing data rate ({missing_pct:.1f}%) - may need data cleaning")
+                                elif missing_pct > 0:
+                                    st.info(f"ℹ️ Low missing data rate ({missing_pct:.1f}%) - good data quality")
+                                else:
+                                    st.success("✅ No missing data - excellent data quality")
                 
             except Exception as e:
                 st.warning(f"Could not display executive summary: {e}")
