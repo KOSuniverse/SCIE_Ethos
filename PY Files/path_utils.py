@@ -32,8 +32,12 @@ def canon_path(p: str) -> str:
     # Normalize slashes
     p = p.replace("\\", "/")
     
-    # Replace project_root variations
-    p = p.replace("/project_root", _secret("DROPBOX_ROOT", "/Project_Root"))
+    # Replace project_root variations (preserve case if no secret is set)
+    dropbox_root = _secret("DROPBOX_ROOT", "")
+    if dropbox_root:
+        p = p.replace("/project_root", f"/{dropbox_root}")
+        p = p.replace("/Project_Root", f"/{dropbox_root}")
+    # If no secret, preserve the original case to avoid mismatch
     
     # Case-insensitive folder normalization
     p = re.sub(r"/04_data/", "/04_Data/", p, flags=re.I)

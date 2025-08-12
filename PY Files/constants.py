@@ -7,10 +7,13 @@ try:
 except Exception:
     _DBX = os.getenv("DROPBOX_ROOT", "").strip("/")
 
-# Dropbox-first root; fallback to /Project_Root
-PROJECT_ROOT = f"/{_DBX}" if _DBX else "/Project_Root"  # type: str
+# Dropbox-first root; handle full path or fallback
+if _DBX:
+    PROJECT_ROOT = f"/{_DBX}" if not _DBX.startswith("/") else _DBX
+else:
+    PROJECT_ROOT = "/Apps/Ethos LLM/Project_Root"  # Default fallback matching Dropbox structure
 
-# Canonical subfolders (case-stable)
+# Canonical subfolders (matching Dropbox structure from screenshot)
 DATA_ROOT = f"{PROJECT_ROOT}/04_Data"                    # type: str
 KB_ROOT   = f"{PROJECT_ROOT}/06_LLM_Knowledge_Base"      # type: str
 META_DIR  = f"{DATA_ROOT}/04_Metadata"                   # type: str
@@ -25,7 +28,7 @@ EDA_CHARTS_DIR = "04_Data/02_EDA_Charts"
 SUMMARY_DIR = "04_Data/03_Summaries"
 METADATA_DIR = "04_Data/04_Metadata"
 COMPARISON_DIR = "04_Data/05_Merged_Comparisons"
-MODELS_DIR = "04_Data/Models"
+MODELS_DIR = "04_Data/06_Models"
 KNOWLEDGE_BASE_DIR = "06_LLM_Knowledge_Base"
 
 # --- Master Files ---
