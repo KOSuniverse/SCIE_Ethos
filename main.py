@@ -530,11 +530,148 @@ if raw_files:
             # 1) Read bytes from Dropbox
             b = dbx_read_bytes(sel)
 
-            st.info(f"Running pipeline for: {filename}")
-            # 2) Run pipeline (bytes, filename, paths)
-            cleaned_sheets, metadata = run_pipeline(b, filename, app_paths)
+            st.info(f"🔄 Running pipeline for: {filename}")
+            
+            # Create progress indicators
+            progress_bar = st.progress(0)
+            status_container = st.container()
+            
+            with status_container:
+                st.write("📊 **Processing Steps:**")
+                step_status = st.empty()
+                
+                # 2) Run pipeline (bytes, filename, paths)
+                step_status.write("🔄 Step 1/5: Running data cleansing pipeline...")
+                progress_bar.progress(20)
+                
+                cleaned_sheets, metadata = run_pipeline(b, filename, app_paths)
+                
+                step_status.write("✅ Step 1/5: Data cleansing completed")
+                progress_bar.progress(40)
 
-            # 3) Save cleansed workbook back to Dropbox
+            # 3) Enhanced EDA Generation and Display
+            st.subheader("📈 Data Analysis & Insights")
+            
+            # Import enhanced EDA tools
+            try:
+                from phase2_analysis.eda_runner import run_gpt_eda_actions, create_enhanced_eda_summary
+                from eda import generate_eda_summary
+                eda_available = True
+            except ImportError:
+                st.warning("⚠️ Enhanced EDA modules not available. Using basic analysis.")
+                eda_available = False
+
+            all_insights = {}
+            all_chart_paths = []
+            
+            for sheet_name, df in cleaned_sheets.items():
+                with st.expander(f"📊 Analysis: {sheet_name} ({len(df)} rows, {len(df.columns)} columns)"):
+                    
+                    # Basic stats display
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Rows", f"{len(df):,}")
+                    with col2:
+                        st.metric("Columns", len(df.columns))
+                    with col3:
+                        missing_pct = round((df.isnull().sum().sum() / (len(df) * len(df.columns))) * 100, 1)
+                        st.metric("Missing Data", f"{missing_pct}%")
+                    
+                    # Show sample data
+                    st.write("**Sample Data:**")
+                    st.dataframe(df.head(10), use_container_width=True)
+                    
+                    if eda_available and len(df) > 0:
+                        # Generate suggested EDA actions
+                        step_status.write(f"🔄 Step 2/5: Generating visualizations for {sheet_name}...")
+                        progress_bar.progress(60)
+                        
+                        # Create EDA actions based on data types
+                        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+                        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+                        
+                        suggested_actions = []
+                        
+                        # Add histograms for numeric columns (top 3)
+                        for col in numeric_cols[:3]:
+                            suggested_actions.append({"action": "histogram", "column": col})
+                        
+                        # Add scatter plots for numeric pairs
+                        if len(numeric_cols) >= 2:
+                            suggested_actions.append({
+                                "action": "scatter", 
+                                "x": numeric_cols[0], 
+                                "y": numeric_cols[1]
+                            })
+                        
+                        # Add correlation matrix if enough numeric columns
+                        if len(numeric_cols) >= 3:
+                            suggested_actions.append({"action": "correlation_matrix"})
+                        
+                        # Add top N analysis for categorical + numeric
+                        if categorical_cols and numeric_cols:
+                            suggested_actions.append({
+                                "action": "groupby_topn",
+                                "group": categorical_cols[0],
+                                "metric": numeric_cols[0],
+                                "topn": 10
+                            })
+                        
+                        # Supply chain dashboard if relevant columns found
+                        supply_keywords = ['wip', 'inventory', 'cost', 'value', 'qty', 'quantity']
+                        if any(keyword in ' '.join(df.columns).lower() for keyword in supply_keywords):
+                            suggested_actions.append({
+                                "action": "supply_chain_dashboard",
+                                "title": f"Supply Chain Analysis: {sheet_name}"
+                            })
+                        
+                        # Generate charts
+                        charts_folder = getattr(app_paths, "dbx_eda_folder", None)
+                        if not charts_folder:
+                            charts_folder = f"{getattr(app_paths, 'dbx_metadata_folder', '/Project_Root/04_Data')}/02_EDA_Charts"
+                        
+                        suffix = f"_{sheet_name.replace(' ', '_').replace('/', '_')}"
+                        chart_paths = run_gpt_eda_actions(
+                            df=df,
+                            actions=suggested_actions,
+                            charts_folder=charts_folder,
+                            suffix=suffix
+                        )
+                        
+                        all_chart_paths.extend(chart_paths)
+                        
+                        # Generate enhanced summary
+                        enhanced_summary = create_enhanced_eda_summary(df, chart_paths, charts_folder)
+                        all_insights[sheet_name] = enhanced_summary
+                        
+                        # Display key insights
+                        if enhanced_summary.get("supply_chain_insights"):
+                            st.write("**📦 Supply Chain Insights:**")
+                            for category, info in enhanced_summary["supply_chain_insights"].items():
+                                if info.get("total_value", 0) > 0:
+                                    st.write(f"- **{category.title()}**: ${info['total_value']:,.2f} across {len(info['columns_found'])} columns")
+                        
+                        # Show chart generation results
+                        if chart_paths:
+                            st.success(f"✅ Generated {len(chart_paths)} visualizations")
+                            for path in chart_paths[:3]:  # Show first 3
+                                st.write(f"📊 {path.split('/')[-1]}")
+                        else:
+                            st.info("ℹ️ No charts generated (insufficient data or columns)")
+                    
+                    else:
+                        # Basic EDA fallback
+                        basic_summary = generate_eda_summary(df) if 'generate_eda_summary' in globals() else {}
+                        if basic_summary:
+                            st.write("**Basic Statistics:**")
+                            if "descriptive_stats" in basic_summary:
+                                st.dataframe(pd.DataFrame(basic_summary["descriptive_stats"]).T)
+
+            step_status.write("✅ Step 2/5: Data analysis completed")
+            progress_bar.progress(70)
+
+            # 4) Save cleansed workbook back to Dropbox
+            step_status.write("🔄 Step 3/5: Saving cleansed workbook...")
             out_bytes = build_xlsx_bytes_from_sheets(cleaned_sheets)
             out_base = filename.rsplit(".xlsx", 1)[0]
             cleansed_dbx = getattr(app_paths, "dbx_cleansed_folder", None)
@@ -542,9 +679,17 @@ if raw_files:
                 raise RuntimeError("Dropbox cleansed folder not set (switch to 'Dropbox' mode).")
             out_path = f"{cleansed_dbx}/{out_base}_cleansed.xlsx"
             upload_bytes(out_path, out_bytes)
-            st.success(f"✅ Cleansed workbook saved to: {out_path}")
+            step_status.write("✅ Step 3/5: Cleansed workbook saved")
+            progress_bar.progress(85)
 
-            # 4) Update master metadata on Dropbox
+            # 5) Update master metadata on Dropbox
+            step_status.write("🔄 Step 4/5: Updating metadata...")
+            
+            # Add EDA insights to metadata
+            if all_insights:
+                metadata["eda_insights"] = all_insights
+                metadata["chart_paths"] = all_chart_paths
+            
             meta_path = getattr(app_paths, "dbx_master_metadata_path", None) or getattr(app_paths, "master_metadata_path", None)
             if not meta_path:
                 raise RuntimeError("No metadata path available (neither Dropbox nor local).")
@@ -556,9 +701,11 @@ if raw_files:
                 existing = []
             existing.append(metadata)
             upload_json(meta_path, existing)
-            st.success(f"✅ Metadata updated at: {meta_path}")
+            step_status.write("✅ Step 4/5: Metadata updated")
+            progress_bar.progress(95)
 
-            # --- Save per-file summaries to Dropbox (JSON + Markdown) ---
+            # 6) Save per-file summaries to Dropbox (JSON + Markdown)
+            step_status.write("🔄 Step 5/5: Saving summaries...")
             summaries_dbx = getattr(app_paths, "dbx_summaries_folder", None)
             if summaries_dbx:
                 # reuse the same base you used for cleansed output naming
@@ -569,17 +716,48 @@ if raw_files:
                 exec_md_path = f"{summaries_dbx}/{out_base}_executive_summary.md"
                 upload_bytes(exec_md_path, exec_md_bytes)
 
-                st.success(f"✅ Summaries saved:\n- {run_meta_path}\n- {exec_md_path}")
+                step_status.write("✅ Step 5/5: All processing completed!")
+                progress_bar.progress(100)
+                
+                # Final success message
+                st.success("🎉 **Processing Complete!**")
+                st.info(f"""
+                **Files Created:**
+                - 📊 Cleansed Data: `{out_path}`
+                - 📈 Charts: {len(all_chart_paths)} visualizations generated
+                - 📝 Metadata: `{meta_path}`
+                - 📋 Summary: `{exec_md_path}`
+                """)
             else:
                 st.warning("Summaries folder not set on Dropbox (03_Summaries). Skipping summaries save.")
 
-            with st.expander("Sheets cleaned"):
-                st.write(list(cleaned_sheets.keys()))
-            with st.expander("Run metadata"):
+            # Display final insights summary
+            if all_insights:
+                st.subheader("🎯 Final Insights Summary")
+                total_rows = sum(len(df) for df in cleaned_sheets.values())
+                total_charts = len(all_chart_paths)
+                
+                insight_col1, insight_col2, insight_col3 = st.columns(3)
+                with insight_col1:
+                    st.metric("Total Records Processed", f"{total_rows:,}")
+                with insight_col2:
+                    st.metric("Sheets Analyzed", len(cleaned_sheets))
+                with insight_col3:
+                    st.metric("Charts Generated", total_charts)
+
+            with st.expander("📋 View Raw Metadata"):
                 st.json(metadata)
 
         except Exception as e:
-            st.error(f"Pipeline error: {e}")
+            st.error(f"❌ Pipeline error: {e}")
+            st.write("**Debug Info:**")
+            st.write(f"- Error type: {type(e).__name__}")
+            st.write(f"- Error details: {str(e)}")
+            
+            # Show stack trace in expander for debugging
+            import traceback
+            with st.expander("🔧 Stack Trace (for debugging)"):
+                st.code(traceback.format_exc())
 else:
     st.info("No RAW files found (or not in Dropbox mode).")
 
