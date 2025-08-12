@@ -470,7 +470,7 @@ def _execute_plan(plan: List[Dict[str, Any]], app_paths: Any) -> Dict[str, Any]:
                 "sheet_used": res.get("sheet_used", sheet_used),
                 "available_sheets": available[:20],
                 "error": res.get("error"),
-            }})
+            }, "result": res})
 
         elif tool == "chart":
             rows = args.get("rows")
