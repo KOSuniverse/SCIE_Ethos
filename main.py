@@ -130,14 +130,14 @@ class AppPaths:
         self.project_root_local = project_root_local
         self.project_root_dropbox = project_root_dropbox
 
-        # Common subpaths
+        # Configurable folder structure (environment variables override defaults)
         self._sub = {
-            "raw": ("04_Data", "00_Raw_Files"),
-            "cleansed": ("04_Data", "01_Cleansed_Files"),
-            "eda": ("04_Data", "02_EDA_Charts"),
-            "summaries": ("04_Data", "03_Summaries"),
-            "metadata": ("04_Data", "04_Metadata"),
-            "merged": ("04_Data", "05_Merged_Comparisons"),
+            "raw": tuple(os.getenv("DATA_RAW_PATH", "04_Data/00_Raw_Files").split("/")),
+            "cleansed": tuple(os.getenv("DATA_CLEANSED_PATH", "04_Data/01_Cleansed_Files").split("/")),
+            "eda": tuple(os.getenv("DATA_CHARTS_PATH", "04_Data/02_EDA_Charts").split("/")),
+            "summaries": tuple(os.getenv("DATA_SUMMARIES_PATH", "04_Data/03_Summaries").split("/")),
+            "metadata": tuple(os.getenv("DATA_METADATA_PATH", "04_Data/04_Metadata").split("/")),
+            "merged": tuple(os.getenv("DATA_MERGED_PATH", "04_Data/05_Merged_Comparisons").split("/")),
         }
 
         # Local paths (None if not provided)
