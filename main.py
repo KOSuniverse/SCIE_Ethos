@@ -125,7 +125,7 @@ interface_mode = st.sidebar.radio(
 )
 
 if interface_mode == "💬 Chat Assistant":
-    # Redirect to chat interface
+    # Auto-launch chat interface in new tab
     st.markdown("""
     ## 🧠 SCIE Ethos Chat Assistant
     
@@ -135,20 +135,65 @@ if interface_mode == "💬 Chat Assistant":
     - Confidence badges & model routing
     - Citation tracking & export capabilities
     
-    ### 🚀 Launch Chat Interface
-    
-    The chat interface is available as a separate Streamlit app for optimal performance.
+    Click the button below to automatically launch the chat interface in a new browser tab.
     """)
     
     if st.button("🚀 Launch Chat Assistant", type="primary", use_container_width=True):
-        st.markdown("""
-        **To launch the chat interface, run:**
-        ```bash
-        streamlit run chat_ui.py
-        ```
+        # Use subprocess to start chat_ui.py on a different port
+        import subprocess
+        import webbrowser
+        import time
+        import socket
+        from pathlib import Path
         
-        Or use the VS Code terminal and run the command above.
-        """)
+        def find_free_port():
+            """Find a free port for the chat interface"""
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('', 0))
+                s.listen(1)
+                port = s.getsockname()[1]
+            return port
+        
+        try:
+            # Find free port
+            chat_port = find_free_port()
+            
+            # Get the directory where this script is located
+            script_dir = Path(__file__).parent
+            chat_ui_path = script_dir / "chat_ui.py"
+            
+            if not chat_ui_path.exists():
+                st.error("chat_ui.py not found. Please ensure it's in the same directory as main.py")
+                st.stop()
+            
+            # Start chat interface on different port
+            process = subprocess.Popen([
+                "streamlit", "run", str(chat_ui_path),
+                "--server.port", str(chat_port),
+                "--server.headless", "true"
+            ], shell=True)
+            
+            # Wait a moment for server to start
+            time.sleep(3)
+            
+            # Open in new browser tab
+            chat_url = f"http://localhost:{chat_port}"
+            webbrowser.open(chat_url)
+            
+            st.success(f"✅ Chat Assistant launched at: {chat_url}")
+            st.info("The chat interface should open in a new browser tab automatically.")
+            
+        except Exception as e:
+            st.error(f"Failed to launch chat interface: {e}")
+            st.markdown("""
+            **Fallback: Manual Launch**
+            
+            If automatic launch failed, you can manually open a new terminal and run:
+            ```bash
+            streamlit run chat_ui.py --server.port 8502
+            ```
+            Then visit: http://localhost:8502
+            """)
         
         # Show preview of chat features
         with st.expander("� Chat Interface Features"):
