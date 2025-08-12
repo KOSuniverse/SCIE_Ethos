@@ -36,6 +36,16 @@ except Exception: tiktoken = None
 # OpenAI client
 from openai import OpenAI
 
+# Enterprise foundation imports
+try:
+    from constants import PROJECT_ROOT
+    from path_utils import join_root, canon_path
+except ImportError:
+    # Fallback for standalone usage
+    PROJECT_ROOT = "/Project_Root"
+    def join_root(path): return f"{PROJECT_ROOT}/{path.strip('/')}"
+    def canon_path(path): return str(Path(path).resolve())
+
 # Cloud storage operations (optional)
 try:
     from .dbx_utils import upload_bytes, read_file_bytes, upload_json
@@ -51,27 +61,12 @@ except ImportError:
     except ImportError:
         DBX_AVAILABLE = False
 
-# ---------- Dynamic path config ----------
-try:
-    import streamlit as st
-    _root = st.secrets.get("DROPBOX_ROOT", os.getenv("DROPBOX_ROOT", "")).strip("/")
-    _namespace = st.secrets.get("DROPBOX_NAMESPACE", os.getenv("DROPBOX_NAMESPACE", "")).strip("/")
-except Exception:
-    _root = os.getenv("DROPBOX_ROOT", "").strip("/")
-    _namespace = os.getenv("DROPBOX_NAMESPACE", "").strip("/")
-
-# Construct full Dropbox path: /Apps/Ethos LLM/Project_Root
-if _root and _namespace:
-    PROJECT_ROOT = f"/{_namespace}/{_root}"
-elif _root:
-    PROJECT_ROOT = f"/{_root}"
-else:
-    PROJECT_ROOT = "/Project_Root"
-
+# ---------- Relative KB paths (enterprise standard) ----------
 KB_SUBDIR     = "06_LLM_Knowledge_Base"
 INDEX_REL     = f"{KB_SUBDIR}/document_index.faiss"
 DOCSTORE_REL  = f"{KB_SUBDIR}/docstore.pkl"
 MANIFEST_REL  = f"{KB_SUBDIR}/manifest.json"
+CHUNKS_REL    = f"{KB_SUBDIR}/chunks"
 
 # ---------- Config ----------
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "text-embedding-3-small")
@@ -84,11 +79,7 @@ SUPPORTED_EXTS = {".pdf", ".docx", ".pptx", ".xlsx", ".xls", ".txt", ".md"}
 TEXT_EXTS = {".txt", ".md"}
 # --- Supported source extensions ---
 ALLOWED_EXTS = {".pdf", ".docx", ".pptx", ".txt", ".md"}
-DEFAULT_SCAN_FOLDERS = [
-    "06_LLM_Knowledge_Base/Source_PDFs",
-    "06_LLM_Knowledge_Base/Source_Docs",
-    "06_LLM_Knowledge_Base/Source_Other",
-]
+DEFAULT_SCAN_FOLDERS = ["06_LLM_Knowledge_Base"]
 
 CHUNKS_REL = f"{KB_SUBDIR}/chunks"
 
@@ -655,8 +646,6 @@ def status(project_root: str) -> Dict[str, any]:
         "cloud_mode": str(root).startswith("/") and DBX_AVAILABLE,
         "dbx_available": DBX_AVAILABLE,
         "computed_project_root": PROJECT_ROOT,
-        "dropbox_root_detected": _root if '_root' in globals() else "not_detected",
-        "dropbox_namespace_detected": _namespace if '_namespace' in globals() else "not_detected",
     }
 
 # ---------- CLI ----------

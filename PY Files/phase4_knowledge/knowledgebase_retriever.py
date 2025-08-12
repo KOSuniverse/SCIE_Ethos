@@ -18,11 +18,20 @@ except Exception:
 # OpenAI client
 from openai import OpenAI
 
+# Enterprise foundation imports
+try:
+    from constants import PROJECT_ROOT
+    from path_utils import canon_path
+except ImportError:
+    # Fallback for standalone usage
+    PROJECT_ROOT = "/Project_Root"
+    def canon_path(path): return str(Path(path).resolve())
+
 # ---- Config (keep in sync with builder) ----
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "text-embedding-3-small")
-KB_FOLDER = "06_LLM_Knowledge_Base"
-INDEX_PATH = f"{KB_FOLDER}/document_index.faiss"
-DOCSTORE_PATH = f"{KB_FOLDER}/docstore.pkl"
+KB_SUBDIR = "06_LLM_Knowledge_Base"
+INDEX_REL = f"{KB_SUBDIR}/document_index.faiss"
+DOCSTORE_REL = f"{KB_SUBDIR}/docstore.pkl"
 
 # ---- Key loader (same order as builder) ----
 def _load_openai_key() -> str:
@@ -57,8 +66,8 @@ def _estimate_tokens(text: str) -> int:
 # ---- Loaders ----
 def load_index_and_docstore(project_root: str) -> Tuple[faiss.IndexFlatIP, Dict[str, list]]:
     root = Path(project_root).resolve()
-    idx_path = root / INDEX_PATH
-    ds_path = root / DOCSTORE_PATH
+    idx_path = root / INDEX_REL
+    ds_path = root / DOCSTORE_REL
     if not idx_path.exists():
         raise FileNotFoundError(f"FAISS index not found at {idx_path}")
     if not ds_path.exists():
