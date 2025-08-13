@@ -351,6 +351,48 @@ def upload_dropbox_file_to_openai(path_lower: str, *, purpose: str = "assistants
     try:
         content = read_file_bytes(path_lower)
         name = filename or os.path.basename(path_lower) or "file.bin"
+        
+        # Convert Excel/CSV to text format for File Search compatibility
+        if name.lower().endswith(('.xlsx', '.xls', '.csv')):
+            import pandas as pd
+            import io
+            
+            # Read Excel/CSV into DataFrame
+            if name.lower().endswith('.csv'):
+                df = pd.read_csv(io.BytesIO(content))
+            else:
+                # For Excel, read all sheets
+                excel_file = pd.ExcelFile(io.BytesIO(content))
+                sheets_text = []
+                for sheet_name in excel_file.sheet_names:
+                    df = pd.read_excel(io.BytesIO(content), sheet_name=sheet_name)
+                    # Convert DataFrame to structured text
+                    sheet_text = f"\n--- SHEET: {sheet_name} ---\n"
+                    sheet_text += f"Columns: {', '.join(df.columns.tolist())}\n"
+                    sheet_text += f"Rows: {len(df)}\n\n"
+                    
+                    # Add sample data
+                    sheet_text += "Sample Data:\n"
+                    sheet_text += df.head(10).to_string(index=False)
+                    sheet_text += "\n\n"
+                    
+                    # Add summary statistics for numeric columns
+                    numeric_cols = df.select_dtypes(include=['number']).columns
+                    if len(numeric_cols) > 0:
+                        sheet_text += "Summary Statistics:\n"
+                        sheet_text += df[numeric_cols].describe().to_string()
+                        sheet_text += "\n\n"
+                    
+                    sheets_text.append(sheet_text)
+                
+                # Combine all sheets
+                text_content = f"FILE: {name}\n" + "\n".join(sheets_text)
+            
+            # Convert to bytes and change filename to .txt
+            content = text_content.encode('utf-8')
+            name = name.rsplit('.', 1)[0] + '_converted.txt'
+            print(f"Converted {path_lower} to text format for File Search compatibility")
+        
         bio = io.BytesIO(content)
         # Some SDKs require a .name on the file-like object
         try:
@@ -376,14 +418,25 @@ def upload_many_dropbox_files_to_openai(paths: List[str], *, purpose: str = "ass
 def create_vector_store_with_files(name: str, file_ids: List[str]) -> Optional[str]:
     """Create an OpenAI vector store and batch-add the given file IDs. Returns vector_store_id or None."""
     if not file_ids:
+        print("No file IDs provided to create_vector_store_with_files")
         return None
     try:
         client = _get_openai_client_safe()
+        print(f"Creating vector store '{name}' with {len(file_ids)} files: {file_ids}")
         vs = client.beta.vector_stores.create(name=name)
-        client.beta.vector_stores.files.batch_create(vector_store_id=vs.id, file_ids=file_ids)
+        print(f"Vector store created: {vs.id}")
+        
+        # Wait for vector store to be ready and add files
+        batch_result = client.beta.vector_stores.file_batches.create(
+            vector_store_id=vs.id, 
+            file_ids=file_ids
+        )
+        print(f"File batch created: {batch_result.id}")
         return vs.id
     except Exception as e:
         print(f"Vector store creation failed: {e}")
+        import traceback
+        print(f"Full traceback: {traceback.format_exc()}")
         return None
 
 def prepare_file_search_from_dropbox(paths: List[str], *, vs_name: Optional[str] = None) -> Dict[str, Any]:
@@ -391,10 +444,15 @@ def prepare_file_search_from_dropbox(paths: List[str], *, vs_name: Optional[str]
     Convenience: upload Dropbox files to OpenAI and create a vector store for file_search.
     Returns {"file_ids": [...], "vector_store_id": "..."}.
     """
+    print(f"prepare_file_search_from_dropbox called with {len(paths)} paths: {paths}")
     file_ids = upload_many_dropbox_files_to_openai(paths)
+    print(f"File upload result: {len(file_ids)} files uploaded: {file_ids}")
     vs_id = None
     if file_ids:
         vs_id = create_vector_store_with_files(vs_name or "Ethos_FileStore", file_ids)
+        print(f"Vector store creation result: {vs_id}")
+    else:
+        print("No files uploaded, skipping vector store creation")
     return {"file_ids": file_ids, "vector_store_id": vs_id}
 
 def attach_vector_store_to_assistant(assistant_id: str, vector_store_id: str) -> bool:

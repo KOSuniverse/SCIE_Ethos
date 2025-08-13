@@ -19,7 +19,7 @@ elif _DBX:
     PROJECT_ROOT = f"/{_DBX}"
     print(f"DEBUG constants.py: Using root only: {PROJECT_ROOT}")
 else:
-    PROJECT_ROOT = "/Apps/Ethos LLM/Project_Root"  # Default fallback matching Dropbox structure
+    PROJECT_ROOT = "/Project_Root"  # Default fallback matching Dropbox structure
     print(f"DEBUG constants.py: Using fallback: {PROJECT_ROOT}")
 
 # Canonical subfolders (matching Dropbox structure from screenshot)
