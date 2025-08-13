@@ -675,7 +675,11 @@ def _save_query_artifact(df: pd.DataFrame, artifact_folder: str, query_type: str
     # Always write to a local, writable folder first
     import os
     from pathlib import Path
-    local_dir = Path(os.getenv("LOCAL_WORK_ROOT", "/tmp/ethos/03_Summaries"))
+    import tempfile
+    
+    # Use Windows-compatible temp directory
+    default_work_dir = Path(tempfile.gettempdir()) / "ethos" / "03_Summaries"
+    local_dir = Path(os.getenv("LOCAL_WORK_ROOT", str(default_work_dir)))
     local_dir.mkdir(parents=True, exist_ok=True)
     
     # Enterprise naming convention
