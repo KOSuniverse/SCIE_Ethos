@@ -335,3 +335,72 @@ def append_jsonl_line(path_lower: str, record: dict) -> bool:
     except Exception as e:
         print(f"Failed to append JSONL line to {path_lower}: {e}")
         return False
+
+# ---------------- OpenAI Files / Vector Store sync (cloud-only) ----------------
+
+def _get_openai_client_safe():
+    """Lazy import OpenAI client via llm_client, with a clear error if missing."""
+    try:
+        from llm_client import get_openai_client  # type: ignore
+        return get_openai_client()
+    except Exception as e:
+        raise RuntimeError(f"OpenAI client not available: {e}")
+
+def upload_dropbox_file_to_openai(path_lower: str, *, purpose: str = "assistants", filename: Optional[str] = None) -> Optional[str]:
+    """Upload a Dropbox file to OpenAI Files without using local disk. Returns file_id or None."""
+    try:
+        content = read_file_bytes(path_lower)
+        name = filename or os.path.basename(path_lower) or "file.bin"
+        bio = io.BytesIO(content)
+        # Some SDKs require a .name on the file-like object
+        try:
+            setattr(bio, "name", name)
+        except Exception:
+            pass
+        client = _get_openai_client_safe()
+        file_obj = client.files.create(file=bio, purpose=purpose)
+        return getattr(file_obj, "id", None)
+    except Exception as e:
+        print(f"OpenAI file upload failed for {path_lower}: {e}")
+        return None
+
+def upload_many_dropbox_files_to_openai(paths: List[str], *, purpose: str = "assistants") -> List[str]:
+    """Upload many Dropbox files to OpenAI Files and return list of file IDs (skips failures)."""
+    ids: List[str] = []
+    for p in paths:
+        fid = upload_dropbox_file_to_openai(p, purpose=purpose)
+        if fid:
+            ids.append(fid)
+    return ids
+
+def create_vector_store_with_files(name: str, file_ids: List[str]) -> Optional[str]:
+    """Create an OpenAI vector store and batch-add the given file IDs. Returns vector_store_id or None."""
+    if not file_ids:
+        return None
+    try:
+        client = _get_openai_client_safe()
+        vs = client.beta.vector_stores.create(name=name)
+        client.beta.vector_stores.files.batch_create(vector_store_id=vs.id, file_ids=file_ids)
+        return vs.id
+    except Exception as e:
+        print(f"Vector store creation failed: {e}")
+        return None
+
+def prepare_file_search_from_dropbox(paths: List[str], *, vs_name: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Convenience: upload Dropbox files to OpenAI and create a vector store for file_search.
+    Returns {"file_ids": [...], "vector_store_id": "..."}.
+    """
+    file_ids = upload_many_dropbox_files_to_openai(paths)
+    vs_id = None
+    if file_ids:
+        vs_id = create_vector_store_with_files(vs_name or "Ethos_FileStore", file_ids)
+    return {"file_ids": file_ids, "vector_store_id": vs_id}
+
+def attach_vector_store_to_assistant(assistant_id: str, vector_store_id: str) -> bool:
+    """Attach vector store to an existing Assistant for file_search tool."""
+    try:
+        client = _get_openai_client_safe()
+        client.beta.assistants.update(
+            assistant_id=assistant_id,
+            tool_resources={"file_search": {"vector_store_ids": [vector_store_id]}}
