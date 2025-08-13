@@ -182,141 +182,48 @@ def answer_question_simple(user_question: str) -> str:
 
 
 # =============================================================================
-# COMBINED CONTEXT Orchestration (Original enterprise approach - keep both)
+# SIMPLIFIED WORKING APPROACH - Back to ChatGPT's Simple Solution
 # =============================================================================
 def answer_question(
     user_question: str,
     *,
     app_paths: Any,
     cleansed_paths: Optional[List[str]] = None,
-    answer_style: str = llm_prompts.ANSWER_STYLE_DETAILED,  # Enterprise: Default to detailed analysis
+    answer_style: str = "detailed",  # Simple default
 ) -> Dict[str, Any]:
     """
-    Enterprise path:
-      1) Auto-intent
-      2) Build global context (ALL cleansed files + sheets + columns; KB candidates)
-      3) Plan with GPT (NO guessing; must pick from provided lists)
-      4) Execute with guardrails (sheet/file validation, alias-aware args)
-      5) Compose final answer with both quantitative (Excel) + qualitative (KB) context
+    SIMPLIFIED APPROACH: Just use the working answer_question_simple logic
+    that was functioning properly with local temp storage.
     """
-    # 0) Intent + model routing
-    intent_info = classify_user_intent(user_question)
-    intent = intent_info["intent"]
-    model_size = intent_info.get("model_size", "large" if intent in {"root_cause", "forecast"} else "small")
-    model = "gpt-4o" if model_size == "large" else "gpt-4o-mini"
+    print(f"🎯 SIMPLE ORCHESTRATOR: Processing question: {user_question[:100]}...")
     
-    print(f"🧠 ORCHESTRATOR DEBUG: Intent={intent}, Model={model}, Confidence={intent_info.get('confidence')}")
+    try:
+        # Use the simple approach that was working
+        result_json = answer_question_simple(user_question)
+        result_dict = json.loads(result_json)
+        
+        # Format for main.py compatibility
+        formatted_result = {
+            "text": result_dict.get("text", result_dict.get("answer", "No answer generated")),
+            "calls": [{"tool": "simple_executor", "result": result_dict}],
+            "context": {"last_rows": []},
+            "artifacts": result_dict.get("artifacts", [])
+        }
+        
+        print(f"✅ SIMPLE ORCHESTRATOR: Successfully processed question")
+        return formatted_result
+        
+    except Exception as e:
+        print(f"❌ SIMPLE ORCHESTRATOR: Error processing question: {e}")
+        return {
+            "text": f"Sorry, I encountered an error: {str(e)}",
+            "calls": [],
+            "context": {"last_rows": []},
+            "artifacts": []
+        }
 
-    client = get_openai_client()
-
-    # 1) Assemble global context
-    excel_ctx = _build_excel_context(cleansed_paths)   # files -> sheets (+types) (+columns)
-    kb_ctx_preview = _kb_candidates(user_question)     # doc titles or brief refs
-    
-    print(f"📊 ORCHESTRATOR DEBUG: Excel files found: {len(excel_ctx.get('files', []))}")
-    print(f"📚 ORCHESTRATOR DEBUG: KB candidates: {len(kb_ctx_preview)}")
-
-    # 2) Propose a plan with hard guardrails
-    tools_catalog = _safe_tool_specs()
-    print(f"🔧 ORCHESTRATOR DEBUG: Available tools: {list(tools_catalog.keys())}")
-    
-    plan = _propose_tool_plan(
-        client=client,
-        question=user_question,
-        tools=tools_catalog,
-        excel_context=excel_ctx,
-        kb_candidates=kb_ctx_preview,
-        app_paths=app_paths,
-    )
-    
-    print(f"📋 ORCHESTRATOR DEBUG: Proposed plan has {len(plan)} steps")
-    for i, step in enumerate(plan):
-        print(f"   Step {i+1}: {step.get('tool', 'unknown')} - {step.get('purpose', 'no purpose')}")
-
-    # 3) Execute plan (guarded) - Enhanced with executor integration
-    if intent == "compare":
-        # For comparison intents, use the executor directly which has the enhanced comparison logic
-        print(f"🔄 ORCHESTRATOR DEBUG: Using executor for comparison intent")
-        try:
-            # Load dataframes from files for executor
-            df_dict = {}
-            files = excel_ctx.get("files", [])
-            if files:
-                from tools_runtime import _load_file_to_frames
-                try:
-                    frames = _load_file_to_frames(files[0])
-                    for sheet_name, df in frames.items():
-                        df_dict[f"{files[0]}#{sheet_name}"] = df
-                    print(f"🔄 ORCHESTRATOR DEBUG: Loaded {len(df_dict)} dataframes for comparison")
-                except Exception as e:
-                    print(f"🔄 ORCHESTRATOR DEBUG: Failed to load dataframes: {e}")
-            
-            # Call executor with comparison logic
-            exec_result_raw = run_intent_task(user_question, df_dict, {}, client)
-            
-            # Convert executor result to orchestrator format
-            exec_result = {
-                "calls": [{
-                    "tool": "executor_comparison",
-                    "args": {"query": user_question, "files": files},
-                    "result_meta": exec_result_raw.get("result", {}),
-                    "result": exec_result_raw
-                }],
-                "context": {"last_rows": []},
-                "artifacts": exec_result_raw.get("artifacts", [])
-            }
-            print(f"⚡ ORCHESTRATOR DEBUG: Executor comparison completed successfully")
-        except Exception as e:
-            print(f"⚡ ORCHESTRATOR DEBUG: Executor comparison failed: {e}")
-            # Fallback to regular plan execution
-            exec_result = _execute_plan(plan, app_paths)
-    else:
-        # For non-comparison intents, use regular plan execution
-        exec_result = _execute_plan(plan, app_paths)
-        print(f"⚡ ORCHESTRATOR DEBUG: Regular execution completed with {len(exec_result.get('calls', []))} results")
-
-    # Build quantitative context (compact)
-    quantitative_context, matched_artifacts = _summarize_exec(exec_result)
-    # Extract KB chunks for final answer
-    kb_text_ctx, kb_citations = _extract_kb(exec_result)
-
-    # 4) Compose final answer
-    messages = llm_prompts.build_scaffold_messages(
-        user_question=user_question,
-        intent=intent,
-        tools_catalog=tools_catalog,
-        quantitative_context=quantitative_context,
-        kb_context=kb_text_ctx,
-        matched_artifacts=matched_artifacts,
-        matched_docs=kb_citations,
-        answer_style=answer_style,
-        model_size=model_size,
-    )
-    final_text = chat_completion(client, messages, model=model)
-
-    return {
-        "final_text": final_text,
-        "intent_info": intent_info,
-        "tool_calls": exec_result["calls"],
-        "artifacts": matched_artifacts,
-        "kb_citations": kb_citations,
-        "debug": {
-            "orchestrator_flow": {
-                "intent_classification": intent_info,
-                "model_selected": model,
-                "tools_available": list(tools_catalog.keys()),
-                "plan_steps": len(plan),
-                "execution_results": len(exec_result["calls"]),
-                "excel_files_found": len(excel_ctx.get("files", [])),
-                "kb_candidates_found": len(kb_ctx_preview),
-            },
-            "plan_raw": plan,
-            "excel_context": excel_ctx,
-            "kb_candidates": kb_ctx_preview,
-            "quantitative_context": quantitative_context,
-            "execution_details": exec_result,
-        },
-    }
+# Keep the rest of the helper functions for compatibility
+# but main routing now uses simple approach
 
 
 # =============================================================================
