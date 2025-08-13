@@ -352,47 +352,6 @@ def upload_dropbox_file_to_openai(path_lower: str, *, purpose: str = "assistants
         content = read_file_bytes(path_lower)
         name = filename or os.path.basename(path_lower) or "file.bin"
         
-        # Convert Excel/CSV to text format for File Search compatibility
-        if name.lower().endswith(('.xlsx', '.xls', '.csv')):
-            import pandas as pd
-            import io
-            
-            # Read Excel/CSV into DataFrame
-            if name.lower().endswith('.csv'):
-                df = pd.read_csv(io.BytesIO(content))
-            else:
-                # For Excel, read all sheets
-                excel_file = pd.ExcelFile(io.BytesIO(content))
-                sheets_text = []
-                for sheet_name in excel_file.sheet_names:
-                    df = pd.read_excel(io.BytesIO(content), sheet_name=sheet_name)
-                    # Convert DataFrame to structured text
-                    sheet_text = f"\n--- SHEET: {sheet_name} ---\n"
-                    sheet_text += f"Columns: {', '.join(df.columns.tolist())}\n"
-                    sheet_text += f"Rows: {len(df)}\n\n"
-                    
-                    # Add sample data
-                    sheet_text += "Sample Data:\n"
-                    sheet_text += df.head(10).to_string(index=False)
-                    sheet_text += "\n\n"
-                    
-                    # Add summary statistics for numeric columns
-                    numeric_cols = df.select_dtypes(include=['number']).columns
-                    if len(numeric_cols) > 0:
-                        sheet_text += "Summary Statistics:\n"
-                        sheet_text += df[numeric_cols].describe().to_string()
-                        sheet_text += "\n\n"
-                    
-                    sheets_text.append(sheet_text)
-                
-                # Combine all sheets
-                text_content = f"FILE: {name}\n" + "\n".join(sheets_text)
-            
-            # Convert to bytes and change filename to .txt
-            content = text_content.encode('utf-8')
-            name = name.rsplit('.', 1)[0] + '_converted.txt'
-            print(f"Converted {path_lower} to text format for File Search compatibility")
-        
         bio = io.BytesIO(content)
         # Some SDKs require a .name on the file-like object
         try:
@@ -401,6 +360,7 @@ def upload_dropbox_file_to_openai(path_lower: str, *, purpose: str = "assistants
             pass
         client = _get_openai_client_safe()
         file_obj = client.files.create(file=bio, purpose=purpose)
+        print(f"Uploaded {name} to OpenAI with file_id: {getattr(file_obj, 'id', None)}")
         return getattr(file_obj, "id", None)
     except Exception as e:
         print(f"OpenAI file upload failed for {path_lower}: {e}")

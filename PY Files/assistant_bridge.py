@@ -109,27 +109,52 @@ def run_query_with_files(question: str, dropbox_paths: list[str]) -> dict:
 
     thread = client.beta.threads.create()
 
-    # If file sync helpers are available, attach a vector store at the thread level
-    debug_info = {"file_sync_attempted": False, "files_uploaded": [], "vector_store_created": False, "sync_error": None}
+    # Use Code Interpreter instead of File Search for Excel files
+    debug_info = {"file_sync_attempted": False, "files_uploaded": [], "code_interpreter_files": [], "sync_error": None}
     
     if _FILE_SYNC_AVAILABLE and dropbox_paths:
         debug_info["file_sync_attempted"] = True
         try:
-            fs = prepare_file_search_from_dropbox(dropbox_paths, vs_name="Ethos_FileStore")
-            debug_info["files_uploaded"] = fs.get("file_ids", [])
-            debug_info["vector_store_created"] = bool(fs.get("vector_store_id"))
-            if fs.get("vector_store_id"):
-                attach_result = attach_vector_store_to_thread(thread.id, fs["vector_store_id"])  # thread-scoped
-                debug_info["vector_store_attached"] = attach_result
+            # Upload files directly for Code Interpreter (not File Search)
+            from dbx_utils import upload_dropbox_file_to_openai
+            file_ids = []
+            for path in dropbox_paths:
+                file_id = upload_dropbox_file_to_openai(path, purpose="assistants")
+                if file_id:
+                    file_ids.append(file_id)
+            
+            debug_info["files_uploaded"] = file_ids
+            debug_info["code_interpreter_files"] = file_ids
+            
+            # Attach files to the thread for Code Interpreter
+            if file_ids:
+                client.beta.threads.update(
+                    thread_id=thread.id,
+                    tool_resources={"code_interpreter": {"file_ids": file_ids}}
+                )
+                debug_info["code_interpreter_attached"] = True
             else:
-                debug_info["sync_error"] = "No vector store created"
+                debug_info["sync_error"] = "No files uploaded successfully"
+                
         except Exception as e:
-            # Proceed without file search if sync fails
             debug_info["sync_error"] = str(e)
-            print(f"File-search sync skipped: {e}")
+            print(f"File upload failed: {e}")
 
-    # Post the question
-    client.beta.threads.messages.create(thread_id=thread.id, role="user", content=question)
+    # Enhanced prompt for Excel analysis
+    excel_prompt = f"""
+    {question}
+    
+    I have uploaded Excel files with supply chain/inventory data. Please analyze the data using Code Interpreter to:
+    1. Load and examine the Excel file structure
+    2. Identify WIP, inventory, and relevant financial columns
+    3. Perform the requested analysis with specific numbers
+    4. Show calculations and provide data-driven insights
+    
+    Use pandas to read the Excel file and provide precise numerical answers based on the actual data.
+    """
+
+    # Post the enhanced question
+    client.beta.threads.messages.create(thread_id=thread.id, role="user", content=excel_prompt)
 
     # Run with the configured Assistant (has code_interpreter + file_search enabled)
     run = client.beta.threads.runs.create(thread_id=thread.id, assistant_id=assistant_id)
