@@ -162,9 +162,8 @@ def dataframe_query(
         
         # Save artifact if requested - default to /04_Data/03_Summaries
         artifact_path = None
-        if artifact_folder or aggregation_plan:
-            save_folder = artifact_folder or f"{DATA_ROOT}/03_Summaries"
-            artifact_path = _save_query_artifact(df_result, save_folder, query_type, artifact_format)
+        if artifact_folder:  # Only save if explicit artifact_folder is provided
+            artifact_path = _save_query_artifact(df_result, artifact_folder, query_type, artifact_format)
         
         # Performance metrics
         query_end_time = pd.Timestamp.now()
