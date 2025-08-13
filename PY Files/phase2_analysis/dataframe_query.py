@@ -713,12 +713,23 @@ def _save_query_artifact(df: pd.DataFrame, artifact_folder: str, query_type: str
         
         # Create shareable link for enterprise users
         try:
-            from dbx_utils import create_shared_link
-            share_url = create_shared_link(dropbox_target)
-            if share_url:
-                print(f"DEBUG _save_query_artifact: Created shareable link: {share_url}")
-                # Return both path and URL for enterprise access
-                return f"{dropbox_target}|SHARE|{share_url}"
+            share_url = None
+            if upload_bytes:  # Only try if we have Dropbox functionality
+                try:
+                    # Import from parent directory
+                    import sys
+                    import os
+                    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+                    from dbx_utils import create_shared_link
+                    share_url = create_shared_link(dropbox_target)
+                    if share_url:
+                        print(f"DEBUG _save_query_artifact: Created shareable link: {share_url}")
+                        # Return both path and URL for enterprise access
+                        return f"{dropbox_target}|SHARE|{share_url}"
+                except ImportError as ie:
+                    print(f"DEBUG _save_query_artifact: Could not import create_shared_link: {ie}")
+                except Exception as e:
+                    print(f"DEBUG _save_query_artifact: Share link creation failed: {e}")
         except Exception as e:
             print(f"DEBUG _save_query_artifact: Could not create share link: {e}")
         
