@@ -1450,7 +1450,6 @@ with st.expander("Knowledge Base controls"):
 # =========================
 import datetime as _dt
 from orchestrator import answer_question
-from assistant_bridge import run_query_with_files, run_query
 from dbx_utils import list_data_files
 
 st.markdown("## 4) Ask questions about a Cleansed workbook")
@@ -1493,27 +1492,44 @@ else:
         if run_btn:
             with st.spinner("Thinking with GPT and running tools…"):
                 try:
-                    # Prefer Assistants API with File Search when paths are provided
-                    if cleansed_paths:
-                        ar = run_query_with_files(user_q, cleansed_paths)
+                    # Import assistant functions only when needed
+                    try:
+                        from assistant_bridge import run_query_with_files, run_query
+                        assistant_available = True
+                    except ImportError as e:
+                        st.warning(f"Assistant API not available: {e}")
+                        assistant_available = False
+                    
+                    if assistant_available:
+                        # Prefer Assistants API with File Search when paths are provided
+                        if cleansed_paths:
+                            ar = run_query_with_files(user_q, cleansed_paths)
+                        else:
+                            ar = run_query(user_q)
+
+                        # Normalize for existing UI
+                        answer = ar.get("answer") or ""
+                        confidence_obj = ar.get("confidence") or {}
+                        confidence_score = confidence_obj.get("score")
+
+                        result = {
+                            "final_text": answer,
+                            "intent_info": {"intent": "assistant", "confidence": confidence_score},
+                            "tool_calls": [],
+                            "artifacts": [],
+                            "kb_citations": [],
+                            "debug": {"thread_id": ar.get("thread_id")},
+                        }
                     else:
-                        ar = run_query(user_q)
-
-                    # Normalize for existing UI
-                    answer = ar.get("answer") or ""
-                    confidence_obj = ar.get("confidence") or {}
-                    confidence_score = confidence_obj.get("score")
-
-                    result = {
-                        "final_text": answer,
-                        "intent_info": {"intent": "assistant", "confidence": confidence_score},
-                        "tool_calls": [],
-                        "artifacts": [],
-                        "kb_citations": [],
-                        "debug": {"thread_id": ar.get("thread_id")},
-                    }
+                        # Fallback to orchestrator if Assistant not available
+                        result = answer_question(
+                            user_question=user_q,
+                            app_paths=app_paths,
+                            cleansed_paths=cleansed_paths,
+                            answer_style="concise",
+                        )
                 except Exception as e:
-                    st.error(f"Assistant error: {e}")
+                    st.error(f"Query processing error: {e}")
                     result = None
 
             if result:
