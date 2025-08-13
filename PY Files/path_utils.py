@@ -55,10 +55,20 @@ def join_root(*parts: str) -> str:
     Returns:
         str: Canonicalized full path
     """
-    root = _secret("DROPBOX_ROOT", "/Project_Root").strip("/")
+    # Import PROJECT_ROOT from constants to get the full namespace+root path
+    try:
+        from constants import PROJECT_ROOT
+        root = PROJECT_ROOT.strip("/")
+    except ImportError:
+        # Fallback to old behavior if constants not available
+        root = _secret("DROPBOX_ROOT", "/Project_Root").strip("/")
+    
     parts_clean = [s.strip("/") for s in parts if s]
     joined = "/" + "/".join([root] + parts_clean)
-    return canon_path(joined)
+    
+    # Don't call canon_path to avoid filesystem path conversion issues
+    # just return the joined path directly since PROJECT_ROOT is already correct
+    return joined
 
 @dataclass
 class ProjectPaths:
