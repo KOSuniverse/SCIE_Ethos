@@ -452,7 +452,8 @@ def _propose_tool_plan(
                 "groupby": None,
                 "metrics": None,
                 "limit": 50,
-                "artifact_folder": _artifact_folder("summaries", app_paths),
+                # Remove artifact_folder to prevent path issues - Q&A doesn't need to save artifacts by default
+                # "artifact_folder": _artifact_folder("summaries", app_paths),
             },
         }
     ]
