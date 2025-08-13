@@ -1518,7 +1518,7 @@ else:
                             "tool_calls": [],
                             "artifacts": [],
                             "kb_citations": [],
-                            "debug": {"thread_id": ar.get("thread_id")},
+                            "debug": {"thread_id": ar.get("thread_id"), "file_sync_debug": ar.get("debug_file_sync", {})},
                         }
                     else:
                         # Fallback to orchestrator if Assistant not available
