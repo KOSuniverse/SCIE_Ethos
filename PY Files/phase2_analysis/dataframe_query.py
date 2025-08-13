@@ -10,13 +10,18 @@ import re
 # Enhanced foundation imports
 try:
     from constants import DATA_ROOT
-    from path_utils import canon_path
+    # Don't import canon_path to avoid path conversion issues
+    # from path_utils import canon_path
     from logger import log_event
 except ImportError:
     # Fallback for standalone usage - use proper Dropbox path
     DATA_ROOT = "/Apps/Ethos LLM/Project_Root/04_Data"
-    def canon_path(p): return p  # Don't resolve filesystem paths for cloud storage
     def log_event(msg, path=None): print(f"LOG: {msg}")
+
+# Always use identity function for canon_path to avoid filesystem path conversion
+def canon_path(p): 
+    """Identity function - don't resolve filesystem paths for cloud storage."""
+    return p
 
 # AI integration for intelligent analytics
 try:
@@ -119,7 +124,8 @@ def dataframe_query(
     query_start_time = pd.Timestamp.now()
     
     try:
-        # Load data with enterprise error handling
+        # Load data with enterprise error handling  
+        print(f"DEBUG: About to load data from path: {paths[0]}")
         df, sheet_used = _enterprise_load_data(paths[0], sheet)
         log_event(f"Loaded data: {len(df)} rows from {sheet_used}")
         
@@ -275,8 +281,14 @@ def _execute_aggregation_plan(df: pd.DataFrame, plan: Dict[str, Any]) -> pd.Data
 def _enterprise_load_data(file_path: str, sheet: Optional[str] = None) -> tuple[pd.DataFrame, str]:
     """Load data with enterprise error handling and sheet intelligence."""
     print(f"DEBUG _enterprise_load_data: Loading file: {file_path}")
+    
+    # Use the path directly - it's already a correct Dropbox path from path_lower
+    # Don't apply canon_path since path_lower from Dropbox API is already canonical
+    actual_path = file_path
+    print(f"DEBUG _enterprise_load_data: Using path directly (no canonicalization): {actual_path}")
+    
     try:
-        frames = _load_file_to_frames(file_path)
+        frames = _load_file_to_frames(actual_path)
         
         if not frames:
             raise ValueError("No data found in file")
@@ -298,10 +310,10 @@ def _enterprise_load_data(file_path: str, sheet: Optional[str] = None) -> tuple[
         return selected_df.copy(), sheet_used
         
     except Exception as e:
-        print(f"DEBUG _enterprise_load_data: Error loading {file_path}: {e}")
+        print(f"DEBUG _enterprise_load_data: Error loading {actual_path}: {e}")
         import traceback
         traceback.print_exc()
-        raise ValueError(f"Failed to load data from {file_path}: {str(e)}")
+        raise ValueError(f"Failed to load data from {actual_path}: {str(e)}")
 
 def _select_best_sheet(frames: Dict[str, pd.DataFrame]) -> tuple[str, pd.DataFrame]:
     """Intelligent sheet selection using supply chain domain knowledge."""
@@ -587,8 +599,9 @@ def _save_query_artifact(df: pd.DataFrame, artifact_folder: str, query_type: str
                         artifact_format: str) -> str:
     """Save query results as artifact with enterprise naming."""
     
-    # Use canonical paths
-    artifact_folder = canon_path(artifact_folder)
+    # Use paths directly - no canonicalization needed for Dropbox paths
+    # artifact_folder should already be a proper Dropbox path
+    print(f"DEBUG _save_query_artifact: Using artifact folder: {artifact_folder}")
     
     # Enterprise naming convention
     timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
