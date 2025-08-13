@@ -274,6 +274,7 @@ def _execute_aggregation_plan(df: pd.DataFrame, plan: Dict[str, Any]) -> pd.Data
 
 def _enterprise_load_data(file_path: str, sheet: Optional[str] = None) -> tuple[pd.DataFrame, str]:
     """Load data with enterprise error handling and sheet intelligence."""
+    print(f"DEBUG _enterprise_load_data: Loading file: {file_path}")
     try:
         frames = _load_file_to_frames(file_path)
         
@@ -284,16 +285,22 @@ def _enterprise_load_data(file_path: str, sheet: Optional[str] = None) -> tuple[
         if sheet and sheet in frames:
             selected_df = frames[sheet]
             sheet_used = sheet
+            print(f"DEBUG _enterprise_load_data: Using specified sheet: {sheet}")
         else:
             # Supply chain domain intelligence for sheet selection
             sheet_used, selected_df = _select_best_sheet(frames)
+            print(f"DEBUG _enterprise_load_data: Auto-selected sheet: {sheet_used}")
         
         if selected_df.empty:
             raise ValueError("Selected sheet is empty")
             
+        print(f"DEBUG _enterprise_load_data: Successfully loaded {len(selected_df)} rows from {sheet_used}")
         return selected_df.copy(), sheet_used
         
     except Exception as e:
+        print(f"DEBUG _enterprise_load_data: Error loading {file_path}: {e}")
+        import traceback
+        traceback.print_exc()
         raise ValueError(f"Failed to load data from {file_path}: {str(e)}")
 
 def _select_best_sheet(frames: Dict[str, pd.DataFrame]) -> tuple[str, pd.DataFrame]:
