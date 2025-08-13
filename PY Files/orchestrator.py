@@ -498,8 +498,9 @@ def _execute_plan(plan: List[Dict[str, Any]], app_paths: Any) -> Dict[str, Any]:
 
             # Artifact folder by backend
             artifact_folder = args.get("artifact_folder")
-            if not artifact_folder:
-                artifact_folder = _artifact_folder("summaries", app_paths)
+            # Don't automatically add artifact_folder to prevent path issues
+            # if not artifact_folder:
+            #     artifact_folder = _artifact_folder("summaries", app_paths)
 
             # Safe defaults
             args_exec = {
@@ -509,8 +510,11 @@ def _execute_plan(plan: List[Dict[str, Any]], app_paths: Any) -> Dict[str, Any]:
                 "groupby": args.get("groupby"),
                 "metrics": args.get("metrics"),
                 "limit": int(args.get("limit", 50)),
-                "artifact_folder": artifact_folder,
             }
+            
+            # Only add artifact_folder if explicitly provided in the plan
+            if artifact_folder:
+                args_exec["artifact_folder"] = artifact_folder
 
             try:
                 res = dataframe_query(**args_exec)
