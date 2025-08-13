@@ -41,7 +41,7 @@ try:
     if py_files_dir not in sys.path:
         sys.path.insert(0, py_files_dir)
     
-    from dbx_utils import read_file_bytes, upload_bytes
+    from dbx_utils import read_file_bytes, upload_bytes, save_xlsx_bytes
     from tools_runtime import _load_file_to_frames, _apply_filters, _save_artifact
     TOOLS_AVAILABLE = True
 except ImportError as e:
@@ -668,58 +668,26 @@ def _calculate_domain_totals(df: pd.DataFrame, query_type: str) -> Dict[str, Any
 
 def _save_query_artifact(df: pd.DataFrame, artifact_folder: str, query_type: str, 
                         artifact_format: str) -> str:
-    """Save query results as artifact with enterprise naming."""
-    
-    print(f"DEBUG _save_query_artifact: Using artifact folder: {artifact_folder}")
-    
-    # Always write to a local, writable folder first
-    import os
-    from pathlib import Path
-    local_dir = Path(os.getenv("LOCAL_WORK_ROOT", "/tmp/ethos/03_Summaries"))
-    local_dir.mkdir(parents=True, exist_ok=True)
+    """Save query results as artifact directly to Dropbox (cloud-only)."""
     
     # Enterprise naming convention
     timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
     base_name = f"{query_type}_query_{timestamp}"
-    
-    # Write to local file first
-    if artifact_format.lower() == "excel":
-        local_file = local_dir / f"{base_name}.xlsx"
-        with pd.ExcelWriter(local_file, engine="xlsxwriter") as writer:
-            df.to_excel(writer, sheet_name="Analysis", index=False)
+    fmt = (artifact_format or "excel").lower()
+    ext = "xlsx" if fmt == "excel" else "csv"
+
+    # Build file bytes in-memory
+    if fmt == "excel":
+        # Use existing helper to build a proper workbook
+        data_bytes = save_xlsx_bytes({"Analysis": df})
     else:
-        local_file = local_dir / f"{base_name}.csv"
-        df.to_csv(local_file, index=False)
-    
-    artifact_path = str(local_file)
-    print(f"DEBUG _save_query_artifact: Saved locally to: {artifact_path}")
-    
-    # Optionally mirror to Dropbox if token is configured
-    try:
-        wants_dropbox = (artifact_folder.startswith("/Project_Root") or artifact_folder.startswith("/Apps"))
-        print(f"DEBUG _save_query_artifact: Wants Dropbox upload: {wants_dropbox}")
-        
-        if wants_dropbox and upload_bytes:
-            # Upload to Dropbox
-            dropbox_target = f"{artifact_folder.rstrip('/')}/{base_name}.{artifact_format}"
-            with open(local_file, "rb") as f:
-                file_bytes = f.read()
-            
-            upload_bytes(dropbox_target, file_bytes)
-            artifact_path = dropbox_target
-            log_event(f"Saved query artifact to Dropbox: {artifact_path}")
-            print(f"DEBUG _save_query_artifact: Uploaded to Dropbox: {artifact_path}")
-        else:
-            log_event(f"Saved query artifact locally: {artifact_path}")
-            print(f"DEBUG _save_query_artifact: Keeping local path: {artifact_path}")
-            
-    except Exception as e:
-        # Don't fail the query—just keep the local path and surface the warning
-        log_event(f"Dropbox mirror failed, using local path: {e}")
-        print(f"DEBUG _save_query_artifact: Dropbox upload failed: {e}")
-        artifact_path = str(local_file)
-        
-    return artifact_path
+        data_bytes = df.to_csv(index=False).encode("utf-8")
+
+    # Upload to Dropbox
+    dropbox_target = f"{artifact_folder.rstrip('/')}/{base_name}.{ext}"
+    upload_bytes(dropbox_target, data_bytes)
+    log_event(f"Saved query artifact to Dropbox: {dropbox_target}")
+    return dropbox_target
 
 # ================== CONVENIENCE FUNCTIONS ==================
 
