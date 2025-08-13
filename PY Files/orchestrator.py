@@ -233,9 +233,47 @@ def answer_question(
     for i, step in enumerate(plan):
         print(f"   Step {i+1}: {step.get('tool', 'unknown')} - {step.get('purpose', 'no purpose')}")
 
-    # 3) Execute plan (guarded)
-    exec_result = _execute_plan(plan, app_paths)
-    print(f"⚡ ORCHESTRATOR DEBUG: Execution completed with {len(exec_result)} results")
+    # 3) Execute plan (guarded) - Enhanced with executor integration
+    if intent == "compare":
+        # For comparison intents, use the executor directly which has the enhanced comparison logic
+        print(f"🔄 ORCHESTRATOR DEBUG: Using executor for comparison intent")
+        try:
+            # Load dataframes from files for executor
+            df_dict = {}
+            files = excel_ctx.get("files", [])
+            if files:
+                from tools_runtime import _load_file_to_frames
+                try:
+                    frames = _load_file_to_frames(files[0])
+                    for sheet_name, df in frames.items():
+                        df_dict[f"{files[0]}#{sheet_name}"] = df
+                    print(f"🔄 ORCHESTRATOR DEBUG: Loaded {len(df_dict)} dataframes for comparison")
+                except Exception as e:
+                    print(f"🔄 ORCHESTRATOR DEBUG: Failed to load dataframes: {e}")
+            
+            # Call executor with comparison logic
+            exec_result_raw = run_intent_task(user_question, df_dict, {}, client)
+            
+            # Convert executor result to orchestrator format
+            exec_result = {
+                "calls": [{
+                    "tool": "executor_comparison",
+                    "args": {"query": user_question, "files": files},
+                    "result_meta": exec_result_raw.get("result", {}),
+                    "result": exec_result_raw
+                }],
+                "context": {"last_rows": []},
+                "artifacts": exec_result_raw.get("artifacts", [])
+            }
+            print(f"⚡ ORCHESTRATOR DEBUG: Executor comparison completed successfully")
+        except Exception as e:
+            print(f"⚡ ORCHESTRATOR DEBUG: Executor comparison failed: {e}")
+            # Fallback to regular plan execution
+            exec_result = _execute_plan(plan, app_paths)
+    else:
+        # For non-comparison intents, use regular plan execution
+        exec_result = _execute_plan(plan, app_paths)
+        print(f"⚡ ORCHESTRATOR DEBUG: Regular execution completed with {len(exec_result.get('calls', []))} results")
 
     # Build quantitative context (compact)
     quantitative_context, matched_artifacts = _summarize_exec(exec_result)
