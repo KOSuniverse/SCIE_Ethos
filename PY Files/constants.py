@@ -5,17 +5,22 @@ try:
     import streamlit as st
     _DBX = st.secrets.get("DROPBOX_ROOT", os.getenv("DROPBOX_ROOT", "")).strip("/")
     _NS = st.secrets.get("DROPBOX_NAMESPACE", os.getenv("DROPBOX_NAMESPACE", "")).strip("/")
-except Exception:
+    print(f"DEBUG constants.py: DROPBOX_ROOT='{_DBX}', DROPBOX_NAMESPACE='{_NS}'")
+except Exception as e:
+    print(f"DEBUG constants.py: Streamlit import failed: {e}")
     _DBX = os.getenv("DROPBOX_ROOT", "").strip("/")
     _NS = os.getenv("DROPBOX_NAMESPACE", "").strip("/")
 
 # Construct full Dropbox path from namespace and root
 if _DBX and _NS:
     PROJECT_ROOT = f"/{_NS}/{_DBX}"
+    print(f"DEBUG constants.py: Using namespace+root: {PROJECT_ROOT}")
 elif _DBX:
     PROJECT_ROOT = f"/{_DBX}"
+    print(f"DEBUG constants.py: Using root only: {PROJECT_ROOT}")
 else:
     PROJECT_ROOT = "/Apps/Ethos LLM/Project_Root"  # Default fallback matching Dropbox structure
+    print(f"DEBUG constants.py: Using fallback: {PROJECT_ROOT}")
 
 # Canonical subfolders (matching Dropbox structure from screenshot)
 DATA_ROOT = f"{PROJECT_ROOT}/04_Data"                    # type: str

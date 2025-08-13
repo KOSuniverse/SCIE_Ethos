@@ -42,15 +42,22 @@ def _csv_bytes_to_frame(csv_bytes: bytes, filename: str) -> Dict[str, pd.DataFra
 
 def _load_file_to_frames(file_path: str) -> Dict[str, pd.DataFrame]:
     """Load either Excel or CSV file from Dropbox into DataFrame(s)."""
-    file_bytes = read_file_bytes(file_path)
-    filename = file_path.split('/')[-1]
+    print(f"DEBUG _load_file_to_frames: Attempting to load: {file_path}")
     
-    if filename.lower().endswith(('.xlsx', '.xls')):
-        return _excel_bytes_to_frames(file_bytes)
-    elif filename.lower().endswith('.csv'):
-        return _csv_bytes_to_frame(file_bytes, filename)
-    else:
-        raise ValueError(f"Unsupported file type: {filename}")
+    try:
+        file_bytes = read_file_bytes(file_path)
+        print(f"DEBUG _load_file_to_frames: Successfully read {len(file_bytes)} bytes")
+        filename = file_path.split('/')[-1]
+        
+        if filename.lower().endswith(('.xlsx', '.xls')):
+            return _excel_bytes_to_frames(file_bytes)
+        elif filename.lower().endswith('.csv'):
+            return _csv_bytes_to_frame(file_bytes, filename)
+        else:
+            raise ValueError(f"Unsupported file type: {filename}")
+    except Exception as e:
+        print(f"DEBUG _load_file_to_frames: Error loading {file_path}: {e}")
+        raise
 
 def _excel_bytes_to_frames_legacy(xlsx_bytes: bytes) -> Dict[str, pd.DataFrame]:
     """Legacy function name for backwards compatibility."""

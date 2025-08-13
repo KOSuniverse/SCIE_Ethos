@@ -91,9 +91,15 @@ def list_data_files(folder_path: str) -> List[Dict]:
 
 def read_file_bytes(path_lower: str) -> bytes:
     """Read a file from Dropbox into memory."""
-    dbx = _get_dbx_client()
-    md, res = dbx.files_download(path_lower)
-    return res.content
+    print(f"DEBUG read_file_bytes: Attempting to read from Dropbox: {path_lower}")
+    try:
+        dbx = _get_dbx_client()
+        md, res = dbx.files_download(path_lower)
+        print(f"DEBUG read_file_bytes: Successfully downloaded {len(res.content)} bytes")
+        return res.content
+    except Exception as e:
+        print(f"DEBUG read_file_bytes: Error downloading {path_lower}: {e}")
+        raise
 
 def upload_bytes(path_lower: str, data: bytes, mode: str = "overwrite"):
     """Upload arbitrary bytes to Dropbox at path_lower."""

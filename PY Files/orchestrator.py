@@ -13,7 +13,13 @@ from constants import PROJECT_ROOT, DATA_ROOT, EDA_CHART, COMPARES
 from path_utils import join_root, canon_path
 
 # ChatGPT's simplified approach with enterprise foundations
-from executor import run_intent_task
+try:
+    from executor import run_intent_task
+except ImportError as e:
+    print(f"Warning: Could not import executor: {e}")
+    def run_intent_task(*args, **kwargs):
+        return {"error": "Executor not available", "text": "Executor module could not be imported"}
+
 from file_utils import list_cleaned_files
 from loader import load_excel_file
 
@@ -32,7 +38,8 @@ except Exception:
 try:
     from assistant_bridge import run_query as assistants_answer
     from intent import classify_intent
-    from executor import run_intent_task
+    # executor already imported above with error handling
+except Exception:
     from file_utils import list_cleaned_files
     from loader import load_excel_file
 except Exception as e:
