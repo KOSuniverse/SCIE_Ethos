@@ -404,3 +404,21 @@ def attach_vector_store_to_assistant(assistant_id: str, vector_store_id: str) ->
         client.beta.assistants.update(
             assistant_id=assistant_id,
             tool_resources={"file_search": {"vector_store_ids": [vector_store_id]}}
+        )
+        return True
+    except Exception as e:
+        print(f"Assistant vector store attach failed: {e}")
+        return False
+
+def attach_vector_store_to_thread(thread_id: str, vector_store_id: str) -> bool:
+    """Attach vector store to a thread for file_search in that conversation."""
+    try:
+        client = _get_openai_client_safe()
+        client.beta.threads.update(
+            thread_id=thread_id,
+            tool_resources={"file_search": {"vector_store_ids": [vector_store_id]}}
+        )
+        return True
+    except Exception as e:
+        print(f"Thread vector store attach failed: {e}")
+        return False
