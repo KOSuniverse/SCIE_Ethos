@@ -126,44 +126,85 @@ def dataframe_query(
     try:
         # Load data with enterprise error handling  
         print(f"DEBUG: About to load data from path: {paths[0]}")
-        df, sheet_used = _enterprise_load_data(paths[0], sheet)
+        try:
+            df, sheet_used = _enterprise_load_data(paths[0], sheet)
+            print(f"DEBUG: Successfully loaded data: {len(df)} rows from {sheet_used}")
+        except Exception as e:
+            print(f"DEBUG: _enterprise_load_data failed: {e}")
+            raise e
+        
         log_event(f"Loaded data: {len(df)} rows from {sheet_used}")
         
         # Execute aggregation plan if provided (NEW from ChatGPT plan)
         if aggregation_plan:
-            df_result = _execute_aggregation_plan(df, aggregation_plan)
-            log_event(f"Executed aggregation plan: {aggregation_plan.get('op', 'unknown')} operation")
+            print(f"DEBUG: Executing aggregation plan: {aggregation_plan}")
+            try:
+                df_result = _execute_aggregation_plan(df, aggregation_plan)
+                log_event(f"Executed aggregation plan: {aggregation_plan.get('op', 'unknown')} operation")
+                print(f"DEBUG: Aggregation plan executed successfully, result shape: {df_result.shape}")
+            except Exception as e:
+                print(f"DEBUG: Aggregation plan failed: {e}")
+                raise e
         else:
             # Apply filters with validation
             if filters:
-                df_filtered = _apply_filters(df, filters)
-                log_event(f"Applied {len(filters)} filters: {len(df_filtered)} rows remaining")
+                print(f"DEBUG: Applying {len(filters)} filters")
+                try:
+                    df_filtered = _apply_filters(df, filters)
+                    log_event(f"Applied {len(filters)} filters: {len(df_filtered)} rows remaining")
+                    print(f"DEBUG: Filters applied successfully")
+                except Exception as e:
+                    print(f"DEBUG: Filter application failed: {e}")
+                    raise e
             else:
                 df_filtered = df
             
             # Execute groupby and metrics with domain intelligence
-            df_result = _execute_aggregations(df_filtered, groupby, metrics, query_type)
+            print(f"DEBUG: Executing aggregations with groupby={groupby}, metrics={metrics}")
+            try:
+                df_result = _execute_aggregations(df_filtered, groupby, metrics, query_type)
+                print(f"DEBUG: Aggregations executed successfully, result shape: {df_result.shape}")
+            except Exception as e:
+                print(f"DEBUG: Aggregations failed: {e}")
+                raise e
         
         # AI-enhanced query optimization
         ai_insights = {}
         if ai_enhance and get_openai_client:
+            print(f"DEBUG: Starting AI analysis")
             try:
                 ai_insights = _ai_analyze_query(df_result, query_type, filters, groupby, metrics)
                 log_event(f"AI analysis completed: {len(ai_insights.get('recommendations', []))} recommendations")
+                print(f"DEBUG: AI analysis completed successfully")
             except Exception as e:
                 log_event(f"AI analysis failed: {e}")
                 ai_insights = {"status": "unavailable", "reason": str(e)}
+                print(f"DEBUG: AI analysis failed: {e}")
         
         # Calculate domain-specific totals
-        domain_totals = _calculate_domain_totals(df_result, query_type)
+        print(f"DEBUG: Calculating domain totals for query_type={query_type}")
+        try:
+            domain_totals = _calculate_domain_totals(df_result, query_type)
+            print(f"DEBUG: Domain totals calculated: {domain_totals}")
+        except Exception as e:
+            print(f"DEBUG: Domain totals calculation failed: {e}")
+            domain_totals = {}
         
         # Apply limit for preview
+        print(f"DEBUG: Applying limit {limit} for preview")
         df_preview = df_result.head(limit)
         
         # Save artifact if requested - default to /04_Data/03_Summaries
         artifact_path = None
         if artifact_folder:  # Only save if explicit artifact_folder is provided
-            artifact_path = _save_query_artifact(df_result, artifact_folder, query_type, artifact_format)
+            print(f"DEBUG: Saving artifact to {artifact_folder}")
+            try:
+                artifact_path = _save_query_artifact(df_result, artifact_folder, query_type, artifact_format)
+                print(f"DEBUG: Artifact saved successfully to {artifact_path}")
+            except Exception as e:
+                print(f"DEBUG: Artifact saving failed: {e}")
+                # Don't fail the whole query if artifact saving fails
+                artifact_path = None
         
         # Performance metrics
         query_end_time = pd.Timestamp.now()
@@ -173,26 +214,41 @@ def dataframe_query(
             "rows_returned": len(df_result),
             "memory_usage_mb": round(df_result.memory_usage(deep=True).sum() / 1024 / 1024, 2)
         }
+        print(f"DEBUG: Performance metrics calculated: {performance}")
         
         # Build enterprise response
-        response = {
-            "rowcount": int(len(df_result)),
-            "sheet_used": sheet_used,
-            "columns": list(map(str, df_preview.columns)),
-            "preview": json.loads(df_preview.to_json(orient="records")),
-            "query_performance": performance
-        }
+        print(f"DEBUG: Building enterprise response")
+        try:
+            response = {
+                "rowcount": int(len(df_result)),
+                "sheet_used": sheet_used,
+                "columns": list(map(str, df_preview.columns)),
+                "preview": json.loads(df_preview.to_json(orient="records")),
+                "query_performance": performance
+            }
+            print(f"DEBUG: Base response built successfully")
+        except Exception as e:
+            print(f"DEBUG: Response building failed: {e}")
+            raise e
         
         # Add domain-specific fields
-        response.update(domain_totals)
-        
+        print(f"DEBUG: Adding domain-specific fields")
+        try:
+            response.update(domain_totals)
+            print(f"DEBUG: Domain totals added to response")
+        except Exception as e:
+            print(f"DEBUG: Failed to add domain totals: {e}")
+            
         if artifact_path:
             response["artifact_path"] = artifact_path
+            print(f"DEBUG: Artifact path added to response")
             
         if ai_insights.get("status") != "unavailable":
             response["ai_insights"] = ai_insights
+            print(f"DEBUG: AI insights added to response")
             
         log_event(f"Query completed: {response['rowcount']} rows, {performance['execution_time_ms']}ms")
+        print(f"DEBUG: Query completed successfully, returning response")
         return response
         
     except Exception as e:
