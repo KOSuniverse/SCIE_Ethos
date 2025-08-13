@@ -19,7 +19,7 @@ from constants import PROJECT_ROOT, META_DIR, DATA_ROOT, CLEANSED
 from session import SessionState
 from logger import log_event, log_query_result
 from orchestrator import answer_question
-from assistant_bridge import auto_model, run_query
+from assistant_bridge import auto_model, run_query, run_query_with_files
 from confidence import score_ravc, should_abstain
 from path_utils import get_project_paths
 from dbx_utils import list_data_files
@@ -303,7 +303,7 @@ if user_question:
             selected_paths = []
             if st.session_state.selected_files:
                 file_map = {}
-                for file in available_files:
+                for file in load_available_files():
                     display_name = f"{file['name']} ({file.get('file_type', 'excel')})"
                     if file.get('server_modified'):
                         display_name += f" — {file['server_modified'].strftime('%m/%d %H:%M')}"
@@ -311,37 +311,27 @@ if user_question:
                 
                 selected_paths = [file_map[display] for display in st.session_state.selected_files if display in file_map]
             
-            # Call orchestrator
-            result = answer_question(
-                user_question=user_question,
-                app_paths=app_paths,
-                cleansed_paths=selected_paths if selected_paths else None,
-                answer_style="concise"
-            )
+            # Prefer Assistants API with File Search when files are selected
+            if selected_paths:
+                ar = run_query_with_files(user_question, selected_paths)
+            else:
+                ar = run_query(user_question)
             
-            # Extract answer
-            answer = result.get("final_text", "")
+            # Normalize result for UI/logging
+            answer = ar.get("answer") or ""
+            confidence_obj = ar.get("confidence") or {}
+            confidence_score = confidence_obj.get("score")
+            if confidence_score is None:
+                confidence_score = score_ravc(recency=0.8, alignment=0.9, variance=0.2, coverage=0.8)["score"]
             
-            if not answer:
-                # Fallback answer extraction
-                answer = (
-                    result.get("result", {}).get("answer") or
-                    result.get("result", {}).get("plan") or
-                    result.get("result", {}).get("analysis") or
-                    f"_{result.get('intent_info', {}).get('intent', 'task')}_ completed."
-                )
-            
-            # Calculate confidence
-            confidence_score = score_ravc(
-                recency=0.8, 
-                alignment=0.9, 
-                variance=0.2, 
-                coverage=0.8
-            )["score"]
-            
-            # Check for abstention
-            if should_abstain(confidence_score, threshold=0.6):
-                answer = f"⚠️ **Low Confidence Warning**\n\n{answer}\n\n_Please consider refining your question or providing more context._"
+            result = {
+                "final_text": answer,
+                "intent_info": {"intent": "assistant"},
+                "tool_calls": [],
+                "artifacts": [],
+                "kb_citations": [],
+                "debug": {"thread_id": ar.get("thread_id")},
+            }
             
             # Update thinking indicator with final answer
             thinking_placeholder.markdown(answer)
