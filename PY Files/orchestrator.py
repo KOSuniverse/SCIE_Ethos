@@ -622,20 +622,49 @@ def _summarize_exec(exec_result: Dict[str, Any]) -> Tuple[str, List[str]]:
             if meta.get("artifact_path"):
                 artifact_path = meta.get("artifact_path", "")
                 
-                # Check if path includes shareable link
-                if "|SHARE|" in artifact_path:
-                    path_part, share_part = artifact_path.split("|SHARE|", 1)
-                    filename = path_part.split("/")[-1] if "/" in path_part else path_part
-                    lines.append(f"• Full results saved to: {filename}")
-                    lines.append(f"• 📎 **Direct Download Link**: {share_part}")
-                    lines.append(f"• Cloud location: {path_part}")
-                else:
-                    # Fallback for paths without share links
-                    filename = artifact_path.split("/")[-1] if "/" in artifact_path else artifact_path
-                    lines.append(f"• Full results saved to: {filename}")
-                    lines.append(f"• Cloud location: {artifact_path}")
-                    if artifact_path.startswith("/"):
-                        lines.append("• Access via Dropbox: /Apps/Ethos LLM folder")
+                # Import download formatting utilities
+                try:
+                    import sys
+                    import os
+                    sys.path.insert(0, os.path.dirname(__file__))
+                    from file_download import format_download_message
+                    
+                    # Check if path includes shareable link
+                    if "|SHARE|" in artifact_path:
+                        path_part, share_part = artifact_path.split("|SHARE|", 1)
+                        filename = path_part.split("/")[-1] if "/" in path_part else path_part
+                        
+                        # Test if the share link is actually working
+                        if share_part.startswith("http") and "dropbox" in share_part.lower():
+                            lines.append(f"• 📊 **Analysis Complete**: {filename}")
+                            lines.append(f"• 📎 **Download Link**: [Click Here]({share_part})")
+                            lines.append(f"• ☁️ **Cloud Path**: {path_part}")
+                        else:
+                            # Share link appears broken, use manual instructions
+                            lines.append(f"• 📊 **Analysis Complete**: {filename}")
+                            lines.append(f"• ☁️ **Saved to Cloud**: {path_part}")
+                            lines.append("• 📥 **To Download**: Dropbox App → Apps → Ethos LLM → navigate to file")
+                            lines.append("• 🔗 **Alternative**: Contact admin for direct sharing")
+                    else:
+                        # Use the enhanced download message formatting
+                        download_msg = format_download_message(artifact_path)
+                        lines.extend(download_msg.split('\n'))
+                        
+                except ImportError:
+                    # Fallback to basic formatting if import fails
+                    if "|SHARE|" in artifact_path:
+                        path_part, share_part = artifact_path.split("|SHARE|", 1)
+                        filename = path_part.split("/")[-1] if "/" in path_part else path_part
+                        lines.append(f"• Full results saved to: {filename}")
+                        lines.append(f"• 📎 **Direct Download Link**: [Click to Download]({share_part})")
+                        lines.append(f"• Cloud location: {path_part}")
+                    else:
+                        filename = artifact_path.split("/")[-1] if "/" in artifact_path else artifact_path
+                        lines.append(f"• Full results saved to: {filename}")
+                        lines.append(f"• Cloud location: {artifact_path}")
+                        if artifact_path.startswith("/"):
+                            lines.append("• **To access**: Open Dropbox → Apps → Ethos LLM → navigate to file location")
+                            lines.append("• **Alternative**: Contact admin for direct file sharing")
                 
         elif c["tool"] == "chart":
             meta = c.get("result_meta", {})

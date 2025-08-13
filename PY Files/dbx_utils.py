@@ -348,27 +348,50 @@ def create_shared_link(path_lower: str) -> Optional[str]:
         str: Shareable URL or None if failed
     """
     try:
+        import dropbox
         dbx = _get_dbx_client()
         if not dbx:
+            print("DEBUG create_shared_link: No Dropbox client available")
             return None
             
-        # Try to create a shared link
+        print(f"DEBUG create_shared_link: Attempting to create share link for: {path_lower}")
+        
+        # Try to create a shared link with settings
         try:
-            shared_link_metadata = dbx.sharing_create_shared_link_with_settings(path_lower)
-            return shared_link_metadata.url
-        except Exception as e:
+            from dropbox.sharing import SharedLinkSettings, RequestedVisibility
+            settings = SharedLinkSettings(
+                requested_visibility=RequestedVisibility.public,
+                allow_download=True
+            )
+            shared_link_metadata = dbx.sharing_create_shared_link_with_settings(path_lower, settings)
+            share_url = shared_link_metadata.url
+            print(f"DEBUG create_shared_link: Successfully created new link: {share_url}")
+            return share_url
+        except dropbox.exceptions.ApiError as e:
+            print(f"DEBUG create_shared_link: API error creating link: {e}")
             # If link already exists, try to get existing link
-            try:
-                shared_links = dbx.sharing_list_shared_links(path=path_lower, direct_only=True)
-                if shared_links.links:
-                    return shared_links.links[0].url
-            except Exception:
-                pass
+            if "shared_link_already_exists" in str(e):
+                try:
+                    shared_links = dbx.sharing_list_shared_links(path=path_lower, direct_only=True)
+                    if shared_links.links:
+                        existing_url = shared_links.links[0].url
+                        print(f"DEBUG create_shared_link: Found existing link: {existing_url}")
+                        return existing_url
+                except Exception as list_error:
+                    print(f"DEBUG create_shared_link: Error listing existing links: {list_error}")
             
-            print(f"Could not create shared link for {path_lower}: {e}")
+            # Try alternative approach with simple link creation
+            try:
+                shared_link_metadata = dbx.sharing_create_shared_link(path_lower)
+                simple_url = shared_link_metadata.url
+                print(f"DEBUG create_shared_link: Created simple link: {simple_url}")
+                return simple_url
+            except Exception as simple_error:
+                print(f"DEBUG create_shared_link: Simple link creation failed: {simple_error}")
+            
             return None
             
     except Exception as e:
-        print(f"Failed to create shared link for {path_lower}: {e}")
+        print(f"DEBUG create_shared_link: General error for {path_lower}: {e}")
         return None
 
