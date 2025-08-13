@@ -337,10 +337,21 @@ def _enterprise_load_data(file_path: str, sheet: Optional[str] = None) -> tuple[
     """Load data with enterprise error handling and sheet intelligence."""
     print(f"DEBUG _enterprise_load_data: Loading file: {file_path}")
     
-    # Use the path directly - it's already a correct Dropbox path from path_lower
-    # Don't apply canon_path since path_lower from Dropbox API is already canonical
-    actual_path = file_path
-    print(f"DEBUG _enterprise_load_data: Using path directly (no canonicalization): {actual_path}")
+    # Normalize the path - but only if it's not already a full Dropbox path
+    if file_path.startswith("/Apps"):
+        # Already a full Dropbox path, use as-is
+        actual_path = file_path
+        print(f"DEBUG _enterprise_load_data: Using full Dropbox path as-is: {actual_path}")
+    else:
+        # Try to import canon_path for path normalization
+        try:
+            from path_utils import canon_path as real_canon_path
+            actual_path = real_canon_path(file_path)
+            print(f"DEBUG _enterprise_load_data: Normalized path: {file_path} -> {actual_path}")
+        except ImportError:
+            # Fallback: use the file_path as-is
+            actual_path = file_path
+            print(f"DEBUG _enterprise_load_data: Using path as-is (no canon_path): {actual_path}")
     
     try:
         frames = _load_file_to_frames(actual_path)
@@ -658,17 +669,50 @@ def _save_query_artifact(df: pd.DataFrame, artifact_folder: str, query_type: str
     # artifact_folder should already be a proper Dropbox path
     print(f"DEBUG _save_query_artifact: Using artifact folder: {artifact_folder}")
     
+    # Check if this is a Dropbox path (starts with /Apps or /Project_Root)
+    is_dropbox_path = artifact_folder.startswith(("/Apps", "/Project_Root"))
+    print(f"DEBUG _save_query_artifact: Is Dropbox path: {is_dropbox_path}")
+    
     # Enterprise naming convention
     timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
     base_name = f"{query_type}_query_{timestamp}"
     
-    try:
-        artifact_path = _save_artifact(df, artifact_folder, base_name, artifact_format)
-        log_event(f"Saved query artifact: {artifact_path}")
-        return artifact_path
-    except Exception as e:
-        log_event(f"Failed to save artifact: {e}")
-        return f"{artifact_folder}/{base_name}.{artifact_format}"
+    if is_dropbox_path:
+        # For Dropbox paths, use the existing _save_artifact which handles upload_bytes
+        print(f"DEBUG _save_query_artifact: Using Dropbox upload via _save_artifact")
+        try:
+            artifact_path = _save_artifact(df, artifact_folder, base_name, artifact_format)
+            log_event(f"Saved query artifact to Dropbox: {artifact_path}")
+            return artifact_path
+        except Exception as e:
+            log_event(f"Failed to save artifact to Dropbox: {e}")
+            print(f"DEBUG _save_query_artifact: Dropbox upload failed: {e}")
+            # Return a placeholder path rather than failing
+            return f"{artifact_folder}/{base_name}.{artifact_format}"
+    else:
+        # For local paths, use filesystem operations
+        print(f"DEBUG _save_query_artifact: Using local filesystem")
+        try:
+            import os
+            from pathlib import Path
+            
+            # Ensure local directory exists
+            Path(artifact_folder).mkdir(parents=True, exist_ok=True)
+            
+            if artifact_format.lower() == "excel":
+                file_path = Path(artifact_folder) / f"{base_name}.xlsx"
+                with pd.ExcelWriter(file_path, engine="xlsxwriter") as writer:
+                    df.to_excel(writer, sheet_name="Analysis", index=False)
+            else:
+                file_path = Path(artifact_folder) / f"{base_name}.csv"
+                df.to_csv(file_path, index=False)
+            
+            log_event(f"Saved query artifact locally: {file_path}")
+            return str(file_path)
+        except Exception as e:
+            log_event(f"Failed to save local artifact: {e}")
+            print(f"DEBUG _save_query_artifact: Local save failed: {e}")
+            return f"{artifact_folder}/{base_name}.{artifact_format}"
 
 # ================== CONVENIENCE FUNCTIONS ==================
 
