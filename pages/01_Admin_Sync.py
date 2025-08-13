@@ -106,9 +106,11 @@ with left:
                 a_id = resolve_assistant_id(); st.success(f"Assistant OK: {a_id}")
                 if override_root: os.environ["DROPBOX_ROOT"] = override_root
                 dbx = init_dropbox()
-                root_env = os.getenv("DROPBOX_ROOT", st.secrets.get("DROPBOX_ROOT", ""))
-                st.success(f"Dropbox OK. Root: {root_env or '(account root)'}")
-                res = dbx.files_list_folder(root_env or "", recursive=False)
+                # Use the corrected PROJECT_ROOT from constants instead of raw env var
+                from constants import PROJECT_ROOT
+                root_to_test = PROJECT_ROOT
+                st.success(f"Dropbox OK. Root: {root_to_test}")
+                res = dbx.files_list_folder(root_to_test, recursive=False)
                 names = [e.name for e in res.entries[:10] if hasattr(e, "name")]
                 st.write("Found entries:" if names else "No entries at root.", names or [])
             except Exception as e:
