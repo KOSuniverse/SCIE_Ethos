@@ -336,3 +336,39 @@ def append_jsonl_line(path_lower: str, record: dict) -> bool:
         print(f"Failed to append JSONL line to {path_lower}: {e}")
         return False
 
+
+def create_shared_link(path_lower: str) -> Optional[str]:
+    """
+    Create a shareable Dropbox link for a file.
+    
+    Args:
+        path_lower: Dropbox path (e.g., "/Project_Root/04_Data/03_Summaries/file.xlsx")
+        
+    Returns:
+        str: Shareable URL or None if failed
+    """
+    try:
+        dbx = _get_dbx_client()
+        if not dbx:
+            return None
+            
+        # Try to create a shared link
+        try:
+            shared_link_metadata = dbx.sharing_create_shared_link_with_settings(path_lower)
+            return shared_link_metadata.url
+        except Exception as e:
+            # If link already exists, try to get existing link
+            try:
+                shared_links = dbx.sharing_list_shared_links(path=path_lower, direct_only=True)
+                if shared_links.links:
+                    return shared_links.links[0].url
+            except Exception:
+                pass
+            
+            print(f"Could not create shared link for {path_lower}: {e}")
+            return None
+            
+    except Exception as e:
+        print(f"Failed to create shared link for {path_lower}: {e}")
+        return None
+

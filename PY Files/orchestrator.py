@@ -189,7 +189,7 @@ def answer_question(
     *,
     app_paths: Any,
     cleansed_paths: Optional[List[str]] = None,
-    answer_style: str = llm_prompts.ANSWER_STYLE_CONCISE,
+    answer_style: str = llm_prompts.ANSWER_STYLE_DETAILED,  # Enterprise: Default to detailed analysis
 ) -> Dict[str, Any]:
     """
     Enterprise path:
@@ -416,12 +416,14 @@ def _propose_tool_plan(
         "- Use: dataframe_query, chart, kb_search ONLY.\n"
         "- Analyze the available sheets and their names to select the MOST RELEVANT sheet for the question.\n"
         "- For comparison/change questions, look for sheets with 'comparison', 'vs', 'q1 vs q2', or similar in their names.\n"
+        "- For questions asking about differences/changes over time, prioritize comparison sheets over single-period data.\n"
         "- For inventory questions, prioritize sheets with 'inventory' in the name over 'wip' sheets.\n"
         "- For aging/time-based questions, look for sheets with 'aging', 'aged', or time periods in their names.\n"
         "- Only use files from context.excel.files.\n"
         "- If you specify 'sheet', it MUST be in context.excel.sheets_by_file[file].\n"
         "- Use sheet_types and columns_by_sheet to understand what data each sheet contains.\n"
         "- If multiple relevant sheets exist, create separate dataframe_query steps for each.\n"
+        "- For comparison queries, add groupby and metrics to identify specific differences.\n"
         "- If kb_candidates not empty and the question is analytical/interpretive, include a kb_search step.\n"
         "- Keep args small; do not include large literal data.\n\n"
         f"USER QUESTION: {question}\n\n"
@@ -452,8 +454,8 @@ def _propose_tool_plan(
                 "groupby": None,
                 "metrics": None,
                 "limit": 50,
-                # Remove artifact_folder to prevent path issues - Q&A doesn't need to save artifacts by default
-                # "artifact_folder": _artifact_folder("summaries", app_paths),
+                # Enterprise deployment: Always save artifacts to cloud storage
+                "artifact_folder": _artifact_folder("summaries", app_paths),
             },
         }
     ]
@@ -510,6 +512,7 @@ def _execute_plan(plan: List[Dict[str, Any]], app_paths: Any) -> Dict[str, Any]:
                 "metrics": args.get("metrics"),
                 "limit": int(args.get("limit", 50)),
                 "artifact_folder": artifact_folder,
+                "artifact_format": "excel",  # Enterprise: Always Excel format for compatibility
             }
 
             try:
@@ -617,7 +620,22 @@ def _summarize_exec(exec_result: Dict[str, Any]) -> Tuple[str, List[str]]:
                             lines.append(f"   Row {i+1}: [data truncated - {len(row)} fields]")
             
             if meta.get("artifact_path"):
-                lines.append(f"• Full results saved to: {meta.get('artifact_path')}")
+                artifact_path = meta.get("artifact_path", "")
+                
+                # Check if path includes shareable link
+                if "|SHARE|" in artifact_path:
+                    path_part, share_part = artifact_path.split("|SHARE|", 1)
+                    filename = path_part.split("/")[-1] if "/" in path_part else path_part
+                    lines.append(f"• Full results saved to: {filename}")
+                    lines.append(f"• 📎 **Direct Download Link**: {share_part}")
+                    lines.append(f"• Cloud location: {path_part}")
+                else:
+                    # Fallback for paths without share links
+                    filename = artifact_path.split("/")[-1] if "/" in artifact_path else artifact_path
+                    lines.append(f"• Full results saved to: {filename}")
+                    lines.append(f"• Cloud location: {artifact_path}")
+                    if artifact_path.startswith("/"):
+                        lines.append("• Access via Dropbox: /Apps/Ethos LLM folder")
                 
         elif c["tool"] == "chart":
             meta = c.get("result_meta", {})
