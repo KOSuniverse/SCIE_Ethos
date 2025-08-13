@@ -1454,12 +1454,12 @@ from dbx_utils import list_data_files
 
 st.markdown("## 4) Ask questions about a Cleansed workbook")
 
-# Use the properly constructed PROJECT_ROOT from constants.py instead of app_paths
-cleansed_folder = f"{PROJECT_ROOT}/04_Data/01_Cleansed_Files"  # This will be /Apps/Ethos LLM/Project_Root/04_Data/01_Cleansed_Files
+# Use the same path construction as the working section (line 1390)
+cleansed_folder = getattr(app_paths, "dbx_cleansed_folder", None)
 print(f"DEBUG: Using cleansed folder: {cleansed_folder}")
 
 if not cleansed_folder:
-    st.warning("Cleansed folder not configured. Check constants.py configuration.")
+    st.warning("Cleansed folder not configured on Dropbox. Set app_paths.dbx_cleansed_folder.")
 else:
     try:
         files = list_data_files(cleansed_folder)  # Now supports both Excel and CSV
