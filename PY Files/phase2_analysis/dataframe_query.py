@@ -668,78 +668,58 @@ def _calculate_domain_totals(df: pd.DataFrame, query_type: str) -> Dict[str, Any
 
 def _save_query_artifact(df: pd.DataFrame, artifact_folder: str, query_type: str, 
                         artifact_format: str) -> str:
-    """Save query results as artifact directly to Dropbox - enterprise cloud-only storage."""
+    """Save query results as artifact with enterprise naming."""
     
-    print(f"DEBUG _save_query_artifact: Enterprise cloud storage to: {artifact_folder}")
+    print(f"DEBUG _save_query_artifact: Using artifact folder: {artifact_folder}")
+    
+    # Always write to a local, writable folder first
+    import os
+    from pathlib import Path
+    local_dir = Path(os.getenv("LOCAL_WORK_ROOT", "/tmp/ethos/03_Summaries"))
+    local_dir.mkdir(parents=True, exist_ok=True)
     
     # Enterprise naming convention
     timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
     base_name = f"{query_type}_query_{timestamp}"
     
-    # Determine file extension
-    file_ext = "xlsx" if artifact_format.lower() == "excel" else "csv"
-    dropbox_target = f"{artifact_folder.rstrip('/')}/{base_name}.{file_ext}"
+    # Write to local file first
+    if artifact_format.lower() == "excel":
+        local_file = local_dir / f"{base_name}.xlsx"
+        with pd.ExcelWriter(local_file, engine="xlsxwriter") as writer:
+            df.to_excel(writer, sheet_name="Analysis", index=False)
+    else:
+        local_file = local_dir / f"{base_name}.csv"
+        df.to_csv(local_file, index=False)
     
-    print(f"DEBUG _save_query_artifact: Target path: {dropbox_target}")
+    artifact_path = str(local_file)
+    print(f"DEBUG _save_query_artifact: Saved locally to: {artifact_path}")
     
+    # Optionally mirror to Dropbox if token is configured
     try:
-        # Create file content in memory (no local storage)
-        import io
-        buffer = io.BytesIO()
+        wants_dropbox = (artifact_folder.startswith("/Project_Root") or artifact_folder.startswith("/Apps"))
+        print(f"DEBUG _save_query_artifact: Wants Dropbox upload: {wants_dropbox}")
         
-        if artifact_format.lower() == "excel":
-            # Create Excel in memory
-            with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
-                df.to_excel(writer, sheet_name="Analysis", index=False)
+        if wants_dropbox and upload_bytes:
+            # Upload to Dropbox
+            dropbox_target = f"{artifact_folder.rstrip('/')}/{base_name}.{artifact_format}"
+            with open(local_file, "rb") as f:
+                file_bytes = f.read()
+            
+            upload_bytes(dropbox_target, file_bytes)
+            artifact_path = dropbox_target
+            log_event(f"Saved query artifact to Dropbox: {artifact_path}")
+            print(f"DEBUG _save_query_artifact: Uploaded to Dropbox: {artifact_path}")
         else:
-            # Create CSV in memory
-            csv_content = df.to_csv(index=False)
-            buffer.write(csv_content.encode('utf-8'))
-        
-        # Get bytes from buffer
-        buffer.seek(0)
-        file_bytes = buffer.getvalue()
-        buffer.close()
-        
-        print(f"DEBUG _save_query_artifact: Generated {len(file_bytes)} bytes in memory")
-        
-        # Upload directly to Dropbox (enterprise cloud storage)
-        if not upload_bytes:
-            raise ValueError("Dropbox upload function not available - cloud storage required for enterprise deployment")
-        
-        upload_bytes(dropbox_target, file_bytes)
-        log_event(f"Enterprise artifact saved to cloud: {dropbox_target}")
-        print(f"DEBUG _save_query_artifact: Successfully uploaded to Dropbox: {dropbox_target}")
-        
-        # Create shareable link for enterprise users
-        try:
-            share_url = None
-            if upload_bytes:  # Only try if we have Dropbox functionality
-                try:
-                    # Import from parent directory
-                    import sys
-                    import os
-                    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-                    from dbx_utils import create_shared_link
-                    share_url = create_shared_link(dropbox_target)
-                    if share_url:
-                        print(f"DEBUG _save_query_artifact: Created shareable link: {share_url}")
-                        # Return both path and URL for enterprise access
-                        return f"{dropbox_target}|SHARE|{share_url}"
-                except ImportError as ie:
-                    print(f"DEBUG _save_query_artifact: Could not import create_shared_link: {ie}")
-                except Exception as e:
-                    print(f"DEBUG _save_query_artifact: Share link creation failed: {e}")
-        except Exception as e:
-            print(f"DEBUG _save_query_artifact: Could not create share link: {e}")
-        
-        return dropbox_target
-        
+            log_event(f"Saved query artifact locally: {artifact_path}")
+            print(f"DEBUG _save_query_artifact: Keeping local path: {artifact_path}")
+            
     except Exception as e:
-        error_msg = f"Enterprise cloud storage failed: {e}"
-        log_event(error_msg)
-        print(f"DEBUG _save_query_artifact: {error_msg}")
-        raise ValueError(error_msg)
+        # Don't fail the query—just keep the local path and surface the warning
+        log_event(f"Dropbox mirror failed, using local path: {e}")
+        print(f"DEBUG _save_query_artifact: Dropbox upload failed: {e}")
+        artifact_path = str(local_file)
+        
+    return artifact_path
 
 # ================== CONVENIENCE FUNCTIONS ==================
 
@@ -766,3 +746,6 @@ def quick_wip_check(file_path: str) -> float:
         return result.get("total_wip", 0.0) or 0.0
     except Exception:
         return 0.0
+
+
+
