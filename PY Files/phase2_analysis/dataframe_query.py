@@ -112,6 +112,16 @@ def dataframe_query(
             "total_wip": None
         }
     
+    # Normalize input paths to handle Dropbox paths properly (ChatGPT suggestion)
+    try:
+        from ..path_utils import canon_path
+        fp = canon_path(paths[0]) if paths else None
+        paths = [fp] if fp else paths
+        print(f"DEBUG: Normalized input path from {files[0] if files else 'None'} to {fp}")
+    except Exception as e:
+        print(f"DEBUG: Path normalization failed, using original: {e}")
+        # Continue with original paths if normalization fails
+    
     # Check if tools are available
     if not TOOLS_AVAILABLE:
         return {
@@ -252,9 +262,15 @@ def dataframe_query(
         return response
         
     except Exception as e:
+        print(f"DEBUG: Query failed with error: {e}")
+        print(f"DEBUG: Error type: {type(e)}")
+        print(f"DEBUG: Error args: {e.args if hasattr(e, 'args') else 'No args'}")
+        import traceback
+        print(f"DEBUG: Full traceback:")
+        traceback.print_exc()
         log_event(f"Query failed: {e}")
         return {
-            "error": str(e),
+            "error": f"dataframe_query failed: {e}",
             "rowcount": 0,
             "sheet_used": None,
             "total_wip": None
@@ -337,21 +353,10 @@ def _enterprise_load_data(file_path: str, sheet: Optional[str] = None) -> tuple[
     """Load data with enterprise error handling and sheet intelligence."""
     print(f"DEBUG _enterprise_load_data: Loading file: {file_path}")
     
-    # Normalize the path - but only if it's not already a full Dropbox path
-    if file_path.startswith("/Apps"):
-        # Already a full Dropbox path, use as-is
-        actual_path = file_path
-        print(f"DEBUG _enterprise_load_data: Using full Dropbox path as-is: {actual_path}")
-    else:
-        # Try to import canon_path for path normalization
-        try:
-            from path_utils import canon_path as real_canon_path
-            actual_path = real_canon_path(file_path)
-            print(f"DEBUG _enterprise_load_data: Normalized path: {file_path} -> {actual_path}")
-        except ImportError:
-            # Fallback: use the file_path as-is
-            actual_path = file_path
-            print(f"DEBUG _enterprise_load_data: Using path as-is (no canon_path): {actual_path}")
+    # For now, use the path as-is without any canonicalization
+    # The path conversion issue seems to be causing filesystem access problems
+    actual_path = file_path
+    print(f"DEBUG _enterprise_load_data: Using path as-is (no canonicalization): {actual_path}")
     
     try:
         frames = _load_file_to_frames(actual_path)
@@ -665,54 +670,56 @@ def _save_query_artifact(df: pd.DataFrame, artifact_folder: str, query_type: str
                         artifact_format: str) -> str:
     """Save query results as artifact with enterprise naming."""
     
-    # Use paths directly - no canonicalization needed for Dropbox paths
-    # artifact_folder should already be a proper Dropbox path
     print(f"DEBUG _save_query_artifact: Using artifact folder: {artifact_folder}")
     
-    # Check if this is a Dropbox path (starts with /Apps or /Project_Root)
-    is_dropbox_path = artifact_folder.startswith(("/Apps", "/Project_Root"))
-    print(f"DEBUG _save_query_artifact: Is Dropbox path: {is_dropbox_path}")
+    # Always write to a local, writable folder first
+    import os
+    from pathlib import Path
+    local_dir = Path(os.getenv("LOCAL_WORK_ROOT", "/tmp/ethos/03_Summaries"))
+    local_dir.mkdir(parents=True, exist_ok=True)
     
     # Enterprise naming convention
     timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
     base_name = f"{query_type}_query_{timestamp}"
     
-    if is_dropbox_path:
-        # For Dropbox paths, use the existing _save_artifact which handles upload_bytes
-        print(f"DEBUG _save_query_artifact: Using Dropbox upload via _save_artifact")
-        try:
-            artifact_path = _save_artifact(df, artifact_folder, base_name, artifact_format)
-            log_event(f"Saved query artifact to Dropbox: {artifact_path}")
-            return artifact_path
-        except Exception as e:
-            log_event(f"Failed to save artifact to Dropbox: {e}")
-            print(f"DEBUG _save_query_artifact: Dropbox upload failed: {e}")
-            # Return a placeholder path rather than failing
-            return f"{artifact_folder}/{base_name}.{artifact_format}"
+    # Write to local file first
+    if artifact_format.lower() == "excel":
+        local_file = local_dir / f"{base_name}.xlsx"
+        with pd.ExcelWriter(local_file, engine="xlsxwriter") as writer:
+            df.to_excel(writer, sheet_name="Analysis", index=False)
     else:
-        # For local paths, use filesystem operations
-        print(f"DEBUG _save_query_artifact: Using local filesystem")
-        try:
-            import os
-            from pathlib import Path
+        local_file = local_dir / f"{base_name}.csv"
+        df.to_csv(local_file, index=False)
+    
+    artifact_path = str(local_file)
+    print(f"DEBUG _save_query_artifact: Saved locally to: {artifact_path}")
+    
+    # Optionally mirror to Dropbox if token is configured
+    try:
+        wants_dropbox = (artifact_folder.startswith("/Project_Root") or artifact_folder.startswith("/Apps"))
+        print(f"DEBUG _save_query_artifact: Wants Dropbox upload: {wants_dropbox}")
+        
+        if wants_dropbox and upload_bytes:
+            # Upload to Dropbox
+            dropbox_target = f"{artifact_folder.rstrip('/')}/{base_name}.{artifact_format}"
+            with open(local_file, "rb") as f:
+                file_bytes = f.read()
             
-            # Ensure local directory exists
-            Path(artifact_folder).mkdir(parents=True, exist_ok=True)
+            upload_bytes(dropbox_target, file_bytes)
+            artifact_path = dropbox_target
+            log_event(f"Saved query artifact to Dropbox: {artifact_path}")
+            print(f"DEBUG _save_query_artifact: Uploaded to Dropbox: {artifact_path}")
+        else:
+            log_event(f"Saved query artifact locally: {artifact_path}")
+            print(f"DEBUG _save_query_artifact: Keeping local path: {artifact_path}")
             
-            if artifact_format.lower() == "excel":
-                file_path = Path(artifact_folder) / f"{base_name}.xlsx"
-                with pd.ExcelWriter(file_path, engine="xlsxwriter") as writer:
-                    df.to_excel(writer, sheet_name="Analysis", index=False)
-            else:
-                file_path = Path(artifact_folder) / f"{base_name}.csv"
-                df.to_csv(file_path, index=False)
-            
-            log_event(f"Saved query artifact locally: {file_path}")
-            return str(file_path)
-        except Exception as e:
-            log_event(f"Failed to save local artifact: {e}")
-            print(f"DEBUG _save_query_artifact: Local save failed: {e}")
-            return f"{artifact_folder}/{base_name}.{artifact_format}"
+    except Exception as e:
+        # Don't fail the query—just keep the local path and surface the warning
+        log_event(f"Dropbox mirror failed, using local path: {e}")
+        print(f"DEBUG _save_query_artifact: Dropbox upload failed: {e}")
+        artifact_path = str(local_file)
+        
+    return artifact_path
 
 # ================== CONVENIENCE FUNCTIONS ==================
 
