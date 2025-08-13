@@ -110,13 +110,22 @@ def run_query_with_files(question: str, dropbox_paths: list[str]) -> dict:
     thread = client.beta.threads.create()
 
     # If file sync helpers are available, attach a vector store at the thread level
+    debug_info = {"file_sync_attempted": False, "files_uploaded": [], "vector_store_created": False, "sync_error": None}
+    
     if _FILE_SYNC_AVAILABLE and dropbox_paths:
+        debug_info["file_sync_attempted"] = True
         try:
             fs = prepare_file_search_from_dropbox(dropbox_paths, vs_name="Ethos_FileStore")
+            debug_info["files_uploaded"] = fs.get("file_ids", [])
+            debug_info["vector_store_created"] = bool(fs.get("vector_store_id"))
             if fs.get("vector_store_id"):
-                attach_vector_store_to_thread(thread.id, fs["vector_store_id"])  # thread-scoped
+                attach_result = attach_vector_store_to_thread(thread.id, fs["vector_store_id"])  # thread-scoped
+                debug_info["vector_store_attached"] = attach_result
+            else:
+                debug_info["sync_error"] = "No vector store created"
         except Exception as e:
             # Proceed without file search if sync fails
+            debug_info["sync_error"] = str(e)
             print(f"File-search sync skipped: {e}")
 
     # Post the question
@@ -138,5 +147,5 @@ def run_query_with_files(question: str, dropbox_paths: list[str]) -> dict:
     if should_abstain(conf["score"], threshold=0.52):
         answer = "I’m not confident enough to answer. Please refine the question."
 
-    return {"answer": answer, "confidence": conf, "thread_id": thread.id}
+    return {"answer": answer, "confidence": conf, "thread_id": thread.id, "debug_file_sync": debug_info}
 
