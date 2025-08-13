@@ -292,3 +292,47 @@ def validate_dropbox_config() -> Dict[str, Any]:
     
     return validation
 
+
+def append_jsonl_line(path_lower: str, record: dict) -> bool:
+    """
+    Append a single JSON record to a JSONL file in Dropbox.
+    Used for logging events to Dropbox without filesystem operations.
+    
+    Args:
+        path_lower: Dropbox path (e.g., "/Project_Root/04_Data/04_Metadata/app_events.jsonl")
+        record: Dictionary to append as JSON line
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        dbx = _get_dbx_client()
+        if not dbx:
+            return False
+            
+        # Convert record to JSON line
+        json_line = json.dumps(record, ensure_ascii=False) + "\n"
+        line_bytes = json_line.encode('utf-8')
+        
+        # Try to append to existing file, or create new if doesn't exist
+        try:
+            # First try to read existing file
+            existing_data = read_file_bytes(path_lower)
+            if existing_data:
+                # Append to existing content
+                new_content = existing_data + line_bytes
+            else:
+                # File doesn't exist, start with just this line
+                new_content = line_bytes
+        except Exception:
+            # File doesn't exist or can't be read, start fresh
+            new_content = line_bytes
+            
+        # Upload the combined content
+        upload_bytes(path_lower, new_content, mode="overwrite")
+        return True
+        
+    except Exception as e:
+        print(f"Failed to append JSONL line to {path_lower}: {e}")
+        return False
+

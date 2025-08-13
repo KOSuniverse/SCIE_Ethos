@@ -30,6 +30,11 @@ CLEANSED  = f"{DATA_ROOT}/01_Cleansed_Files"             # type: str
 EDA_CHART = f"{DATA_ROOT}/02_EDA_Charts"                 # type: str
 COMPARES  = f"{DATA_ROOT}/05_Merged_Comparisons"         # type: str
 
+# Local writable workspace for artifacts/logs; safe on server
+import os as _os, tempfile as _tmp
+LOCAL_WORK_ROOT = _os.getenv("LOCAL_WORK_ROOT", str(_tmp.gettempdir()) + "/ethos")  # type: str
+LOCAL_META_DIR  = f"{LOCAL_WORK_ROOT}/metadata"  # type: str
+
 # --- Legacy Directory Constants (for backward compatibility) ---
 RAW_FILES_DIR = "04_Data/00_Raw_Files"
 CLEANSED_FILES_DIR = "04_Data/01_Cleansed_Files"
