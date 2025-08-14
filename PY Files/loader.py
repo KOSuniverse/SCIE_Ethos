@@ -1,4 +1,5 @@
-import os, json
+import os
+import json
 import re
 import pandas as pd
 
@@ -24,7 +25,6 @@ def load_excel_file(file_path, file_type=None):
     try:
         from dbx_utils import read_file_bytes
         import io
-
         # Check if this is a Dropbox path
         if file_path.startswith('/'):
             # Use Dropbox API to read the file
