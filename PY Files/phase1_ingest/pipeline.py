@@ -8,6 +8,8 @@ import pandas as pd
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Tuple, Union, Optional, Any, List
+from loader import detect_header_row, _build_columns_from_rows, _sanitize_columns
+
 
 # Import enhanced foundation utilities
 try:
@@ -468,7 +470,33 @@ def _hardened_process_excel(
 
     for sheet in xls.sheet_names:
         try:
-            raw_df = pd.read_excel(xls, sheet_name=sheet)
+            raw_df = pd.read_excel(xls, sheet_name=sheet, header=None)
+
+            # --- Robust header detection & manual promotion ---
+            alias_group = load_alias_group(alias_path) if alias_path else {}
+            hdr_idx = detect_header_row(raw_df, alias_group)
+            if hdr_idx is not None:
+                df_promoted = raw_df.iloc[hdr_idx + 1:].copy()
+                df_promoted.columns = _build_columns_from_rows(raw_df, hdr_idx)
+            else:
+                # fallback: first non-empty row
+                first_nonempty = next((i for i in range(min(150, len(raw_df)))
+                                       if any(str(x).strip() for x in raw_df.iloc[i].tolist())), None)
+                if first_nonempty is not None:
+                    df_promoted = raw_df.iloc[first_nonempty + 1:].copy()
+                    df_promoted.columns = _build_columns_from_rows(raw_df, first_nonempty)
+                else:
+                    df_promoted = raw_df.copy()
+                    df_promoted.columns = [f"col_{i+1}" for i in range(df_promoted.shape[1])]
+
+            # Drop fully-empty cols & sanitize names
+            all_empty = df_promoted.apply(lambda s: s.isna().all() or (s.astype(str).str.strip() == "").all(), axis=0)
+            df_promoted = df_promoted.loc[:, ~all_empty]
+            df_promoted.columns = _sanitize_columns(list(df_promoted.columns))
+
+            # Use promoted frame downstream
+            raw_df = df_promoted
+
             df, meta = _process_single_sheet(
                 filename=filename or "(unknown)",
                 sheet_name=sheet,
@@ -546,8 +574,28 @@ def run_pipeline_on_file(xls_path, alias_path, output_prefix, output_folder):
         xls.sheet_names[0]
     )
     
-    df = xls.parse(target_sheet).copy()
-    
+    # --- Robust header detection & manual promotion ---
+    df0 = xls.parse(target_sheet, header=None).copy()
+    alias_group = load_alias_group(alias_path) if alias_path else {}
+    hdr_idx = detect_header_row(df0, alias_group)
+    if hdr_idx is not None:
+        df = df0.iloc[hdr_idx + 1:].copy()
+        df.columns = _build_columns_from_rows(df0, hdr_idx)
+    else:
+        first_nonempty = next((i for i in range(min(150, len(df0)))
+                               if any(str(x).strip() for x in df0.iloc[i].tolist())), None)
+        if first_nonempty is not None:
+            df = df0.iloc[first_nonempty + 1:].copy()
+            df.columns = _build_columns_from_rows(df0, first_nonempty)
+        else:
+            df = df0.copy()
+            df.columns = [f"col_{i+1}" for i in range(df.shape[1])]
+
+    # Drop empty cols & sanitize names
+    all_empty = df.apply(lambda s: s.isna().all() or (s.astype(str).str.strip() == "").all(), axis=0)
+    df = df.loc[:, ~all_empty]
+    df.columns = _sanitize_columns(list(df.columns))
+
     # --- Enhanced Cleaning with Validation ---
     aliases = load_sheet_aliases(alias_path) if alias_path else {}
     rev_map = get_reverse_alias_map(aliases)
@@ -562,7 +610,7 @@ def run_pipeline_on_file(xls_path, alias_path, output_prefix, output_folder):
     # Smart auto-fixing with enterprise settings
     log = []
     df, log = smart_auto_fixer(df, log, actions={"numeric_cast": True, "trim": True})
-    
+
     # --- Optional AI Enhancement ---
     ai_insights = {}
     try:
@@ -573,18 +621,18 @@ def run_pipeline_on_file(xls_path, alias_path, output_prefix, output_folder):
     except (ImportError, Exception) as e:
         log.append(f"AI enhancement unavailable: {str(e)}")
         ai_insights = {"status": "unavailable", "reason": str(e)}
-    
+
     # --- Enterprise Validation (Required) ---
     cleansed_ok, validation_issues = _validate_cleansed(df)
-    
+
     # --- Save to Canonical Location ---
     out_dir = Path(DATA_ROOT) / "01_Cleansed_Files"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{output_prefix}_cleansed.xlsx"
-    
+
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
         df.to_excel(writer, sheet_name=sheet_alias or target_sheet, index=False)
-    
+
     # --- Enhanced Return with Enterprise Contract + AI Insights ---
     result = {
         "cleansed_path": str(out_path),
