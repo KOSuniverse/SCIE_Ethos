@@ -1,6 +1,14 @@
 # ----------------------------
 # Header detection (robust, no hardcoding)
 # ----------------------------
+import os
+import json
+import os
+import io
+import json
+import re
+import pandas as pd
+from typing import List, Dict, Optional
 from typing import Tuple, Set
 
 _COMMON_HEADER_TOKENS: Set[str] = {
@@ -63,14 +71,7 @@ def detect_header_row(df: pd.DataFrame, alias_map: dict) -> int | None:
 
     # threshold: must be reasonably header-like
     return best_idx if (best_idx is not None and best_score >= 0.55) else None
-import os
-import json
-import os
-import io
-import json
-import re
-import pandas as pd
-from typing import List, Dict, Optional
+
 
 # ----------------------------
 # Helpers
