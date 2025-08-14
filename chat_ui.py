@@ -275,71 +275,47 @@ if user_question:
         "role": "user", 
         "content": user_question
     })
-    
+
     # Display user message
     with st.chat_message("user"):
         st.markdown(user_question)
-    
+
     # Process assistant response
     with st.chat_message("assistant"):
-        # Show thinking indicator
         thinking_placeholder = st.empty()
         thinking_placeholder.markdown("🤔 _Analyzing your question..._")
-        
         start_time = time.time()
-        
         try:
-            # Set up app_paths (simplified for chat interface)
             class AppPaths:
                 def __init__(self):
-                    # Use Dropbox paths from constants
                     self.dbx_cleansed_folder = CLEANSED
                     self.dbx_metadata_folder = META_DIR
                     self.dbx_summaries_folder = f"{DATA_ROOT}/03_Summaries"
-            
             app_paths = AppPaths()
-            
-            # Get selected file paths
-            selected_paths = []
-            if st.session_state.selected_files:
-                file_map = {}
-                for file in load_available_files():
-                    display_name = f"{file['name']} ({file.get('file_type', 'excel')})"
-                    if file.get('server_modified'):
-                        display_name += f" — {file['server_modified'].strftime('%m/%d %H:%M')}"
-                    file_map[display_name] = file['path_lower']
-                
-                selected_paths = [file_map[display] for display in st.session_state.selected_files if display in file_map]
-            
-            # Prefer Assistants API with File Search when files are selected
-            if selected_paths:
-                ar = run_query_with_files(user_question, selected_paths)
-            else:
-                ar = run_query(user_question)
-            
-            # Normalize result for UI/logging
-            answer = ar.get("answer") or ""
+
+            # Always use enterprise orchestrator for free-form Q&A
+            ar = answer_question(user_question, app_paths, cleansed_paths=None)
+
+            answer = ar.get("final_text") or ""
             confidence_obj = ar.get("confidence") or {}
             confidence_score = confidence_obj.get("score")
             if confidence_score is None:
                 confidence_score = score_ravc(recency=0.8, alignment=0.9, variance=0.2, coverage=0.8)["score"]
-            
+
             result = {
                 "final_text": answer,
-                "intent_info": {"intent": "assistant"},
-                "tool_calls": [],
-                "artifacts": [],
-                "kb_citations": [],
-                "debug": {"thread_id": ar.get("thread_id")},
+                "intent_info": ar.get("intent_info", {}),
+                "tool_calls": ar.get("tool_calls", []),
+                "artifacts": ar.get("artifacts", []),
+                "kb_citations": ar.get("kb_citations", []),
+                "debug": ar.get("debug", {}),
             }
-            
-            # Update thinking indicator with final answer
+
             thinking_placeholder.markdown(answer)
-            
-            # Store sources and artifacts
+
             artifacts = result.get("artifacts", [])
             intent_info = result.get("intent_info", {})
-            
+
             st.session_state.last_sources = {
                 "intent": intent_info.get("intent"),
                 "confidence": confidence_score,
@@ -348,20 +324,17 @@ if user_question:
                 "kb_citations": result.get("kb_citations", []),
                 "response_time": time.time() - start_time
             }
-            
-            # Add to confidence history
+
             st.session_state.confidence_history.append(confidence_score)
             if len(st.session_state.confidence_history) > 10:
                 st.session_state.confidence_history.pop(0)
-            
-            # Add assistant message to chat
+
             st.session_state.chat_messages.append({
                 "role": "assistant",
                 "content": answer,
                 "artifacts": artifacts
             })
-            
-            # Log the interaction
+
             try:
                 st.session_state.session_handler.add_entry(user_question, result)
                 log_query_result(
@@ -372,12 +345,9 @@ if user_question:
                 log_event(f"Chat Q: {user_question[:60]}... Intent: {intent_info.get('intent')} Duration: {time.time() - start_time:.2f}s")
             except Exception as log_error:
                 st.caption(f"⚠️ Logging failed: {log_error}")
-        
         except Exception as e:
-            error_message = f"❌ **Error Processing Request**\n\n```\n{str(e)}\n```\n\nPlease try rephrasing your question or check the selected data files."
+            error_message = f"❌ **Error Processing Request**\n\n```\n{str(e)}\n```\n\nPlease try rephrasing your question."
             thinking_placeholder.markdown(error_message)
-            
-            # Add error to chat history
             st.session_state.chat_messages.append({
                 "role": "assistant",
                 "content": error_message,
