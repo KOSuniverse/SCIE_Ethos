@@ -41,14 +41,49 @@ def load_excel_file(file_path, file_type=None):
     match = re.search(r"Q[1-4]", filename.upper())
     period = match.group(0) if match else "Unknown"
 
+    # --- Enterprise header detection ---
+    EXPECTED_COLS = [
+        "Product Line", "Average", "Extended Cost", "Last Used", "YTD Usage", "Last Year Usage",
+        "Quantity Allocated", "Cost Allocated", "Quantity Unallocated", "Cost Unallocated", "Group"
+    ]
     data = []
     for sheet_name, df in sheets.items():
+        header_row_idx = None
+        # Scan for header row: look for row where most columns match EXPECTED_COLS
+        for i in range(min(30, len(df))):
+            row = df.iloc[i].astype(str).str.strip().tolist()
+            matches = sum(1 for col in EXPECTED_COLS if col in row)
+            if matches >= max(4, len(EXPECTED_COLS)//2):
+                header_row_idx = i
+                break
+        if header_row_idx is not None:
+            # Re-read sheet with correct header row
+            try:
+                # Use pandas to reload with header at detected row
+                if file_path.startswith('/'):
+                    from dbx_utils import read_file_bytes
+                    import io
+                    file_bytes = read_file_bytes(file_path)
+                    df_valid = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet_name, header=header_row_idx)
+                else:
+                    df_valid = pd.read_excel(file_path, sheet_name=sheet_name, header=header_row_idx)
+                # Log header detection
+                print(f"[loader] Detected header at row {header_row_idx+1} in sheet '{sheet_name}' of '{filename}'")
+            except Exception as e:
+                print(f"[loader] Failed to reload sheet '{sheet_name}' with detected header: {e}")
+                df_valid = df.iloc[header_row_idx+1:].copy()
+                df_valid.columns = df.iloc[header_row_idx].tolist()
+        else:
+            # Fallback: use as-is, but log warning
+            print(f"[loader] WARNING: No header detected in sheet '{sheet_name}' of '{filename}'. Ingesting all rows.")
+            df_valid = df.copy()
         record = {
-            'df': df.copy(),
+            'df': df_valid,
             'sheet_name': sheet_name,
             'source_file': filename,
             'period': period,
-            'file_type': file_type
+            'file_type': file_type,
+            'header_row': header_row_idx
         }
         data.append(record)
 
