@@ -4,6 +4,8 @@
 import os
 import math
 import datetime as _dt
+import pandas as pd
+import io
 from typing import List, Set, Optional, Dict, Any
 
 _SCAN_LIMIT = int(os.getenv("HEADER_SCAN_LIMIT", "150"))  # configurable
@@ -95,79 +97,6 @@ def detect_header_row(df: Any, alias_map: Dict[str, List[str]]) -> Optional[int]
         if s > best_score:
             best_idx, best_score = i, s
     return best_idx if (best_idx is not None and best_score >= 0.58) else None
-# ----------------------------
-# Header detection (robust, no hardcoding)
-# ----------------------------
-import os
-import json
-import os
-import io
-import json
-import re
-import pandas as pd
-from typing import List, Dict, Optional
-from typing import Tuple, Set
-
-_COMMON_HEADER_TOKENS: Set[str] = {
-    "part", "part no", "part number", "item", "sku", "description", "qty", "quantity",
-    "on hand", "average", "extended", "cost", "last used", "ytd", "last year",
-    "uom", "warehouse", "location", "plant", "date", "group", "family", "bin"
-}
-
-def _header_keywords(alias_map: dict) -> Set[str]:
-    keys = set()
-    try:
-        # alias_map like {"part_number": ["Part No", "Item", ...], ...}
-        for canon, alts in alias_map.items():
-            keys.add(str(canon).lower().strip().replace("_", " "))
-            for a in (alts or []):
-                keys.add(str(a).lower().strip())
-    except Exception:
-        pass
-    return keys | _COMMON_HEADER_TOKENS
-
-def _row_score_for_header(cells: list, next_row: list, header_words: Set[str]) -> float:
-    vals = [c for c in cells if c is not None and str(c).strip() != ""]
-    total = len(cells)
-    if total == 0:
-        return 0.0
-
-    # basic ratios
-    nonempty = len(vals) / total
-    unique   = len(set(map(lambda x: str(x).strip().lower(), vals))) / max(1, len(vals))
-    is_str   = sum(not str(v).replace(".", "", 1).isdigit() for v in vals) / max(1, len(vals))
-
-    # keyword hits
-    lowered = [str(v).strip().lower() for v in vals]
-    hits = sum(1 for v in lowered for w in header_words if w == v or (len(w) > 3 and w in v))
-    hit_ratio = hits / max(1, len(vals))
-
-    # type switch: next row should be more numeric than header
-    next_vals = [n for n in next_row if n is not None and str(n).strip() != ""]
-    next_is_num = sum(str(v).replace(".", "", 1).isdigit() for v in next_vals) / max(1, len(next_vals))
-    type_switch = max(0.0, next_is_num - (1 - is_str))  # reward if next row is more numeric
-
-    # penalize single-title rows like "Dec-22"
-    if len(vals) <= max(2, total * 0.2):
-        return 0.0
-
-    # weighted score
-    return 0.35*nonempty + 0.25*unique + 0.2*is_str + 0.15*hit_ratio + 0.15*type_switch
-
-def detect_header_row(df: pd.DataFrame, alias_map: dict) -> int | None:
-    header_words = _header_keywords(alias_map)
-    max_scan = min(50, len(df))
-    best_idx, best_score = None, 0.0
-
-    for i in range(max_scan):
-        row = df.iloc[i].tolist()
-        nxt = df.iloc[i+1].tolist() if i+1 < len(df) else []
-        s = _row_score_for_header(row, nxt, header_words)
-        if s > best_score:
-            best_idx, best_score = i, s
-
-    # threshold: must be reasonably header-like
-    return best_idx if (best_idx is not None and best_score >= 0.55) else None
 
 
 # ----------------------------
@@ -308,35 +237,57 @@ def load_excel_file(file_path: str, file_type: Optional[str] = None) -> List[Dic
     alias_map = _try_load_alias_map(file_path)
 
     data: List[Dict] = []
+    def _build_columns_from_rows(raw_df, hdr_idx: int):
+        hdr = raw_df.iloc[hdr_idx].tolist()
+        nxt = raw_df.iloc[hdr_idx + 1].tolist() if hdr_idx + 1 < len(raw_df) else []
+        new_cols = []
+        for i, c in enumerate(hdr):
+            c_str = str(c).strip() if c is not None else ""
+            # fill blanks/Unnamed from the next row if it looks like a label
+            if not c_str or c_str.lower().startswith("unnamed"):
+                if i < len(nxt):
+                    n_str = str(nxt[i]).strip()
+                    if n_str and not n_str.lower().startswith("unnamed"):
+                        c_str = n_str
+            # still empty? synthesize a name
+            if not c_str:
+                c_str = f"col_{i+1}"
+            new_cols.append(c_str)
+        return new_cols
+
     for sheet_name, df in sheets.items():
         header_row_idx = detect_header_row(df, alias_map)
+        print(f"[loader] {filename} :: {sheet_name} -> header_row_idx={header_row_idx}")
 
         if header_row_idx is not None:
-            try:
-                df_valid = _read_excel_single_sheet(file_path, sheet_name, header_row_idx)
-            except Exception:
-                df_valid = df.iloc[header_row_idx + 1:].copy()
-                df_valid.columns = [str(c).strip() for c in df.iloc[header_row_idx].tolist()]
+            # Manual promote (don’t re-read the sheet)
+            df_valid = df.iloc[header_row_idx + 1:].copy()
+            df_valid.columns = _build_columns_from_rows(df, header_row_idx)
         else:
-            # fallback to first non-empty row as header if present
+            # fallback: first non-empty row
             first_nonempty = next((i for i in range(min(_SCAN_LIMIT, len(df)))
                                    if any(str(x).strip() for x in df.iloc[i].tolist())), None)
             if first_nonempty is not None:
-                try:
-                    df_valid = _read_excel_single_sheet(file_path, sheet_name, first_nonempty)
-                except Exception:
-                    df_valid = df.iloc[first_nonempty + 1:].copy()
-                    df_valid.columns = [str(c).strip() for c in df.iloc[first_nonempty].tolist()]
+                df_valid = df.iloc[first_nonempty + 1:].copy()
+                df_valid.columns = _build_columns_from_rows(df, first_nonempty)
             else:
                 df_valid = df.copy()
 
-        # clean column names
-        df_valid.columns = [
-            None if str(c).lower().startswith("unnamed") else str(c).strip()
-            for c in df_valid.columns]
+        # Drop columns that are entirely empty after promotion
+        all_empty = df_valid.apply(lambda s: s.isna().all() or (s.astype(str).str.strip() == "").all(), axis=0)
+        df_valid = df_valid.loc[:, ~all_empty]
+
+        # Normalize column names; remove residual Unnamed:* names if the column is empty
+        clean_cols = []
+        for c in df_valid.columns:
+            name = str(c).strip()
+            if name.lower().startswith("unnamed"):
+                name = ""  # mark for removal if empty-only; otherwise keep synthesized col_*
+            clean_cols.append(name)
+        df_valid.columns = clean_cols
         df_valid = df_valid.loc[:, [c for c in df_valid.columns if c]]
 
-        # apply aliases
+        # Apply aliases last
         df_valid = _apply_aliases(df_valid, alias_map)
 
         record = {
@@ -393,54 +344,4 @@ def load_files_from_folder(folder_path: str,
         all_data.extend(tagged)
     return all_data
 
-# --- metadata index loader (used by orchestrator) ---
-
-def load_master_metadata_index(metadata_dir: str) -> dict:
-    """
-    Reads the master metadata index JSON from the given directory.
-    Returns {} if not found or unreadable.
-    """
-    # If your filename differs, add it here.
-    candidates = [
-        "master_metadata_index.json",
-        "metadata_index.json",
-        "master_metadata.json",
-    ]
-    for name in candidates:
-        path = os.path.join(metadata_dir, name)
-        if os.path.isfile(path):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
-    return {}
-
-
-def load_files_from_folder(folder_path, include=None, exclude=None):
-    """
-    Loads all Excel files from a folder and returns structured list.
-
-    Args:
-        folder_path (str): Directory to scan
-        include (str): keyword required in filename (e.g., 'inventory')
-        exclude (str): keyword to skip (e.g., 'wip')
-
-    Returns:
-        List[Dict]: list of sheet records across all matched files
-    """
-    files = [
-        f for f in os.listdir(folder_path)
-        if f.endswith(".xlsx") and
-           (include.lower() in f.lower() if include else True) and
-           (exclude.lower() not in f.lower() if exclude else True)
-    ]
-
-    all_data = []
-    for file in files:
-        full_path = os.path.join(folder_path, file)
-        tagged_sheets = load_excel_file(full_path)
-        all_data.extend(tagged_sheets)
-
-    return all_data
 
