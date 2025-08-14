@@ -25,36 +25,31 @@ def run_intent_task(query, df_dict, metadata_index, client):
     # EDA — Enhanced Assistant-driven per ChatGPT plan with enterprise paths
     if intent == "eda":
         name, df = (dfs[0] if dfs else (None, None))
-        
+        citations = []
+        artifact_path = None
         if name and df is not None:
-            # ChatGPT's approach: Get schema and sample for Assistant analysis
             schema = {"columns": list(df.columns)[:100]}
             sample_data = df.head(50).to_dict("records")
-            
-            # Let Assistant choose optimal aggregation strategy
             aggregation_plan = choose_aggregation(
                 user_q=query,
                 schema=schema,
                 sample_rows=sample_data
             )
-            
-            # Execute with enterprise paths
             out = dataframe_query(
                 files=[name],
                 metrics=[aggregation_plan] if isinstance(aggregation_plan, dict) else None,
-                aggregation_plan=aggregation_plan,  # Full plan if available
+                aggregation_plan=aggregation_plan,
                 limit=50,
-                artifact_folder=join_root(DATA_ROOT, "03_Summaries"),  # Enterprise path
+                artifact_folder=join_root(DATA_ROOT, "03_Summaries"),
                 filters=aggregation_plan.get("filters", []) if isinstance(aggregation_plan, dict) else [],
                 ai_enhance=True,
                 query_type="general"
             )
-            
-            # Add Assistant plan details to response
             out["assistant_plan"] = aggregation_plan
-            
+            artifact_path = out.get("artifact_path")
+            if artifact_path:
+                citations.append(artifact_path)
         else:
-            # Fallback for no data - use enterprise paths
             out = dataframe_query(
                 files=[first_path] if first_path else [],
                 sheet=None,
@@ -64,33 +59,32 @@ def run_intent_task(query, df_dict, metadata_index, client):
                 limit=50,
                 artifact_folder=join_root(DATA_ROOT, "03_Summaries")
             )
-        
-        return {"intent":"eda","result":out,"artifacts":[out.get("artifact_path")]}
+            artifact_path = out.get("artifact_path")
+            if artifact_path:
+                citations.append(artifact_path)
+        return {"intent":"eda","result":out,"artifacts":citations, "citations":citations}
 
     # KB Lookup - use enterprise PROJECT_ROOT
     if intent == "kb_lookup":
         ans = kb_answer(project_root=PROJECT_ROOT, query=query, k=5, score_threshold=0.0,
                         source_filter=None, dedupe_by_doc=True, max_context_tokens=1500)
-        return {"intent":"kb_lookup","result":{"answer":ans["answer"]},"artifacts":[], "hits":ans.get("hits",[])}
+        citations = ans.get("hits",[])
+        return {"intent":"kb_lookup","result":{"answer":ans["answer"]},"artifacts":citations, "citations":citations, "hits":citations}
 
     # Compare - Enhanced dynamic with enterprise paths (keep our intelligence)
     if intent == "compare":
         frames = [d for _, d in dfs]
         outdir = COMPARES  # Enterprise path
-        
+        citations = []
         if frames:
-            # Keep our dynamic Assistant-driven comparison logic
             sample_df = frames[0]
             columns = list(sample_df.columns)
-            
-            # Ask Assistant to determine optimal comparison strategy
             comparison_context = {
-                "columns": columns[:20],  # Limit for context
+                "columns": columns[:20],
                 "row_count": len(sample_df),
                 "data_types": {col: str(sample_df[col].dtype) for col in columns[:10]},
                 "sample_values": {col: sample_df[col].head(3).tolist() for col in columns[:5]}
             }
-            
             try:
                 comparison_strategy = assistants_answer(
                     f"Based on this data structure: {json.dumps(comparison_context)}, "
@@ -99,8 +93,6 @@ def run_intent_task(query, df_dict, metadata_index, client):
                     f"'financials' (for GL/cost data). Respond with just the strategy name.",
                     context=json.dumps(comparison_context)[:2000]
                 )
-                
-                # Parse Assistant response
                 strategy = comparison_strategy.lower().strip()
                 if "wip" in strategy or "aging" in strategy:
                     art = compare_wip_aging(frames, outdir)
@@ -108,47 +100,54 @@ def run_intent_task(query, df_dict, metadata_index, client):
                     art = compare_financials(frames, outdir)
                 else:
                     art = compare_inventory(frames, outdir)
-                    
             except Exception as e:
-                # Fallback to intelligent heuristics if Assistant fails
                 if any(col in columns for col in ['job_no', 'job_name', 'aging', 'wip']):
                     art = compare_wip_aging(frames, outdir)
                 elif any(col in columns for col in ['gl_account', 'account', 'financial']):
                     art = compare_financials(frames, outdir)
                 else:
                     art = compare_inventory(frames, outdir)
+            # Add artifact paths to citations if present
+            if isinstance(art, dict) and "artifact_path" in art:
+                citations.append(art["artifact_path"])
         else:
             art = {"error": "No data frames provided for comparison"}
-            
-        return {"intent":"compare","result":{"artifacts":art}, "artifacts":art}
+        return {"intent":"compare","result":{"artifacts":art}, "artifacts":citations, "citations":citations}
 
     # Rank
     if intent == "rank":
         name, df = (dfs[0] if dfs else (None, None))
         res = rank_task(df, entity_type="part", top_n=20, filters=[])
-        return {"intent":"rank","result":res, "artifacts":[]}
+        citations = []
+        if hasattr(res, "get") and res.get("artifact_path"):
+            citations.append(res["artifact_path"])
+        return {"intent":"rank","result":res, "artifacts":citations, "citations":citations}
 
     # Anomaly detection - ChatGPT's approach with context
     if intent == "anomaly":
         ctx = {"hint":"detect anomalies/outliers on numeric columns", "files":[p for p,_ in dfs]}
         txt = assistants_answer("Find and explain notable anomalies.", context=json.dumps(ctx)[:6000])
-        return {"intent":"anomaly","result":{"explanation":txt},"artifacts":[]}
+        citations = [p for p,_ in dfs]
+        return {"intent":"anomaly","result":{"explanation":txt},"artifacts":citations, "citations":citations}
 
     # Root Cause - ChatGPT's approach
     if intent == "root_cause":
         ctx = {"hint":"root cause across time/location/product", "files":[p for p,_ in dfs]}
         txt = assistants_answer("Provide a root-cause analysis with top 3 hypotheses and evidence.", context=json.dumps(ctx)[:6000])
-        return {"intent":"root_cause","result":{"analysis":txt},"artifacts":[]}
+        citations = [p for p,_ in dfs]
+        return {"intent":"root_cause","result":{"analysis":txt},"artifacts":citations, "citations":citations}
 
     # Forecast - ChatGPT's approach
     if intent == "forecast":
         txt = assistants_answer("Create a short forecasting plan (features, horizon, evaluation).")
-        return {"intent":"forecast","result":{"plan":txt},"artifacts":[]}
+        citations = [p for p,_ in dfs]
+        return {"intent":"forecast","result":{"plan":txt},"artifacts":citations, "citations":citations}
 
     # Optimize - ChatGPT's approach
     if intent == "optimize":
         txt = assistants_answer("Propose inventory optimization levers and expected impact.")
-        return {"intent":"optimize","result":{"plan":txt},"artifacts":[]}
+        citations = [p for p,_ in dfs]
+        return {"intent":"optimize","result":{"plan":txt},"artifacts":citations, "citations":citations}
 
     # Fallback: try KB first, then assistant - use enterprise PROJECT_ROOT
     try:

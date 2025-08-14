@@ -139,12 +139,14 @@ def _render_answer_format(style: str) -> str:
     3) Findings — concise bullets with numbers and units.
     4) Recommendations — concrete next actions (who/what/when).
     5) Citations — data artifacts and KB sources used (paths/IDs).
+    6) Confidence — show confidence badge (High/Medium/Low) and abstention status if applicable.
     If low confidence: include a brief clarifying question.
 
     ALWAYS:
     - Use concrete dates and units.
     - State uncertainty and data gaps when relevant.
     - Provide Dropbox paths for any saved outputs you reference.
+    - If abstaining, clearly state why and what data is missing.
     """)
 
 
