@@ -1,3 +1,100 @@
+# --- Robust header detection (handles deep headers, no date assumption) ---
+
+# --- Imports for robust header detection ---
+import os
+import math
+import datetime as _dt
+from typing import List, Set, Optional, Dict, Any
+
+_SCAN_LIMIT = int(os.getenv("HEADER_SCAN_LIMIT", "150"))  # configurable
+
+_COMMON_HEADER_TOKENS: Set[str] = {
+    "part", "part no", "part number", "item", "sku", "description", "qty", "quantity",
+    "on hand", "average", "extended", "extended cost", "cost", "last used", "ytd",
+    "ytd usage", "last year", "last year usage", "uom", "warehouse", "location",
+    "plant", "date", "group", "family", "bin", "value", "amount", "price", "standard"
+}
+
+def _header_keywords(alias_map: Dict[str, List[str]]) -> Set[str]:
+    keys = set()
+    try:
+        for canon, alts in alias_map.items():
+            keys.add(str(canon).lower().strip().replace("_", " "))
+            for a in (alts or []):
+                keys.add(str(a).lower().strip())
+    except Exception:
+        pass
+    return keys | _COMMON_HEADER_TOKENS
+
+def _is_number_like(x: Any) -> bool:
+    s = str(x).strip()
+    if not s:
+        return False
+    s2 = s.replace(",", "")
+    try:
+        float(s2)
+        return True
+    except Exception:
+        return False
+
+def _token_len_avg(vals: List[str]) -> float:
+    toks = [len(str(v).strip()) for v in vals if str(v).strip()]
+    return (sum(toks) / len(toks)) if toks else 0.0
+
+def _row_signature(cells: List[Any]) -> Dict[str, Any]:
+    vals = [c for c in cells if c is not None and str(c).strip() != ""]
+    lowered = [str(v).strip().lower() for v in vals]
+    n = len(cells) if len(cells) > 0 else 1
+    return {
+        "nonempty_ratio": len(vals) / n,
+        "string_ratio": sum(not _is_number_like(v) for v in vals) / max(1, len(vals)),
+        "numeric_ratio": sum(_is_number_like(v) for v in vals) / max(1, len(vals)),
+        "unique_ratio": len(set(lowered)) / max(1, len(lowered)),
+        "avg_token_len": _token_len_avg(vals),
+        "vals": vals, "lowered": lowered
+    }
+
+def _window_data_signal(df: Any, start_row: int, width: int = 3) -> float:
+    rows = []
+    for k in range(1, width+1):
+        if start_row + k < len(df):
+            rows.append(_row_signature(df.iloc[start_row + k].tolist()))
+    if not rows:
+        return 0.0
+    avg_num = sum(r["numeric_ratio"] for r in rows) / len(rows)
+    avg_nonempty = sum(r["nonempty_ratio"] for r in rows) / len(rows)
+    return 0.6 * avg_num + 0.4 * avg_nonempty
+
+def _row_score_for_header(df: Any, i: int, header_words: Set[str]) -> float:
+    sig = _row_signature(df.iloc[i].tolist())
+    if sig["nonempty_ratio"] < 0.3 or sig["avg_token_len"] < 3:
+        return 0.0
+    base = (
+        0.35 * sig["nonempty_ratio"] +
+        0.25 * sig["unique_ratio"] +
+        0.20 * sig["string_ratio"] +
+        0.05 * (1.0 - sig["numeric_ratio"])
+    )
+    hits = sum(1 for v in sig["lowered"] for w in header_words if w == v or (len(w) > 3 and w in v))
+    hit_ratio = hits / max(1, len(sig["lowered"]))
+    base += 0.15 * hit_ratio
+    if len(sig["lowered"]) >= 3:
+        most_common_freq = max(sig["lowered"].count(x) for x in set(sig["lowered"]))
+        rep_ratio = most_common_freq / len(sig["lowered"])
+        base -= 0.15 * max(0.0, rep_ratio - 0.34)
+    data_signal = _window_data_signal(df, i, width=3)
+    base += 0.20 * data_signal
+    return max(0.0, base)
+
+def detect_header_row(df: Any, alias_map: Dict[str, List[str]]) -> Optional[int]:
+    header_words = _header_keywords(alias_map)
+    max_scan = min(_SCAN_LIMIT, len(df))
+    best_idx, best_score = None, 0.0
+    for i in range(max_scan):
+        s = _row_score_for_header(df, i, header_words)
+        if s > best_score:
+            best_idx, best_score = i, s
+    return best_idx if (best_idx is not None and best_score >= 0.58) else None
 # ----------------------------
 # Header detection (robust, no hardcoding)
 # ----------------------------
@@ -222,7 +319,7 @@ def load_excel_file(file_path: str, file_type: Optional[str] = None) -> List[Dic
                 df_valid.columns = [str(c).strip() for c in df.iloc[header_row_idx].tolist()]
         else:
             # fallback to first non-empty row as header if present
-            first_nonempty = next((i for i in range(min(50, len(df)))
+            first_nonempty = next((i for i in range(min(_SCAN_LIMIT, len(df)))
                                    if any(str(x).strip() for x in df.iloc[i].tolist())), None)
             if first_nonempty is not None:
                 try:
