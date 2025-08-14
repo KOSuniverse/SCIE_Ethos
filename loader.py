@@ -1,3 +1,68 @@
+# ----------------------------
+# Header detection (robust, no hardcoding)
+# ----------------------------
+from typing import Tuple, Set
+
+_COMMON_HEADER_TOKENS: Set[str] = {
+    "part", "part no", "part number", "item", "sku", "description", "qty", "quantity",
+    "on hand", "average", "extended", "cost", "last used", "ytd", "last year",
+    "uom", "warehouse", "location", "plant", "date", "group", "family", "bin"
+}
+
+def _header_keywords(alias_map: dict) -> Set[str]:
+    keys = set()
+    try:
+        # alias_map like {"part_number": ["Part No", "Item", ...], ...}
+        for canon, alts in alias_map.items():
+            keys.add(str(canon).lower().strip().replace("_", " "))
+            for a in (alts or []):
+                keys.add(str(a).lower().strip())
+    except Exception:
+        pass
+    return keys | _COMMON_HEADER_TOKENS
+
+def _row_score_for_header(cells: list, next_row: list, header_words: Set[str]) -> float:
+    vals = [c for c in cells if c is not None and str(c).strip() != ""]
+    total = len(cells)
+    if total == 0:
+        return 0.0
+
+    # basic ratios
+    nonempty = len(vals) / total
+    unique   = len(set(map(lambda x: str(x).strip().lower(), vals))) / max(1, len(vals))
+    is_str   = sum(not str(v).replace(".", "", 1).isdigit() for v in vals) / max(1, len(vals))
+
+    # keyword hits
+    lowered = [str(v).strip().lower() for v in vals]
+    hits = sum(1 for v in lowered for w in header_words if w == v or (len(w) > 3 and w in v))
+    hit_ratio = hits / max(1, len(vals))
+
+    # type switch: next row should be more numeric than header
+    next_vals = [n for n in next_row if n is not None and str(n).strip() != ""]
+    next_is_num = sum(str(v).replace(".", "", 1).isdigit() for v in next_vals) / max(1, len(next_vals))
+    type_switch = max(0.0, next_is_num - (1 - is_str))  # reward if next row is more numeric
+
+    # penalize single-title rows like "Dec-22"
+    if len(vals) <= max(2, total * 0.2):
+        return 0.0
+
+    # weighted score
+    return 0.35*nonempty + 0.25*unique + 0.2*is_str + 0.15*hit_ratio + 0.15*type_switch
+
+def detect_header_row(df: pd.DataFrame, alias_map: dict) -> int | None:
+    header_words = _header_keywords(alias_map)
+    max_scan = min(50, len(df))
+    best_idx, best_score = None, 0.0
+
+    for i in range(max_scan):
+        row = df.iloc[i].tolist()
+        nxt = df.iloc[i+1].tolist() if i+1 < len(df) else []
+        s = _row_score_for_header(row, nxt, header_words)
+        if s > best_score:
+            best_idx, best_score = i, s
+
+    # threshold: must be reasonably header-like
+    return best_idx if (best_idx is not None and best_score >= 0.55) else None
 import os
 import json
 import os
@@ -22,12 +87,12 @@ def _read_excel_all_sheets(file_path: str) -> Dict[str, pd.DataFrame]:
         if is_dbx:
             from dbx_utils import read_file_bytes  # your Dropbox helper
             file_bytes = read_file_bytes(file_path)
-            return pd.read_excel(io.BytesIO(file_bytes), sheet_name=None)
+            return pd.read_excel(io.BytesIO(file_bytes), sheet_name=None, header=None)
         else:
-            return pd.read_excel(file_path, sheet_name=None)
+            return pd.read_excel(file_path, sheet_name=None, header=None)
     except ImportError:
         # If dbx_utils is not available, try local read
-        return pd.read_excel(file_path, sheet_name=None)
+        return pd.read_excel(file_path, sheet_name=None, header=None)
 
 def _read_excel_single_sheet(file_path: str, sheet_name: str, header_row_idx: Optional[int]) -> pd.DataFrame:
     """
@@ -146,32 +211,34 @@ def load_excel_file(file_path: str, file_type: Optional[str] = None) -> List[Dic
 
     data: List[Dict] = []
     for sheet_name, df in sheets.items():
-        header_row_idx = None
+        header_row_idx = detect_header_row(df, alias_map)
 
-        # Scan first up to 30 rows for likely header
-        scan_rows = min(30, len(df))
-        for i in range(scan_rows):
-            row_vals = df.iloc[i].tolist()
-            # Use raw values (not str-casted) for better type signal
-            if is_likely_header(row_vals, df):
-                header_row_idx = i
-                break
-
-        # Reload with header if detected; else best-effort fixup
         if header_row_idx is not None:
             try:
                 df_valid = _read_excel_single_sheet(file_path, sheet_name, header_row_idx)
-                print(f"[loader] Detected header at row {header_row_idx+1} in '{filename}' -> sheet '{sheet_name}'")
-            except Exception as e:
-                print(f"[loader] Reload with header failed for '{sheet_name}': {e}")
-                # Fallback: promote detected row to columns
+            except Exception:
                 df_valid = df.iloc[header_row_idx + 1:].copy()
-                df_valid.columns = df.iloc[header_row_idx].astype(str).str.strip().tolist()
+                df_valid.columns = [str(c).strip() for c in df.iloc[header_row_idx].tolist()]
         else:
-            print(f"[loader] WARNING: No header detected in '{filename}' -> sheet '{sheet_name}'. Using raw frame.")
-            df_valid = df.copy()
+            # fallback to first non-empty row as header if present
+            first_nonempty = next((i for i in range(min(50, len(df)))
+                                   if any(str(x).strip() for x in df.iloc[i].tolist())), None)
+            if first_nonempty is not None:
+                try:
+                    df_valid = _read_excel_single_sheet(file_path, sheet_name, first_nonempty)
+                except Exception:
+                    df_valid = df.iloc[first_nonempty + 1:].copy()
+                    df_valid.columns = [str(c).strip() for c in df.iloc[first_nonempty].tolist()]
+            else:
+                df_valid = df.copy()
 
-        # Apply aliasing
+        # clean column names
+        df_valid.columns = [
+            None if str(c).lower().startswith("unnamed") else str(c).strip()
+            for c in df_valid.columns]
+        df_valid = df_valid.loc[:, [c for c in df_valid.columns if c]]
+
+        # apply aliases
         df_valid = _apply_aliases(df_valid, alias_map)
 
         record = {
