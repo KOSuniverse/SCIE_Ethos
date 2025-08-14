@@ -244,6 +244,7 @@ def _sanitize_columns(cols: List[Any]) -> List[str]:
 # ----------------------------
 # Public API
 # ----------------------------
+print("[loader] USING:", __file__)
 
 def load_excel_file(file_path: str, file_type: Optional[str] = None) -> List[Dict[str, Any]]:
     """
