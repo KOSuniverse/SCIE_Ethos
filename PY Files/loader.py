@@ -244,11 +244,9 @@ def _sanitize_columns(cols: List[Any]) -> List[str]:
 # ----------------------------
 # Public API
 # ----------------------------
-print("[loader] USING:", __file__)
 
 def load_excel_file(file_path: str, file_type: Optional[str] = None) -> List[Dict[str, Any]]:
-    """
-    Loads and tags sheets from an Excel file.
+    """Loads and tags sheets from an Excel file.
 
     Returns a list of records:
       {
@@ -261,6 +259,8 @@ def load_excel_file(file_path: str, file_type: Optional[str] = None) -> List[Dic
         'alias_map_used': dict
       }
     """
+    print("[loader] USING:", __file__, "->", file_path, flush=True)
+    
     filename = os.path.basename(file_path)
     sheets = _read_excel_all_sheets(file_path)       # header=None (raw)
     period = _detect_period_from_filename(filename)
