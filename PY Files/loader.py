@@ -19,12 +19,12 @@ def load_excel_file(file_path, file_type=None):
             - 'file_type': passed type or inferred
     """
     filename = os.path.basename(file_path)
-    
+
     # Use Dropbox API for cloud paths
     try:
         from dbx_utils import read_file_bytes
         import io
-        
+
         # Check if this is a Dropbox path
         if file_path.startswith('/'):
             # Use Dropbox API to read the file
@@ -41,7 +41,6 @@ def load_excel_file(file_path, file_type=None):
     match = re.search(r"Q[1-4]", filename.upper())
     period = match.group(0) if match else "Unknown"
 
-    # --- Enterprise header detection ---
     # --- Dynamic header detection ---
     def is_likely_header(row, df):
         # Heuristic: mostly unique, mostly string, mostly non-empty
@@ -57,6 +56,7 @@ def load_excel_file(file_path, file_type=None):
             unique >= total * 0.5 and
             str_count >= total * 0.5
         )
+
     # --- Load alias map from Dropbox or local path ---
     alias_map = {}
     alias_path = os.getenv("ALIAS_PATH") or os.path.join(os.path.dirname(file_path), "global_column_aliases.json")
