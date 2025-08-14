@@ -1,6 +1,23 @@
-import os, json
+import os
+import json
 import re
 import pandas as pd
+
+
+def is_likely_header(row, df):
+    # Heuristic: mostly unique, mostly string, mostly non-empty
+    non_empty = [v for v in row if v and str(v).strip()]
+    unique = len(set(non_empty))
+    str_count = sum(isinstance(v, str) and not v.isdigit() for v in non_empty)
+    # Compare to total columns
+    total = len(row)
+    # At least half non-empty, half unique, half string
+    return (
+        total > 0 and
+        len(non_empty) >= total * 0.5 and
+        unique >= total * 0.5 and
+        str_count >= total * 0.5
+    )
 
 def load_excel_file(file_path, file_type=None):
     """
@@ -19,12 +36,11 @@ def load_excel_file(file_path, file_type=None):
             - 'file_type': passed type or inferred
     """
     filename = os.path.basename(file_path)
-    
+
     # Use Dropbox API for cloud paths
     try:
         from dbx_utils import read_file_bytes
         import io
-        
         # Check if this is a Dropbox path
         if file_path.startswith('/'):
             # Use Dropbox API to read the file
@@ -41,22 +57,6 @@ def load_excel_file(file_path, file_type=None):
     match = re.search(r"Q[1-4]", filename.upper())
     period = match.group(0) if match else "Unknown"
 
-    # --- Enterprise header detection ---
-        # --- Dynamic header detection ---
-        def is_likely_header(row, df):
-            # Heuristic: mostly unique, mostly string, mostly non-empty
-            non_empty = [v for v in row if v and str(v).strip()]
-            unique = len(set(non_empty))
-            str_count = sum(isinstance(v, str) and not v.isdigit() for v in non_empty)
-            # Compare to total columns
-            total = len(row)
-            # At least half non-empty, half unique, half string
-            return (
-                total > 0 and
-                len(non_empty) >= total * 0.5 and
-                unique >= total * 0.5 and
-                str_count >= total * 0.5
-            )
     # --- Load alias map from Dropbox or local path ---
     alias_map = {}
     alias_path = os.getenv("ALIAS_PATH") or os.path.join(os.path.dirname(file_path), "global_column_aliases.json")
@@ -79,7 +79,7 @@ def load_excel_file(file_path, file_type=None):
         header_row_idx = None
         for i in range(min(30, len(df))):
             row = df.iloc[i].astype(str).str.strip().tolist()
-                if is_likely_header(row, df):
+            if is_likely_header(row, df):
                 header_row_idx = i
                 break
         if header_row_idx is not None:
