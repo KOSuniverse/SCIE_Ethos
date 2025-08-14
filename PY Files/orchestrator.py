@@ -204,31 +204,56 @@ def answer_question(
     intent = intent_info["intent"]
     model_size = intent_info.get("model_size", "large" if intent in {"root_cause", "forecast"} else "small")
     model = "gpt-4o" if model_size == "large" else "gpt-4o-mini"
-    
+
     print(f"🧠 ORCHESTRATOR DEBUG: Intent={intent}, Model={model}, Confidence={intent_info.get('confidence')}")
 
     client = get_openai_client()
 
+    # --- Enterprise: harmonize columns using alias mapping and glossary ---
+    alias_map = None
+    glossary = None
+    try:
+        from column_alias import load_alias_group
+        import yaml
+        config_path = os.path.join(os.path.dirname(__file__), '../config/instructions_master.yaml')
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        alias_source = config.get('alias_source')
+        glossary = config.get('glossary_terms')
+        if alias_source:
+            alias_map = load_alias_group(alias_source)
+    except Exception as e:
+        print(f"[orchestrator] Alias/glossary load failed: {e}")
+        alias_map = None
+        glossary = None
+
+    # Inject alias and glossary info into prompt context
+    harmonization_context = ""
+    if alias_map:
+        harmonization_context += f"Column alias mapping in use: {list(alias_map.keys())}\n"
+    if glossary:
+        harmonization_context += f"Glossary terms: {glossary}\n"
+
     # 1) Assemble global context
     excel_ctx = _build_excel_context(cleansed_paths)   # files -> sheets (+types) (+columns)
     kb_ctx_preview = _kb_candidates(user_question)     # doc titles or brief refs
-    
+
     print(f"📊 ORCHESTRATOR DEBUG: Excel files found: {len(excel_ctx.get('files', []))}")
     print(f"📚 ORCHESTRATOR DEBUG: KB candidates: {len(kb_ctx_preview)}")
 
     # 2) Propose a plan with hard guardrails
     tools_catalog = _safe_tool_specs()
     print(f"🔧 ORCHESTRATOR DEBUG: Available tools: {list(tools_catalog.keys())}")
-    
+
     plan = _propose_tool_plan(
         client=client,
-        question=user_question,
+        question=user_question + "\n" + harmonization_context,
         tools=tools_catalog,
         excel_context=excel_ctx,
         kb_candidates=kb_ctx_preview,
         app_paths=app_paths,
     )
-    
+
     print(f"📋 ORCHESTRATOR DEBUG: Proposed plan has {len(plan)} steps")
     for i, step in enumerate(plan):
         print(f"   Step {i+1}: {step.get('tool', 'unknown')} - {step.get('purpose', 'no purpose')}")
@@ -294,7 +319,9 @@ def answer_question(
 
     # Output template: summary, evidence, analysis, actions, limits, confidence badge
     output = {
-        "final_text": final_text,
+        "final_text": str(final_text)
+            + (f"\n[Enterprise] Column alias mapping applied: {list(alias_map.keys())}" if alias_map else "")
+            + (f"\n[Enterprise] Glossary terms referenced: {glossary}" if glossary else ""),
         "intent_info": intent_info,
         "confidence": {
             "score": confidence_score,
@@ -328,6 +355,8 @@ def answer_question(
             "quantitative_context": quantitative_context,
             "execution_details": exec_result,
         },
+        "alias_map": alias_map,
+        "glossary_terms": glossary,
     }
 
     return output

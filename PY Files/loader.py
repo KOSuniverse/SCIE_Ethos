@@ -46,10 +46,26 @@ def load_excel_file(file_path, file_type=None):
         "Product Line", "Average", "Extended Cost", "Last Used", "YTD Usage", "Last Year Usage",
         "Quantity Allocated", "Cost Allocated", "Quantity Unallocated", "Cost Unallocated", "Group"
     ]
+    # --- Load alias map from Dropbox or local path ---
+    alias_map = {}
+    alias_path = os.getenv("ALIAS_PATH") or os.path.join(os.path.dirname(file_path), "global_column_aliases.json")
+    try:
+        from column_alias import load_alias_group, remap_columns, ai_enhanced_alias_builder
+        if os.path.exists(alias_path):
+            alias_map = load_alias_group(alias_path)
+        else:
+            # Try Dropbox if path starts with /
+            if file_path.startswith('/'):
+                from dbx_utils import read_file_bytes
+                alias_bytes = read_file_bytes(alias_path)
+                alias_map = json.loads(alias_bytes.decode('utf-8'))
+    except Exception as e:
+        print(f"[loader] Alias map load failed: {e}")
+        alias_map = {}
+
     data = []
     for sheet_name, df in sheets.items():
         header_row_idx = None
-        # Scan for header row: look for row where most columns match EXPECTED_COLS
         for i in range(min(30, len(df))):
             row = df.iloc[i].astype(str).str.strip().tolist()
             matches = sum(1 for col in EXPECTED_COLS if col in row)
@@ -57,9 +73,7 @@ def load_excel_file(file_path, file_type=None):
                 header_row_idx = i
                 break
         if header_row_idx is not None:
-            # Re-read sheet with correct header row
             try:
-                # Use pandas to reload with header at detected row
                 if file_path.startswith('/'):
                     from dbx_utils import read_file_bytes
                     import io
@@ -67,23 +81,36 @@ def load_excel_file(file_path, file_type=None):
                     df_valid = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet_name, header=header_row_idx)
                 else:
                     df_valid = pd.read_excel(file_path, sheet_name=sheet_name, header=header_row_idx)
-                # Log header detection
                 print(f"[loader] Detected header at row {header_row_idx+1} in sheet '{sheet_name}' of '{filename}'")
             except Exception as e:
                 print(f"[loader] Failed to reload sheet '{sheet_name}' with detected header: {e}")
                 df_valid = df.iloc[header_row_idx+1:].copy()
                 df_valid.columns = df.iloc[header_row_idx].tolist()
         else:
-            # Fallback: use as-is, but log warning
             print(f"[loader] WARNING: No header detected in sheet '{sheet_name}' of '{filename}'. Ingesting all rows.")
             df_valid = df.copy()
+
+        # --- Remap columns using alias map ---
+        try:
+            if alias_map:
+                df_valid = remap_columns(df_valid, alias_map)
+                print(f"[loader] Columns remapped for sheet '{sheet_name}' using alias map.")
+            # AI harmonization for unmapped columns
+            enhanced_aliases, alias_log = ai_enhanced_alias_builder(df_valid, sheet_type="unknown", existing_aliases=alias_map)
+            if enhanced_aliases:
+                df_valid = remap_columns(df_valid, enhanced_aliases)
+                print(f"[loader] AI-enhanced alias mapping applied for sheet '{sheet_name}'. Log: {alias_log}")
+        except Exception as e:
+            print(f"[loader] Column alias mapping failed for sheet '{sheet_name}': {e}")
+
         record = {
             'df': df_valid,
             'sheet_name': sheet_name,
             'source_file': filename,
             'period': period,
             'file_type': file_type,
-            'header_row': header_row_idx
+            'header_row': header_row_idx,
+            'alias_map_used': alias_map
         }
         data.append(record)
 
