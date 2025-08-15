@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import re
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Callable
 
 import pandas as pd
 
@@ -92,8 +92,8 @@ def run_ingest_pipeline(
     source: bytes | bytearray | str,
     filename: Optional[str],
     paths: Optional[Any],
-    reporter: Optional[callable] = None,
-) -> Tuple[Dict[str, pd.DataFrame], dict]:
+    reporter: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+) -> Tuple[Dict[str, Any], list]:
     """
     Thin wrapper around phase1_ingest.pipeline.run_pipeline.
     If reporter is provided, it will receive progress events.
@@ -953,5 +953,89 @@ def ingest_streamlit_path(xls_path: str) -> Dict[str, Any]:
         "sheets": list(cleaned_sheets.keys()),
         "meta_count": len(per_sheet_meta),
     }
+# =============================================================================
+# Streamlit stepper (5 steps) + helpers (append-only)
+# =============================================================================
+from typing import Any, Dict, Optional, Tuple
+import os
+
+def _streamlit_stepper_5():
+    """
+    'Step X of 5' progress UI driven by pipeline events.
+      1) Load workbook
+      2) Promote headers
+      3) Classify sheets
+      4) Clean & Save
+      5) EDA + Summaries + Rollups
+    """
+    try:
+        import streamlit as st
+    except Exception:
+        def _noop(ev, payload): 
+            pass
+        return _noop
+
+    TOTAL = 5
+    progress = st.progress(0.0)
+    status   = st.empty()
+    sub      = st.empty()
+
+    stages_done = {"load": False, "promote": False, "classify": False, "save": False, "eda_summary": False}
+    cur_step = 0
+
+    def _advance(label: str):
+        nonlocal cur_step
+        cur_step = min(cur_step + 1, TOTAL)
+        progress.progress(cur_step / TOTAL)
+        status.write(f"**Step {cur_step} of {TOTAL} — {label}**")
+
+    def reporter(ev: str, payload: Dict[str, Any]):
+        # show which sheet is currently processed
+        if "sheet" in payload and "i" in payload and "n" in payload:
+            sub.caption(f"Sheet {payload['i']}/{payload['n']}: {payload['sheet']}")
+
+        if ev == "start_file" and not stages_done["load"]:
+            stages_done["load"] = True
+            _advance("Load workbook")
+        elif ev == "promoted" and not stages_done["promote"]:
+            stages_done["promote"] = True
+            _advance("Promote headers")
+        elif ev == "classified" and not stages_done["classify"]:
+            stages_done["classify"] = True
+            _advance("Classify sheets")
+        elif ev == "saved" and not stages_done["save"]:
+            stages_done["save"] = True
+            _advance("Clean & Save")
+        elif (ev in ("eda_done", "summary_done", "file_done")) and not stages_done["eda_summary"]:
+            stages_done["eda_summary"] = True
+            _advance("EDA + Summaries + Rollups")
+
+    return reporter
+
+
+def ingest_streamlit_bytes_5(xls_bytes: bytes, filename: str):
+    """Use the 5-step reporter while ingesting an uploaded file."""
+    from phase1_ingest.pipeline import run_pipeline
+    reporter = _streamlit_stepper_5()
+    cleaned_sheets, per_sheet_meta = run_pipeline(
+        source=xls_bytes,
+        filename=filename,
+        reporter=reporter,
+        paths=None,
+    )
+    return cleaned_sheets, per_sheet_meta
+
+
+def ingest_streamlit_path_5(xls_path: str):
+    """Use the 5-step reporter while ingesting a stored path."""
+    from phase1_ingest.pipeline import run_pipeline
+    reporter = _streamlit_stepper_5()
+    cleaned_sheets, per_sheet_meta = run_pipeline(
+        source=xls_path,
+        filename=os.path.basename(xls_path),
+        reporter=reporter,
+        paths=None,
+    )
+    return cleaned_sheets, per_sheet_meta
 
 
