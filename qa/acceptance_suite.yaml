@@ -1,0 +1,60 @@
+tests:
+  - id: inv_us_aging_insights
+    ask: "Show US inventory by value and aging. Real insights."
+    expect: { citations: { country: "US", sheet_type_any: ["inventory","eo"] }, confidence_min: 0.70 }
+
+  - id: par_now_q2_2026_single
+    ask: "What Par do we need today and by Q2-2026 for SKU 12345 in Germany?"
+    expect: { includes: ["SS","ROP","Par","sensitivity"], citations: { country: "DE" }, confidence_min: 0.70 }
+
+  - id: intermittent_repair
+    ask: "Repair parts with intermittent demand—policy now and 6 months out."
+    expect: { includes: ["Croston","TSB","backtest"], confidence_min: 0.65 }
+
+  - id: portfolio_par_top_impact
+    ask: "Top 20 SKUs by $ impact from Par changes in Repair (DE)."
+    expect: { escalate: true, citations_required: true }
+
+  - id: decrement_timing
+    ask: "Which income stream has slowest decrement in Germany and why?"
+    expect: { includes: ["decrement method","days to decrement","$ tied up"] }
+
+  - id: wip_180d
+    ask: "WIP jobs >180 days with no movement—close, consume, or scrap?"
+    expect: { includes: ["job list","action","$ impact"] }
+
+  - id: capital_parts_no_use
+    ask: "Capital Parts with no consumption in 12 months—candidates and actions."
+    expect: { includes: ["transfer","liquidation","down-par"] }
+
+  - id: supplier_otd_eo
+    ask: "Suppliers with OTD <85% and high E&O—planning fixes."
+    expect: { includes: ["supplier table","policy change"] }
+
+  - id: duplicate_skus
+    ask: "Duplicate SKUs across ERPs—merge candidates & accounting impact."
+    expect: { includes: ["mapping","impact"] }
+
+  - id: policy_mismatch
+    ask: "Compare decrement timing Direct vs Refurbish by ERP—policy mismatch?"
+    expect: { citations_required: true }
+
+  - id: future_eo_risk
+    ask: "Will E&O get worse next quarter for Capital Parts?"
+    expect: { includes: ["at-risk list","$ exposure","mitigations"] }
+
+  - id: data_gap_lt
+    ask: "Compute Par for SKU 67890 (missing LT)."
+    expect: { must_show: ["Data Needed or assumption noted"] }
+
+  - id: audit_stats
+    ask: "Show abstain rate and low confidence rate last 30 days."
+    expect: { citations_from: ["s3 logs"], includes: ["what to ingest next"] }
+
+  - id: alias_failures
+    ask: "Which headers fail alias resolution most often?"
+    expect: { includes: ["update glossary recommendations"] }
+
+  - id: mixed_granularity
+    ask: "We have week vs month sheets—standardize plan."
+    expect: { includes: ["resampling approach","risks"] }

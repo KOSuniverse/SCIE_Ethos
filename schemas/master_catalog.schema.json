@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Master Catalog Entry",
+  "type": "object",
+  "required": [
+    "doc_id",
+    "logical_name",
+    "dropbox_path",
+    "sheet",
+    "tags",
+    "columns_canonical",
+    "row_count"
+  ],
+  "properties": {
+    "doc_id": {
+      "type": "string"
+    },
+    "logical_name": {
+      "type": "string"
+    },
+    "dropbox_path": {
+      "type": "string"
+    },
+    "sheet": {
+      "type": "string"
+    },
+    "file_hash": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "object"
+    },
+    "columns_canonical": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "columns_raw": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "row_count": {
+      "type": "integer"
+    },
+    "date_min": {
+      "type": "string",
+      "format": "date"
+    },
+    "date_max": {
+      "type": "string",
+      "format": "date"
+    },
+    "join_keys_found": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "join_score": {
+      "type": "number"
+    },
+    "split_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "lang_detected": {
+      "type": "string"
+    },
+    "eda_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "summary_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

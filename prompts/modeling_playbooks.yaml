@@ -1,0 +1,35 @@
+playbooks:
+  detect_intermittency:
+    signals: { zero_run_threshold: 3, cv_threshold: 1.1 }
+    choose_if_any: ["zero_run >= threshold","cv >= threshold"]
+    then_model: ["Croston","TSB","SBA"]
+
+  univariate_short_history:
+    min_periods: 26
+    prefer: ["ETS","robust_moving_average"]
+    notes: "Back off to conservative σ; widen PIs."
+
+  univariate_standard:
+    candidates: ["ETS","ARIMA"]
+    selection: "lowest MASE on validation; tie-break by sMAPE."
+
+  exogenous_available:
+    detect_cols: ["price","promo_flag","event","macro_index"]
+    models: ["ARIMAX","XGBoost/GBDT"]
+    caution: "Avoid if exogenous series shorter than demand history."
+
+  hierarchical:
+    rules:
+      - "If levels exist (SKU→family→plant), reconcile bottom-up by default."
+      - "If sparse at bottom, top-down proportional split."
+
+  policy_computation:
+    inputs: ["μ_d","σ_d","L","σ_L","z","R?"]
+    formulas:
+      SS: "z * sqrt(L*σ_d^2 + (μ_d^2)*σ_L^2)"
+      ROP: "μ_d * L + SS"
+      Par: "μ_d * (L + R) + SS"
+    outputs: ["SS","ROP","Par","sensitivity_grid"]
+    guardrails:
+      - "Convert units if demand cadence ≠ LT units."
+      - "Flag negative/zero demand; fallback to robust moving average."

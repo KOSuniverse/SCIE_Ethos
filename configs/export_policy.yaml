@@ -1,0 +1,3 @@
+primary: "dropbox"
+backup:  "s3"
+formats: ["xlsx","pdf","md","pptx","docx"]

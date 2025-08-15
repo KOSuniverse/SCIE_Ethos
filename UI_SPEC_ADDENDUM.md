@@ -1,0 +1,6 @@
+- Chat panel streams tokens; textbox clears on submit; conversation history sticky in sidebar.
+- Sources drawer lists clickable citations (Assistant file names → open).
+- Confidence badge shows High/Med/Low (from R/A/V/C).
+- Data Needed panel always rendered (collapsible).
+- Sidebar control: **Service Level** select {90,95,97.5,99} → maps to z-score and is logged with turn.
+- Exports: buttons for XLSX/PDF/MD/PPT/DOCX; save to Dropbox primary + S3 audit pack.

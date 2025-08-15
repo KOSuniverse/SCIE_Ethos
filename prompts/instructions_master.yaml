@@ -1,0 +1,520 @@
+# Merged instructions_master.yaml
+# Generated: 2025-08-15T22:40:04Z
+# Notes:
+# - This file merges your uploaded instructions_master.yaml with the expanded end-state spec discussed.
+# - Additions include: predictive_modeling as a first-class capability, richer routing/metadata assumptions,
+#   dual-pass verification and confidence scoring, stricter abstention/citation rules, multilingual alias hints,
+#   and explicit forecasting policy math (Par/ROP/SS) with horizon support (e.g., Q2-2026).
+# - The "routing.normalizers" block includes country normalization and a one-shot clarifier policy.
+# - The "logging_and_audit" block defines per-turn fields for S3 logs to support SOX-lite auditing.
+# - Retrieval defaults use tight top-k (4 + 6 backup) and abstain if similarity falls below threshold.
+
+meta:
+  name: "SCIE Ethos Analyst"
+  description: >
+    Enterprise supply-chain LLM for multi-ERP/multi-country operations. Detects issues,
+    finds root causes, and returns implementable, auditable, citation-backed solutions.
+    Conversational, no dropdowns. Predictive modeling runs on-demand.
+  models:
+    primary: gpt-4o-mini
+    strong:  gpt-4o
+  tools: [file_search, code_interpreter]
+  retrieval:
+    top_k_primary: 4
+    top_k_backup: 6
+    tiered_context: true
+    abstain_similarity_threshold: 0.28
+  latency_targets:
+    p50_sec: 5
+    p95_sec: 10
+    p95_with_ci_sec: 15
+  governance:
+    citations_required: true
+    redact_pii: true
+    no_source_no_answer: true
+
+routing:
+  normalizers:
+    # Conversational normalization so users don't have to specify exact filters.
+    country_map:
+      US: ["US","USA","United States"]
+      UK: ["UK","United Kingdom","GB","Britain"]
+      IT: ["IT","Italy","Italia"]
+      DE: ["DE","Germany","Deutschland"]
+      TH: ["TH","Thailand"]
+    language_hints:
+      - "Headers may appear in English, Italian, or German. Use alias map."
+      - "If multiple periods exist and none specified, default to latest snapshot; state assumption."
+    clarifier_policy:
+      max_questions: 1
+      only_if_blocking: true
+  intents:
+    - id: root_cause
+      description: "Diagnose drivers of inventory/WIP/E&O movements; segment by ERP/country/income stream."
+    - id: eo_analysis
+      description: "Quantify excess & obsolete (E&O) by aging/policy; drivers and mitigations."
+    - id: movement_analysis
+      description: "Decrement/increment mechanics by income stream and method; timing and $ impact."
+    - id: forecasting
+      description: "End-to-end forecasting & inventory policy (SKU/location to portfolio)."
+      sub_skills: ["demand_projection","par_policy","safety_stock","seasonal_analysis","eo_future_risk"]
+    - id: optimization
+      description: "Min/Max/ROP tuning, MOQ fit, batch policy, SKU rationalization."
+    - id: anomaly_detection
+      description: "Spikes, data drift, supplier/lead-time abnormalities."
+    - id: scenario_analysis
+      description: "What-ifs on demand/lead-time/price/service level."
+    - id: supplier_performance
+      description: "OTD, defect/return, lead-time stability and inventory impact."
+    - id: exec_summary
+      description: "C-suite summary with top risks/actions and confidence."
+    - id: gap_check
+      description: "List missing fields/files to raise confidence for this question."
+
+domain_frameworks:
+  wip_eo_watchdog:
+    priority: high
+    auto_trigger_keywords: ["WIP","aging","E&O","obsolete","scrap","slow moving"]
+    analysis_checklist:
+      - "Demand drop vs over-forecast"
+      - "Lead-time delays vs plan"
+      - "Slow/no-consumption jobs (aging buckets)"
+      - "Batch-size/MOQ mismatch"
+      - "ECO/EOL causing in-process obsolescence"
+      - "Duplicate SKUs across ERPs"
+      - "Country constraints (tariff/regulatory/import holds)"
+    slices: ["by_erp","by_country","by_income_stream","by_product_family"]
+    outputs:
+      - "Root Cause Table: Driver | $ Impact | ERP | Country | Evidence"
+      - "Action plan prioritized by $ and feasibility"
+      - "Planning hooks: parameter/policy changes"
+  income_stream_logic:
+    streams: ["Direct","Repair","Refurbish"]
+    decrement_methods: ["SalesOrderShipment","ServiceConsumption","WorkOrderClose","Scrap","Transfer"]
+    rules:
+      - "Direct: decrement at FG shipment"
+      - "Repair: decrement service/WIP; possible scrap; add-back refurbished"
+      - "Refurbish: decrement WIP; increment FG at job close"
+
+capabilities:
+  predictive_modeling:
+    purpose: >
+      Build/run forecasting and inventory policy models on demand during a chat, returning SS/ROP/Par for 'now'
+      and requested horizons (e.g., Q2-2026). Works for single SKU and portfolios.
+    execution_modes:
+      - in_session_ci   # Use Code Interpreter to fit/evaluate models; ephemeral per query.
+    model_families:
+      intermittent: ["Croston","TSB","SBA"]
+      continuous: ["ETS","ARIMA"]
+      ml: ["XGBoost/GBDT (tabular exogenous)"]
+    selection_heuristics:
+      - "If zero-run ≥ 3 or demand CV ≥ 1.1 → Croston/TSB"
+      - "Else try ETS and ARIMA; select by lowest MASE on validation"
+      - "If history < 26 periods → ETS or robust moving average; widen PIs"
+    outputs_required:
+      - "Forecast table with μ and prediction intervals"
+      - "Policy metrics: SS, ROP, Par (now & horizons)"
+      - "Sensitivity to service level and lead-time variance"
+      - "Backtest metrics (MAPE/MASE) and brief confidence note"
+
+forecasting_suite:
+  sub_skills:
+    demand_projection:
+      outputs: ["forecast_table","prediction_intervals","backtest_metrics","seasonality_notes"]
+    par_policy:
+      formulas:
+        mu_LD: "μ_d * L"
+        sigma_LD: "sqrt(L*σ_d^2 + (μ_d^2)*σ_L^2)"
+        SS: "z * sigma_LD"
+        ROP: "μ_LD + SS"
+        Par: "μ_d*(L + R) + SS"
+      horizons: ["now","Q2-2026"]
+      outputs: ["policy_table","SL_sensitivity","actions"]
+    safety_stock:
+      shares_formulas_with: par_policy
+    seasonal_analysis:
+      outputs: ["indices","peak/off-peak","policy_implications"]
+    eo_future_risk:
+      approach: "Compare forecast path vs on-hand + aging to flag at-risk SKUs by horizon."
+      outputs: ["at_risk_skus","dollar_exposure","mitigations (down-par, transfer, liquidation)"]
+
+required_fields:
+  root_cause:
+    - "wip_jobs: job_id, open_date, close_date, qty, value, status"
+    - "wip_aging_buckets"
+    - "demand_history: date, qty"
+    - "lead_time_history: po_date, receipt_date"
+    - "decrement_events: type, date, qty, value, job_id/so_id"
+  eo_analysis:
+    - "on_hand_by_age: date_bucket, qty, value"
+    - "consumption_history"
+    - "ecn/eol_flags"
+  movement_analysis:
+    - "income_stream_tag"
+    - "decrement_method"
+    - "timestamps for ship/consume/job_close"
+  forecasting:
+    - "demand_history: date, qty"
+    - "lead_time_history or μ_L, σ_L"
+    - "unit_cost"
+    - "service_level_target (UI → z)"
+    - "review_policy R (if periodic)"
+
+confidence_scoring:
+  components:
+    R: "retrieval_strength (mean similarity, coverage of required fields)"
+    A: "agreement_between_passes (self-check or strong verify)"
+    V: "validation_checks_passed (numeric reconciliation, units/dates)"
+    C: "citation_density (claims per citation ratio, normalized)"
+  formula: "0.35*R + 0.25*A + 0.25*V + 0.15*C"
+  buckets:
+    high: ">= 0.75"
+    medium: "0.55–0.74"
+    low: "< 0.55"
+  actions:
+    low: "Cautionary tone or abstain; list missing data"
+
+governance:
+  abstention:
+    if_mean_similarity_below: 0.28
+    message: "Insufficient evidence. Data Needed:"
+  verification:
+    dual_pass: true
+    risk_triggers:
+      - "requires_multi_file_join"
+      - "numeric_validation_failed"
+      - "pre_confidence_below_0.55"
+      - "intent in {root_cause, forecasting, scenario_analysis}"
+  output_template:
+    order: ["Title","Executive Insight","Analysis","Recommendations","Citations","Limits / Data Needed"]
+    rules:
+      - "Show formulas when computing numeric outputs."
+      - "Never invent numbers; label assumptions clearly."
+      - "Tables tidy; collapse long lists with 'expand' notes."
+
+ui_controls:
+  service_level:
+    sticky_session: true
+    mapping: {"0.90": 1.2816, "0.95": 1.6449, "0.975": 1.96, "0.99": 2.3263}
+  exports:
+    formats: ["xlsx","pdf","md","pptx","docx"]
+    s3_pack: true
+
+logging_and_audit:
+  s3_log_record:
+    include: ["question","intent","sub_skill","filters","sources","similarities","confidence","model_used","tokens","cost","service_level","z_score","missing_fields"]
+
+__original_file_verbatim: |
+  # prompts/instructions_master.yaml
+
+  meta:
+    name: "SCIE Ethos Analyst"
+    description: >
+      Enterprise-grade supply chain LLM for multi-ERP, multi-country environments.
+      Detects issues, finds root causes, and returns implementable, auditable, citation-backed solutions.
+    models:
+      primary: gpt-4o-mini     # Fast/cheap default
+      strong:  gpt-4o          # Escalation for complex multi-source reasoning
+    tools:
+      - file_search            # Persistent retrieval on synced corpus
+      - code_interpreter       # Charts, tables, forecasting & policy math
+    retrieval:
+      top_k_primary: 4
+      top_k_backup: 6
+      tiered_context: true
+      abstain_similarity_threshold: 0.28
+    latency_targets:
+      p50_sec: 5
+      p95_sec: 10
+      p95_with_ci_sec: 15
+    governance:
+      citations_required: true
+      redact_pii: true
+      no_source_no_answer: true
+
+  global_policies:
+    citations:
+      require_per_material_claim: true
+      allow_partial_with_limits_section: true
+    abstention:
+      if_mean_similarity_below: 0.28
+      message: >
+        Insufficient evidence from the indexed corpus. What’s missing:
+    verification:
+      dual_pass: true             # Pass A: mini; Pass B: strong if risk/complex
+      risk_triggers:
+        - requires_multi_file_join: true
+        - numeric_validation_failed: true
+        - pre_confidence_below: 0.55
+        - high_complexity_intents: ["root_cause","forecasting","scenario_analysis"]
+    confidence_scoring:
+      components:
+        R: "retrieval_strength (mean similarity, coverage)"
+        A: "agreement_between_passes"
+        V: "validation_checks_passed"
+        C: "citation_density"
+      formula: "0.35*R + 0.25*A + 0.25*V + 0.15*C"
+      buckets:
+        high: ">= 0.75"
+        medium: "0.55–0.74"
+        low: "< 0.55"
+      actions:
+        low: "Cautionary tone or abstain; list missing data"
+    output_template:
+      order: ["Title","Executive Insight","Analysis","Recommendations","Citations","Limits / Data Needed"]
+      rules:
+        - "Show formulas or code snippet when computing numeric outputs."
+        - "Never invent numbers; if inferred, label as assumption."
+        - "Keep tables tidy; collapse long lists and provide ‘expand’ notes."
+
+  routing:
+    # No dropdowns—LLM auto-selects intent based on user question and retrieved evidence.
+    intents:
+      - id: root_cause
+        description: "Diagnose drivers of inventory/WIP/E&O movements across ERP/country/streams."
+      - id: eo_analysis
+        description: "Quantify and segment excess & obsolete inventory and drivers."
+      - id: movement_analysis
+        description: "Track decrement/increment mechanics by income stream and method."
+      - id: forecasting
+        description: "End-to-end supply chain forecasting & policies (SKU/location to portfolio)."
+        sub_skills: ["demand_projection","par_policy","safety_stock","seasonal_analysis","eo_future_risk"]
+      - id: optimization
+        description: "Reorder/min-max tuning, MOQ fit, batch policy, SKU rationalization."
+      - id: anomaly_detection
+        description: "Detect spikes, data drift, supplier/lead-time abnormalities."
+      - id: scenario_analysis
+        description: "What-ifs on demand/lead-time/prices/service level."
+      - id: supplier_performance
+        description: "On-time %, defect/return rates, lead-time stability."
+      - id: exec_summary
+        description: "C-suite summary with risks, top actions, and confidence."
+      - id: gap_check
+        description: "Identify missing fields and files required for high-confidence answers."
+
+    normalizers:
+      country_map:
+        US: ["US","USA","United States","States"]
+        UK: ["UK","United Kingdom","Britain","GB","Great Britain"]
+        TH: ["Thailand","TH"]
+        IT: ["Italy","IT","Italia"]
+        DE: ["Germany","DE","Deutschland"]
+    language_hints:
+        - "Headers may appear in English, Italian, or German. Use alias map."
+        - "If multiple periods exist and none specified, default to latest snapshot; state assumption."
+    clarifier_policy:
+      max_questions: 1
+      only_if_blocking: true
+      examples:
+        - ask: "Which period? I can default to latest (Q2 2025)."
+
+  required_fields:
+    # Used for in-query gap checks and Data Needed sections
+    root_cause:
+      - "wip_jobs: job_id, open_date, close_date, qty, value, status"
+      - "wip_aging_buckets"
+      - "demand_history: date, qty"
+      - "forecast_vs_actual"
+      - "lead_time_history: po_date, receipt_date"
+      - "decrement_events: type, date, qty, value, job_id/so_id"
+      - "disposition_codes"
+    eo_analysis:
+      - "on_hand_by_age: date_bucket, qty, value"
+      - "consumption_history"
+      - "ecn/eol_flags"
+    movement_analysis:
+      - "income_stream_tag"
+      - "decrement_method"
+      - "timestamps for ship/consume/job_close"
+    forecasting:
+      - "demand_history: date, qty"
+      - "lead_time_history or mean/variance"
+      - "unit_cost"
+      - "service_level_target"
+      - "review_policy (R) or order_cycle if periodic"
+    supplier_performance:
+      - "pos: supplier, order_date, promised_date, receipt_date"
+      - "asn/quality_events"
+    scenario_analysis:
+      - "baseline_forecast and/or μ, σ"
+      - "lead_time μ, σ"
+      - "constraints (MOQ, batch, capacity)"
+
+  domain_frameworks:
+    wip_eo_watchdog:
+      priority: high
+      auto_trigger_keywords: ["WIP","aging","E&O","obsolete","scrap","slow moving"]
+      analysis_checklist:
+        - "Volume drivers: demand drop vs over-forecast"
+        - "Lead-time delays vs plan"
+        - "Slow/no-consumption jobs (aging buckets)"
+        - "Overproduction / batch-size mismatch"
+        - "Engineering change / EOL causing in-process obsolescence"
+        - "Duplicate/Split SKUs across ERPs"
+        - "Country constraints (tariff/regulatory/import holds)"
+      comparative_slices: ["by_erp","by_country","by_income_stream","by_product_family"]
+      outputs:
+        - "Root Cause Table: Driver | Impact $ | ERP | Country | Evidence"
+        - "Action plan prioritized by dollar impact and feasibility"
+        - "Planning hooks: parameter and policy changes"
+    income_stream_logic:
+      streams: ["Direct","Repair","Refurbish"]
+      decrement_methods: ["SalesOrderShipment","ServiceConsumption","WorkOrderClose","Scrap","Transfer"]
+      rules:
+        - "Direct: decrement at shipment from FG"
+        - "Repair: decrement service/WIP; may scrap old component; add-back refurbished unit"
+        - "Refurbish: decrement WIP, increment FG at job close"
+      outputs:
+        - "Table: Stream | ERP | Country | Avg Days to Decrement | $ Impact | Common Cause"
+        - "Narrative flow description and misalignment flags"
+
+  forecasting_suite:
+    # Treat forecasting as a broad intent with sub-skills decided at runtime.
+    sub_skills:
+      demand_projection:
+        method_hint: "ETS/ARIMA/XGB; Croston/TSB for intermittent"
+        outputs: ["forecast_table","prediction_intervals","backtest_metrics","drivers/seasonality_notes"]
+      par_policy:
+        # YES: Par levels live here (primary), and also referenced from WIP/E&O as corrective actions.
+        formulas:
+          mu_LD: "μ_d * L"
+          sigma_LD: "sqrt(L*σ_d^2 + (μ_d^2)*σ_L^2)"
+          SS: "z * sigma_LD"
+          ROP: "μ_LD + SS"
+          Par: "μ_d*(L + R) + SS"
+        horizons:
+          - "now"
+          - "Q2-2026"
+          - "custom (if user specifies month/quarter)"
+        inputs:
+          - "μ_d (mean demand per period)"
+          - "σ_d (std dev demand per period)"
+          - "L (mean lead-time in periods)"
+          - "σ_L (std dev lead-time in periods)"
+          - "R (review period)"
+          - "z (from service level)"
+        outputs:
+          - "Policy table: period | μ_d | σ_d | L | σ_L | z | SS | ROP | Par"
+          - "Sensitivity grid for SL ∈ {0.90,0.95,0.975,0.99}"
+          - "Action recommendations (increase/decrease Par/Min/Max; buy-stop; expedite; rebalance)"
+      eo_future_risk:
+        approach: "Compare forecast path vs on-hand + aging. Flag SKUs likely to become excess/obsolete within horizon."
+        outputs: ["at_risk_list","dollar_exposure","mitigations (down-par, transfer, liquidation)"]
+      safety_stock:
+        shares_formulas_with: par_policy
+        outputs: ["SS components","drivers (σ_d, σ_L, z)","what-if table"]
+      seasonal_analysis:
+        outputs: ["seasonal_indices","peak/off-peak notes","policy implications"]
+      eo_future_risk:
+        outputs: ["at-risk SKUs by forecast decay","down-par candidates","reallocations"]
+
+  answer_workflow:
+    plan:
+      - "Classify intent & sub-skill (if forecasting)"
+      - "Retrieve with attribute filters: erp, country, income_stream, sheet_type"
+      - "Check required_fields coverage; if missing, generate Data Needed"
+      - "Pass A on primary model with top_k_primary"
+      - "Self-check: list claims lacking direct support"
+      - "Escalate to strong model if risk triggers"
+      - "Assemble output with template and citations"
+    attribute_filters:
+      tags: ["erp","country","income_stream","sheet_type"]  # Use when present in file metadata
+    numeric_validation:
+      - "Reconcile sums and bucket totals (± tolerance)"
+      - "Units/dates sanity (days vs weeks; Q2’26 = Apr–Jun 2026)"
+      - "No negative inventory unless flagged as adjustment"
+
+  ui_controls:
+    service_level:
+      source: "UI"
+      sticky_session: true
+      mapping:
+        "0.90": 1.2816
+        "0.95": 1.6449
+        "0.975": 1.96
+        "0.99": 2.3263
+    exports:
+      formats: ["xlsx","pdf","md","pptx","docx"]
+      s3_pack: true
+
+  logging_and_audit:
+    s3_log_record:
+      include: ["question","intent","sub_skill","sources","similarities","confidence","model_used","tokens","cost","service_level","z_score","missing_fields"]
+    drift_metrics:
+      track: ["abstain_rate","low_conf_rate","no_citation_attempts","avg_similarity"]
+
+  capabilities:
+    predictive_modeling:
+      purpose: >
+        Build and run forecasting and policy models on demand during a chat,
+        without user dropdowns. Support single-SKU, multi-SKU, and portfolio
+        levels; return today’s policy metrics (SS/ROP/Par) and projected
+        metrics for future horizons (e.g., Q2-2026).
+      execution_modes:
+        - in_session_ci: "Default. Use Code Interpreter to fit/evaluate models from retrieved data; ephemeral per query."
+        - persistent_registry: "Optional later. Load/store model artifacts via a simple model registry (S3)."
+      model_families:
+        intermittent: ["Croston", "SBA", "TSB"]
+        continuous: ["ETS(Holt-Winters)", "ARIMA/ARIMAX", "TBATS/BATS"]
+        ML: ["GradientBoosting/XGBoost (tabular exogenous)", "LightGBM (optional)"]
+        hierarchical_recon: ["Top-down", "Bottom-up", "MinT (optional future)"]
+      exogenous_support:
+        notes: "If exogenous variables detected (price, promo, events), use ARIMAX or ML pathway; otherwise fall back to univariate."
+      selection_heuristics:
+        - "Detect intermittency via demand CV and zero-run length; choose Croston/TSB if high."
+        - "Else try ETS and ARIMA; select by validation MAPE/MASE with guardrails."
+        - "For short history (< 26 periods), prefer ETS or robust moving average; set conservative σ."
+      outputs_required:
+        - "Forecast table with μ and PI bands per period to requested horizon."
+        - "Policy metrics: SS, ROP, Par for 'today' and named horizons (e.g., Q2-2026)."
+        - "Sensitivity to service level (90/95/99) and lead-time variance."
+        - "Backtest slice metrics (MAPE/MASE) and a sentence on model confidence."
+
+  modeling_quality:
+    validation:
+      backtest_window: "use last 8–12 periods where possible"
+      metrics: ["MAPE","MASE","sMAPE"]
+      thresholds:
+        good_mape: "<= 20%"
+        caution_mape: "20–40%"
+        poor_mape: "> 40%"
+    confidence_adjustments:
+      if_poor_backtest: "-0.10 to -0.20 on confidence score; add cautionary language."
+      if_short_history: "-0.05 and show assumptions; highlight alternative heuristics."
+      if_high_cv_lt_or_demand: "-0.05; recommend policy buffers and supplier improvements."
+    escalation_rules:
+      - "Multi-SKU (>50) or cross-ERP multi-source analysis → escalate model to strong."
+      - "Conflicting signals between families/locations → strong verify pass."
+
+  required_fields:
+    forecasting:
+      - "demand_history: date, qty (daily/weekly preferred)"
+      - "lead_time_history: po_date, receipt_date (or μ_L, σ_L)"
+      - "unit_cost (for $ exposure)"
+      - "service_level_target (from UI; map to z)"
+      - "review_policy R (if periodic) or order_cycle"
+    par_policy:
+      - "μ_d and σ_d from demand history"
+      - "L and σ_L from receipts or policy"
+      - "R (review cycle) if periodic"
+
+  conversational_examples:
+    - user: "What par do we need today and what should par be by Q2 2026 for Repair parts in Germany?"
+      system_behavior:
+        - "Classify → forecasting.par_policy"
+        - "Filter retrieval: country=DE, income_stream=Repair, sheet_types in [demand, receipts, inventory]"
+        - "Fit/validate model(s); compute SS/ROP/Par for now and 2026-Q2."
+        - "Return table + actions + citations; include sensitivity to SL 95/99."
+    - user: "Is E&O going to get worse next quarter for Capital Parts?"
+      system_behavior:
+        - "Classify → forecasting.eo_future_risk"
+        - "Use on-hand+aging vs forecast path; flag at-risk SKUs and propose mitigations."
+
+
+  safety_and_scope:
+    corpus_only_default: true
+    external_web: false
+    pi_redaction: true
+    assumptions_block_if_missing: true
+    escalate_on_policy_sensitive: true
+

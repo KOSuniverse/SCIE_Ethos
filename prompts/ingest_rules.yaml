@@ -1,0 +1,33 @@
+ontology:
+  tier0: ["erp","country","income_stream","sheet_type"]
+  tier1: ["product_family","business_unit","market","channel","plant","location_type","owner_team","supplier","customer_segment","valuation_method","currency","uom"]
+  tier2: ["fiscal_period","snapshot_asof","calendar_granularity","horizon"]
+  tier3: ["source_file","source_sheet","version","lang","header_row","pii","confidentiality","ocr","eda_version"]
+  tier4: ["primary_key_guess","join_keys_found","join_score","intermittency","seasonality_hint","lt_mean","lt_std","lt_cv","has_aging","has_wip","has_eo","has_po","has_receipts","has_forecast"]
+
+sheet_detection:
+  use_aliases: true
+  language_detect: ["en","it","de"]
+
+virtual_file_rules:
+  joinability:
+    key_weights: { part_number: 1.0, job_id: 1.0, plant: 0.4, country: 0.3, uom: 0.2 }
+    min_header_match: 0.85
+    min_row_overlap: 0.30
+  always_split_if:
+    - "inventory keyed on part_number vs wip keyed on job_id with no bridge"
+    - "mixed granularity with no clean resample"
+    - "alias resolution < 80% of headers"
+  annotate_split_reason: true
+
+artifacts:
+  emit_master_catalog: true
+  emit_eda_profile: true
+  emit_summary_card: true
+  eda_profile_fields: ["shape","null_pct","dtype_map","candidate_keys","alias_coverage_pct","date_span","granularity","joinability_matrix","lt_stats_if_present"]
+  summary_card_template: "/templates/summary_card.template.md"
+
+
+paths:
+  path_contract_file: "/configs/path_contract.yaml"
+  # The sync must resolve output directories from this file.

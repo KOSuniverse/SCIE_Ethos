@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Turn Log",
+  "type": "object",
+  "required": [
+    "ts",
+    "question",
+    "intent",
+    "sources",
+    "confidence"
+  ],
+  "properties": {
+    "ts": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "question": {
+      "type": "string"
+    },
+    "intent": {
+      "type": "string"
+    },
+    "sub_skill": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "filters": {
+      "type": "object"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "similarities": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      }
+    },
+    "confidence": {
+      "type": "number"
+    },
+    "model_used": {
+      "type": "string"
+    },
+    "tokens": {
+      "type": "integer"
+    },
+    "cost": {
+      "type": "number"
+    },
+    "service_level": {
+      "type": "number"
+    },
+    "z_score": {
+      "type": "number"
+    },
+    "missing_fields": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "export_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}
