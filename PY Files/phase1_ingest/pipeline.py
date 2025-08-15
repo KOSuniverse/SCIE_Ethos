@@ -2,7 +2,7 @@
 import os
 import io
 import pandas as pd
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional, Callable
 
 # Robust header handling from your loader
 from loader import detect_header_row, _build_columns_from_rows, _sanitize_columns
@@ -30,6 +30,7 @@ try:
     from gpt_summary_generator import generate_comprehensive_summary
 except Exception:
     def generate_comprehensive_summary(df, sheet_name, filename, metadata=None, eda_results=None, cleaning_log=None):
+        # trivial fallback text if GPT not available
         return {"summary": f"{filename}::{sheet_name} rows={len(df)} cols={len(df.columns)}"}
 
 # Per-sheet artifact writers + rollups (XLSX only in save_cleansed_table)
@@ -82,12 +83,25 @@ def _fallback_type_from_columns(df: pd.DataFrame) -> str:
 
 # ----- public API -----
 
-def run_pipeline(source: str | bytes, filename: str, paths: Dict[str, Any] | None = None) -> Tuple[Dict[str, pd.DataFrame], List[Dict[str, Any]]]:
+def run_pipeline(
+    source: str | bytes,
+    filename: str,
+    paths: Dict[str, Any] | None = None,
+    reporter: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+) -> Tuple[Dict[str, pd.DataFrame], List[Dict[str, Any]]]:
     """
     Reads ALL sheets in an Excel file (path or bytes), promotes headers, classifies, cleans,
     writes per-sheet metadata/summaries/eda, and saves cleansed tables split by type (XLSX only).
+    Emits reporter events if provided.
     Returns (cleaned_sheets, per_sheet_meta_list).
     """
+    def _report(ev: str, payload: Dict[str, Any]):
+        if reporter:
+            try:
+                reporter(ev, payload)
+            except Exception:
+                pass
+
     # Handle path-like vs bytes vs file-like for ExcelFile
     if isinstance(source, (str, os.PathLike)):
         xls = pd.ExcelFile(source)
@@ -100,15 +114,18 @@ def run_pipeline(source: str | bytes, filename: str, paths: Dict[str, Any] | Non
     cleaned_sheets: Dict[str, pd.DataFrame] = {}
     per_sheet_meta: List[Dict[str, Any]] = []
 
-    for sheet in xls.sheet_names:
+    _report("start_file", {"filename": filename, "sheets": len(xls.sheet_names)})
+
+    for idx, sheet in enumerate(xls.sheet_names, start=1):
         errors: List[str] = []
+        _report("sheet_start", {"sheet": sheet, "i": idx, "n": len(xls.sheet_names)})
 
         # 1) read raw (always header=None)
         try:
             df0 = xls.parse(sheet, header=None)
+            _report("read_ok", {"sheet": sheet})
         except Exception as e:
             errors.append(f"read_error: {e}")
-            # skip sheet entirely if unreadable
             save_per_sheet_metadata(filename, sheet, {
                 "stage": "raw",
                 "normalized_sheet_type": "unclassified",
@@ -116,38 +133,44 @@ def run_pipeline(source: str | bytes, filename: str, paths: Dict[str, Any] | Non
                 "row_count": 0,
                 "errors": errors
             })
+            _report("sheet_done", {"sheet": sheet, "errors": errors})
             continue
 
         # 2) promote & sanitize
         try:
             df = _promote_headers(df0, sheet, filename)
+            _report("promoted", {"sheet": sheet, "cols": len(df.columns)})
         except Exception as e:
             errors.append(f"promote_error: {e}")
-            # fallback: keep df0 with synthetic headers
             df = df0.copy()
             df.columns = [f"col_{i+1}" for i in range(df.shape[1])]
+            _report("promoted", {"sheet": sheet, "cols": len(df.columns), "fallback": True})
 
-        # 3) classify -> normalized type (inventory/wip/unclassified)
+        # 3) classify -> normalized type
         try:
             cls = classify_sheet(sheet, df, sheet_aliases={})
             stype = (cls.get("final_type") or "unclassified").lower()
+            _report("classified", {"sheet": sheet, "type": stype})
         except Exception as e:
             errors.append(f"classify_error: {e}")
             stype = _fallback_type_from_columns(df)
+            _report("classified", {"sheet": sheet, "type": stype, "fallback": True})
 
         # 4) clean (hardened)
         try:
             df_clean, ops_log, clean_report = run_smart_autofix(df, sheet_name=sheet, aggressive_mode=False)
+            _report("cleaned", {"sheet": sheet, "rows": len(df_clean), "cols": len(df_clean.columns)})
         except Exception as e:
             errors.append(f"clean_error: {e}")
             df_clean, ops_log, clean_report = df, [], {"note": "cleaning failed; using uncleaned df"}
+            _report("cleaned", {"sheet": sheet, "rows": len(df_clean), "cols": len(df_clean.columns), "fallback": True})
 
         # 5) RAW metadata (after header promotion)
         try:
             save_per_sheet_metadata(filename, sheet, {
                 "stage": "raw",
                 "normalized_sheet_type": stype,
-                "columns": list(map(str, df.columns)),
+                "columns": list(map[str, str], map(str, df.columns)),  # explicit list
                 "row_count": int(len(df)),
                 "errors": errors[:]  # snapshot so far
             }, df=df)
@@ -157,24 +180,27 @@ def run_pipeline(source: str | bytes, filename: str, paths: Dict[str, Any] | Non
         # 6) CLEANSed table (split by type) -> XLSX only
         try:
             out_path = save_cleansed_table(df_clean, filename, sheet, normalized_type=stype)
+            _report("saved", {"sheet": sheet, "path": out_path or ""})
         except Exception as e:
             errors.append(f"save_cleansed_error: {e}")
             out_path = None
+            _report("saved", {"sheet": sheet, "path": "", "error": str(e)})
 
         # 7) CLEANSed metadata
         try:
             save_per_sheet_metadata(filename, sheet, {
                 "stage": "cleansed",
                 "normalized_sheet_type": stype,
-                "columns": list(map(str, df_clean.columns)),
+                "columns": list(map[str, str], map(str, df_clean.columns)),
                 "row_count": int(len(df_clean)),
                 "output_path": out_path,
-                "errors": errors[:]  # snapshot including save status
+                "errors": errors[:]
             }, df=df_clean)
         except Exception as e:
             errors.append(f"cleansed_meta_error: {e}")
 
         # 8) EDA + persist (hardened)
+        eda_doc = None
         try:
             eda_doc = run_enhanced_eda(df_clean, sheet_name=sheet, filename=filename)
             save_per_sheet_eda(filename, sheet, eda_doc.get("metadata", {}) | {
@@ -182,25 +208,26 @@ def run_pipeline(source: str | bytes, filename: str, paths: Dict[str, Any] | Non
                 "business_insights": eda_doc.get("business_insights", {}),
                 "errors": errors[:]
             })
+            _report("eda_done", {"sheet": sheet})
         except Exception as e:
             errors.append(f"eda_error: {e}")
             try:
-                # minimal EDA fallback
                 save_per_sheet_eda(filename, sheet, {
                     "rows": len(df_clean),
                     "cols": len(df_clean.columns),
                     "fallback": True,
                     "errors": errors[:]
                 })
+                _report("eda_done", {"sheet": sheet, "fallback": True})
             except Exception as e2:
                 errors.append(f"eda_meta_error: {e2}")
 
-        # 9) Summaries + persist (hardened)
+        # 9) Summaries + persist (hardened, GPT/Assistant path in gpt_summary_generator)
         try:
             sums = generate_comprehensive_summary(
                 df_clean, sheet, filename,
-                metadata=eda_doc.get("metadata") if 'eda_doc' in locals() else None,
-                eda_results=eda_doc if 'eda_doc' in locals() else None,
+                metadata=eda_doc.get("metadata") if isinstance(eda_doc, dict) else None,
+                eda_results=eda_doc if isinstance(eda_doc, dict) else None,
                 cleaning_log=ops_log
             )
             if isinstance(sums, dict):
@@ -208,14 +235,16 @@ def run_pipeline(source: str | bytes, filename: str, paths: Dict[str, Any] | Non
                     save_per_sheet_summary(filename, sheet, v, stage="cleansed", kind=k)
             else:
                 save_per_sheet_summary(filename, sheet, str(sums), stage="cleansed", kind="summary")
+            _report("summary_done", {"sheet": sheet})
         except Exception as e:
             errors.append(f"summary_error: {e}")
             try:
                 save_per_sheet_summary(
                     filename, sheet,
-                    f"Fallback summary for {filename}::{sheet}. Rows={len(df_clean)}, Cols={len(df_clean.columns)}.\nErrors: {errors}",
+                    f"# Summary (fallback)\n\nFile: {filename}\nSheet: {sheet}\nRows={len(df_clean)} Cols={len(df_clean.columns)}\n\nErrors: {errors}",
                     stage="cleansed", kind="summary_fallback"
                 )
+                _report("summary_done", {"sheet": sheet, "fallback": True})
             except Exception as e2:
                 errors.append(f"summary_meta_error: {e2}")
 
@@ -231,13 +260,28 @@ def run_pipeline(source: str | bytes, filename: str, paths: Dict[str, Any] | Non
             "errors": errors
         })
 
+        _report("sheet_done", {"sheet": sheet, "errors": errors})
+
     # 11) update master indexes once per file
     rollup_all_master_indexes()
+    _report("file_done", {"filename": filename})
     return cleaned_sheets, per_sheet_meta
 
-def run_pipeline_on_file(xls_path: str, alias_path: str | None = None, output_prefix: str | None = None, output_folder: str | None = None):
-    """Thin wrapper for code that previously called this single-file entrypoint."""
-    cleaned_sheets, per_sheet_meta = run_pipeline(source=xls_path, filename=os.path.basename(xls_path), paths=None)
+
+def run_pipeline_on_file(
+    xls_path: str,
+    alias_path: str | None = None,
+    output_prefix: str | None = None,
+    output_folder: str | None = None,
+    reporter: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+):
+    """Thin wrapper kept for legacy callers; now supports reporter too."""
+    cleaned_sheets, per_sheet_meta = run_pipeline(
+        source=xls_path,
+        filename=os.path.basename(xls_path),
+        paths=None,
+        reporter=reporter,
+    )
     total_rows = sum(m["rows"] for m in per_sheet_meta)
     any_cols = len(next(iter(cleaned_sheets.values())).columns) if cleaned_sheets else 0
     return {
