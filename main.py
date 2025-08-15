@@ -1,25 +1,19 @@
 # main.py — DROP-IN
 
-import os
-import io
-import json
-import uuid
-import time
-import ast
-import datetime
-import requests
+import os, io, json, uuid, time, ast, datetime, requests, sys
 from pathlib import Path
 import pandas as pd
 import streamlit as st
-import sys
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Make local modules importable (do this BEFORE importing project modules)
 # ─────────────────────────────────────────────────────────────────────────────
 sys.path.append(str((Path(__file__).resolve().parent / "PY Files").resolve()))
 
+from phase1_ingest.pipeline import PIPELINE_VERSION
+st.caption(f"Pipeline: {PIPELINE_VERSION}")
+
 # Orchestrator & session
-from orchestrator import run_ingest_pipeline
+from orchestrator import ingest_streamlit_bytes_5  # add at top of file or above this block
 from session import SessionState
 
 # Optional import check for dev sanity
@@ -355,11 +349,11 @@ class AppPaths:
 # Ingest (debug) — Dropbox-only upload -> RAW save -> ingest -> metadata/heads
 # =============================================================================
 with st.expander("🔧 Ingest pipeline (debug)"):
-    # Auto-detect Dropbox root once
+    # 0) Detect Dropbox Project_Root once
     if "dbx_root" not in st.session_state:
-        # tries /Project_Root (App Folder) then /Apps/Ethos LLM/Project_Root (Full)
         def _detect_dropbox_root(list_func):
             candidates = ["/Project_Root", "/Apps/Ethos LLM/Project_Root"]
+            last_err = None
             for root in candidates:
                 raw_path = "/".join([root.rstrip("/"), "04_Data", "00_Raw_Files"])
                 try:
@@ -374,74 +368,59 @@ with st.expander("🔧 Ingest pipeline (debug)"):
 
     dbx_root = st.text_input("Project_Root (Dropbox)", value=st.session_state["dbx_root"])
     app_paths = AppPaths(project_root_dropbox=dbx_root)
-
     st.caption(f"RAW folder: {app_paths.dbx_raw_folder}")
 
-    up = st.file_uploader("Upload an Excel or CSV file (saved to Dropbox RAW, then ingested)", type=["xlsx", "xlsm", "csv"])
+    # 1) Upload (XLSX only; CSV removed per your constraint)
+    up = st.file_uploader(
+        "Upload an Excel file (saved to Dropbox RAW, then ingested)",
+        type=["xlsx", "xlsm"]
+    )
 
     if up is not None:
         try:
-            # 1) Read upload bytes
+            # 2) Read upload bytes
             up.seek(0)
             file_bytes = up.read()
-            filename = up.name
+            filename   = up.name
 
-            # 2) Save upload to RAW in Dropbox
+            # 3) Save upload to RAW in Dropbox
             raw_dest = f"{app_paths.dbx_raw_folder}/{filename}"
             upload_bytes(raw_dest, file_bytes)
             st.success(f"Saved to Dropbox RAW: {raw_dest}")
 
-            # 3) Run ingest pipeline on the uploaded bytes (not the RAW path)
-            cleaned_sheets, meta = run_ingest_pipeline(
-                source=file_bytes,
-                filename=filename,
-                paths=app_paths
-            )
+            # 4) Ingest with 5-step progress bar (calls pipeline reporter internally)
+            cleaned_sheets, per_sheet_meta = ingest_streamlit_bytes_5(file_bytes, filename)
 
-            # 4) Show per-sheet heads and metadata/summaries
-            st.subheader("Run metadata (Dropbox ingest)")
-            st.json(meta)
+            # 5) Show per-sheet metadata summary (new pipeline returns a list)
+            st.subheader("Per-sheet results")
+            if per_sheet_meta:
+                rows = []
+                for m in per_sheet_meta:
+                    rows.append({
+                        "sheet_name": m.get("sheet_name"),
+                        "type": m.get("normalized_sheet_type"),
+                        "rows": m.get("rows"),
+                        "cols": len(m.get("columns", [])) if isinstance(m.get("columns"), list) else m.get("columns"),
+                        "output_path": m.get("output_path"),
+                        "errors": "; ".join(m.get("errors", [])) if m.get("errors") else "",
+                    })
+                st.dataframe(pd.DataFrame(rows), use_container_width=True)
+            else:
+                st.info("No per-sheet metadata returned.")
 
+            # 6) Quick peek at cleaned frames
             st.subheader("Sheets cleaned (preview)")
             st.write(list(cleaned_sheets.keys()))
             for sname, df in cleaned_sheets.items():
                 st.markdown(f"### Sheet: `{sname}`")
                 st.dataframe(df.head(5), use_container_width=True)
 
-            if "sheets" in meta:
-                st.markdown("### Per-sheet summaries")
-                rows = []
-                for s in meta["sheets"]:
-                    rows.append({
-                        "sheet_name": s.get("sheet_name"),
-                        "normalized_sheet_type": s.get("normalized_sheet_type"),
-                        "records": s.get("record_count"),
-                        "summary": s.get("summary_text"),
-                        "name_hint": s.get("name_implied_type"),
-                        "feature_hint": s.get("feature_implied_type"),
-                        "resolution": s.get("type_resolution"),
-                    })
-                st.dataframe(pd.DataFrame(rows), use_container_width=True)
-
-            # 5) Append metadata to master index (Dropbox)
-            meta_path = getattr(app_paths, "dbx_master_metadata_path", None)
-            if not meta_path:
-                st.error("Dropbox metadata path not set.")
-            else:
-                try:
-                    existing = json.loads(dbx_read_bytes(meta_path).decode("utf-8"))
-                    if not isinstance(existing, list):
-                        existing = []
-                except Exception:
-                    existing = []
-                existing.append(meta)
-                upload_json(meta_path, existing)
-                st.success(f"✅ Metadata updated at: {meta_path}")
-
-            st.info("Next: use 'Process a RAW workbook (Dropbox ➜ Dropbox)' to produce the Cleansed workbook.")
+            # 7) Note: master rollups are rebuilt automatically by the pipeline
+            st.caption("Master rollups refreshed in /04_Data/04_Metadata (master_*.jsonl). No manual append needed.")
 
         except Exception as e:
             st.error(f"Ingest (Dropbox) failed: {e}")
+
 
 # =============================================================================
 # Sidebar: Cloud health checks
