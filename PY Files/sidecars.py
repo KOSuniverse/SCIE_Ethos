@@ -171,7 +171,7 @@ def _read_json(path: str) -> Optional[Dict[str, Any]]:
 # ------------------------------------------------------------------------------
 def write_metadata(doc: Dict[str, Any], df=None) -> str:
     """
-    Writes a per-sheet metadata JSON directly into 04_Data/04_Metadata/.
+    Writes a per-sheet metadata JSON into 04_Data/04_Metadata/.
     File name: <file>__<sheet>__<stage>.json  with _kind="metadata"
     """
     file_stem = doc.get("source_file") or "file"
@@ -183,9 +183,15 @@ def write_metadata(doc: Dict[str, Any], df=None) -> str:
     payload = dict(doc)
     payload.setdefault("_kind", "metadata")
     payload.setdefault("_created_utc", _now())
+
     if df is not None:
-        payload.setdefault("row_count", int(getattr(df, "shape", [0])[0] or 0))
-        payload.setdefault("columns", list(map(str, getattr(df, "columns", []) or [])))
+        # avoid truthiness on pandas.Index
+        cols_idx = getattr(df, "columns", None)
+        cols_list = list(map(str, list(cols_idx))) if cols_idx is not None else []
+        nrows = int(getattr(df, "shape", [0])[0] or 0)
+
+        payload.setdefault("row_count", nrows)
+        payload.setdefault("columns", cols_list)
         payload.setdefault("hash", _hash_df(df))
 
     _put_json(path, payload)
