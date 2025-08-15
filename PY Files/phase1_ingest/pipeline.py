@@ -2,6 +2,7 @@
 
 # pipeline.py
 import os
+import io
 import pandas as pd
 from typing import Dict, Any, List, Tuple
 
@@ -78,10 +79,14 @@ def run_pipeline(source: str | bytes, filename: str, paths: Dict[str, Any] | Non
     writes per-sheet metadata/summaries/eda, and saves cleansed tables split by type (XLSX only).
     Returns (cleaned_sheets, per_sheet_meta_list).
     """
+    # Handle path-like vs bytes vs file-like for ExcelFile
     if isinstance(source, (str, os.PathLike)):
         xls = pd.ExcelFile(source)
+    elif isinstance(source, bytes):
+        xls = pd.ExcelFile(io.BytesIO(source))  # avoid FutureWarning
     else:
-        xls = pd.ExcelFile(source)  # bytes-like
+        # Assume file-like object
+        xls = pd.ExcelFile(source)
 
     cleaned_sheets: Dict[str, pd.DataFrame] = {}
     per_sheet_meta: List[Dict[str, Any]] = []
