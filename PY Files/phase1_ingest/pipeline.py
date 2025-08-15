@@ -128,11 +128,12 @@ def run_pipeline(
             errors.append(f"read_error: {e}")
             save_per_sheet_metadata(filename, sheet, {
                 "stage": "raw",
-                "normalized_sheet_type": "unclassified",
-                "columns": [],
-                "row_count": 0,
-                "errors": errors
-            })
+                "normalized_sheet_type": stype,
+                "columns": [str(c) for c in df_clean.columns],      # <-- FIX
+                "row_count": int(len(df_clean)),
+                "output_path": out_path,
+                "errors": errors[:]
+            }, df=df)
             _report("sheet_done", {"sheet": sheet, "errors": errors})
             continue
 
@@ -170,7 +171,7 @@ def run_pipeline(
             save_per_sheet_metadata(filename, sheet, {
                 "stage": "raw",
                 "normalized_sheet_type": stype,
-                "columns": list(map[str, str], map(str, df.columns)),  # explicit list
+                "columns": [str(c) for c in df.columns],  # explicit list
                 "row_count": int(len(df)),
                 "errors": errors[:]  # snapshot so far
             }, df=df)
@@ -191,7 +192,7 @@ def run_pipeline(
             save_per_sheet_metadata(filename, sheet, {
                 "stage": "cleansed",
                 "normalized_sheet_type": stype,
-                "columns": list(map[str, str], map(str, df_clean.columns)),
+                "columns": [str(c) for c in df_clean.columns],
                 "row_count": int(len(df_clean)),
                 "output_path": out_path,
                 "errors": errors[:]
