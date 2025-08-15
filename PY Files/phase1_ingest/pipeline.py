@@ -1,5 +1,3 @@
-# PY Files/phase1_ingest/pipeline.py
-
 # pipeline.py
 import os
 import io
@@ -40,6 +38,8 @@ from metadata_utils import (
     save_cleansed_table, rollup_all_master_indexes
 )
 
+AMBIG_MSG = "truth value of a index is ambiguous"
+
 # ----- helpers -----
 
 def _first_nonempty_row(df: pd.DataFrame, limit: int = 150) -> int | None:
@@ -71,6 +71,15 @@ def _promote_headers(df0: pd.DataFrame, sheet_name: str, filename: str) -> pd.Da
     df.columns = _sanitize_columns(list(df.columns))
     return df
 
+def _fallback_type_from_columns(df: pd.DataFrame) -> str:
+    cols = [str(c).strip().lower() for c in df.columns]
+    has_part = any(k in c for c in cols for k in ("part", "sku", "item"))
+    has_job  = any(k in c for c in cols for k in ("job", "work order", "wo"))
+    if has_part and not has_job: return "inventory"
+    if has_job and not has_part: return "wip"
+    if has_part and has_job:     return "inventory"
+    return "unclassified"
+
 # ----- public API -----
 
 def run_pipeline(source: str | bytes, filename: str, paths: Dict[str, Any] | None = None) -> Tuple[Dict[str, pd.DataFrame], List[Dict[str, Any]]]:
@@ -92,70 +101,123 @@ def run_pipeline(source: str | bytes, filename: str, paths: Dict[str, Any] | Non
     per_sheet_meta: List[Dict[str, Any]] = []
 
     for sheet in xls.sheet_names:
+        errors: List[str] = []
+
         # 1) read raw (always header=None)
-        df0 = xls.parse(sheet, header=None)
+        try:
+            df0 = xls.parse(sheet, header=None)
+        except Exception as e:
+            errors.append(f"read_error: {e}")
+            # skip sheet entirely if unreadable
+            save_per_sheet_metadata(filename, sheet, {
+                "stage": "raw",
+                "normalized_sheet_type": "unclassified",
+                "columns": [],
+                "row_count": 0,
+                "errors": errors
+            })
+            continue
+
         # 2) promote & sanitize
-        df = _promote_headers(df0, sheet, filename)
+        try:
+            df = _promote_headers(df0, sheet, filename)
+        except Exception as e:
+            errors.append(f"promote_error: {e}")
+            # fallback: keep df0 with synthetic headers
+            df = df0.copy()
+            df.columns = [f"col_{i+1}" for i in range(df.shape[1])]
 
         # 3) classify -> normalized type (inventory/wip/unclassified)
         try:
             cls = classify_sheet(sheet, df, sheet_aliases={})
             stype = (cls.get("final_type") or "unclassified").lower()
         except Exception as e:
-            # defensive fallback for any pandas.Index truthiness errors or classifier crashes
-            msg = str(e).lower()
-            cols = [str(c).strip().lower() for c in df.columns]
-            has_part = any(k in c for c in cols for k in ("part", "sku", "item"))
-            has_job  = any(k in c for c in cols for k in ("job", "work order", "wo"))
-            if "truth value of a index is ambiguous" in msg:
-                if has_part and not has_job: stype = "inventory"
-                elif has_job and not has_part: stype = "wip"
-                elif has_part and has_job: stype = "inventory"
-                else: stype = "unclassified"
-            else:
-                # last-resort fallback
-                stype = "inventory" if has_part else ("wip" if has_job else "unclassified")
+            errors.append(f"classify_error: {e}")
+            stype = _fallback_type_from_columns(df)
 
-        # 4) clean
-        df_clean, ops_log, clean_report = run_smart_autofix(df, sheet_name=sheet, aggressive_mode=False)
+        # 4) clean (hardened)
+        try:
+            df_clean, ops_log, clean_report = run_smart_autofix(df, sheet_name=sheet, aggressive_mode=False)
+        except Exception as e:
+            errors.append(f"clean_error: {e}")
+            df_clean, ops_log, clean_report = df, [], {"note": "cleaning failed; using uncleaned df"}
 
         # 5) RAW metadata (after header promotion)
-        save_per_sheet_metadata(filename, sheet, {
-            "stage": "raw",
-            "normalized_sheet_type": stype,
-            "columns": list(map(str, df.columns)),
-            "row_count": int(len(df))
-        }, df=df)
+        try:
+            save_per_sheet_metadata(filename, sheet, {
+                "stage": "raw",
+                "normalized_sheet_type": stype,
+                "columns": list(map(str, df.columns)),
+                "row_count": int(len(df)),
+                "errors": errors[:]  # snapshot so far
+            }, df=df)
+        except Exception as e:
+            errors.append(f"raw_meta_error: {e}")
 
         # 6) CLEANSed table (split by type) -> XLSX only
-        out_path = save_cleansed_table(df_clean, filename, sheet, normalized_type=stype)
+        try:
+            out_path = save_cleansed_table(df_clean, filename, sheet, normalized_type=stype)
+        except Exception as e:
+            errors.append(f"save_cleansed_error: {e}")
+            out_path = None
 
         # 7) CLEANSed metadata
-        save_per_sheet_metadata(filename, sheet, {
-            "stage": "cleansed",
-            "normalized_sheet_type": stype,
-            "columns": list(map(str, df_clean.columns)),
-            "row_count": int(len(df_clean)),
-            "output_path": out_path
-        }, df=df_clean)
+        try:
+            save_per_sheet_metadata(filename, sheet, {
+                "stage": "cleansed",
+                "normalized_sheet_type": stype,
+                "columns": list(map(str, df_clean.columns)),
+                "row_count": int(len(df_clean)),
+                "output_path": out_path,
+                "errors": errors[:]  # snapshot including save status
+            }, df=df_clean)
+        except Exception as e:
+            errors.append(f"cleansed_meta_error: {e}")
 
-        # 8) EDA + persist
-        eda_doc = run_enhanced_eda(df_clean, sheet_name=sheet, filename=filename)
-        save_per_sheet_eda(filename, sheet, eda_doc.get("metadata", {}) | {
-            "chart_paths": eda_doc.get("chart_paths", []),
-            "business_insights": eda_doc.get("business_insights", {})
-        })
+        # 8) EDA + persist (hardened)
+        try:
+            eda_doc = run_enhanced_eda(df_clean, sheet_name=sheet, filename=filename)
+            save_per_sheet_eda(filename, sheet, eda_doc.get("metadata", {}) | {
+                "chart_paths": eda_doc.get("chart_paths", []),
+                "business_insights": eda_doc.get("business_insights", {}),
+                "errors": errors[:]
+            })
+        except Exception as e:
+            errors.append(f"eda_error: {e}")
+            try:
+                # minimal EDA fallback
+                save_per_sheet_eda(filename, sheet, {
+                    "rows": len(df_clean),
+                    "cols": len(df_clean.columns),
+                    "fallback": True,
+                    "errors": errors[:]
+                })
+            except Exception as e2:
+                errors.append(f"eda_meta_error: {e2}")
 
-        # 9) Summaries + persist
-        sums = generate_comprehensive_summary(
-            df_clean, sheet, filename,
-            metadata=eda_doc.get("metadata"), eda_results=eda_doc, cleaning_log=ops_log
-        )
-        if isinstance(sums, dict):
-            for k, v in sums.items():
-                save_per_sheet_summary(filename, sheet, v, stage="cleansed", kind=k)
-        else:
-            save_per_sheet_summary(filename, sheet, str(sums), stage="cleansed", kind="summary")
+        # 9) Summaries + persist (hardened)
+        try:
+            sums = generate_comprehensive_summary(
+                df_clean, sheet, filename,
+                metadata=eda_doc.get("metadata") if 'eda_doc' in locals() else None,
+                eda_results=eda_doc if 'eda_doc' in locals() else None,
+                cleaning_log=ops_log
+            )
+            if isinstance(sums, dict):
+                for k, v in sums.items():
+                    save_per_sheet_summary(filename, sheet, v, stage="cleansed", kind=k)
+            else:
+                save_per_sheet_summary(filename, sheet, str(sums), stage="cleansed", kind="summary")
+        except Exception as e:
+            errors.append(f"summary_error: {e}")
+            try:
+                save_per_sheet_summary(
+                    filename, sheet,
+                    f"Fallback summary for {filename}::{sheet}. Rows={len(df_clean)}, Cols={len(df_clean.columns)}.\nErrors: {errors}",
+                    stage="cleansed", kind="summary_fallback"
+                )
+            except Exception as e2:
+                errors.append(f"summary_meta_error: {e2}")
 
         # 10) accumulate for caller
         cleaned_sheets[sheet] = df_clean
@@ -165,7 +227,8 @@ def run_pipeline(source: str | bytes, filename: str, paths: Dict[str, Any] | Non
             "normalized_sheet_type": stype,
             "rows": len(df_clean),
             "columns": list(map(str, df_clean.columns)),
-            "output_path": out_path
+            "output_path": out_path,
+            "errors": errors
         })
 
     # 11) update master indexes once per file
