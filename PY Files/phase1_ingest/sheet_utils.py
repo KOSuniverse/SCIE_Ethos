@@ -10,7 +10,6 @@ KNOWN_LOCATIONS = ['US', 'MX', 'CA', 'UK', 'EU', 'Thailand', 'Germany']
 KNOWN_TYPES = ['WIP', 'Raw Materials', 'Raw', 'Finished Goods', 'FG', 'RM', 'Usage']
 KNOWN_CONTEXT_TERMS = KNOWN_LOCATIONS + KNOWN_TYPES
 
-
 def load_sheet_aliases(path=DEFAULT_ALIAS_PATH):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -19,21 +18,27 @@ def load_sheet_aliases(path=DEFAULT_ALIAS_PATH):
         print(f"⚠️ Failed to load sheet_aliases.json: {e}")
         return {}
 
+# ---- safe helpers (avoid pandas.Index truthiness) ----
+def _cols_list(df):
+    # always work with a plain list
+    return [str(c).strip() for c in list(df.columns)]
+
+def _cols_lower(df):
+    return [c.lower() for c in _cols_list(df)]
 
 def _feature_hint_from_columns(df) -> str:
-    cols_lower = [str(c).lower() for c in df.columns]
+    cols_lower = _cols_lower(df)
     part_cols = [c for c in cols_lower if "part" in c and ("no" in c or "number" in c or "id" in c)]
     qty_cols  = [c for c in cols_lower if any(k in c for k in ["qty", "quantity", "on_hand"])]
     val_cols  = [c for c in cols_lower if any(k in c for k in ["value", "extended_cost", "inventory_value", "total_cost"])]
-    job_cols  = [c for c in cols_lower if "job" in c or "work_order" in c or c in ("wo", "wo_no", "wo_number")]
-    aging_cols = [c for c in cols_lower if "days" in c or "aging" in c]
+    job_cols  = [c for c in cols_lower if ("job" in c) or ("work_order" in c) or (c in ("wo", "wo_no", "wo_number"))]
+    aging_cols = [c for c in cols_lower if ("days" in c) or ("aging" in c)]
 
     if part_cols and (qty_cols or val_cols):
         return "inventory"
     if job_cols and aging_cols:
         return "wip"
     return "unclassified"
-
 
 def normalize_sheet_type(sheet_name, df, sheet_aliases):
     """
@@ -44,13 +49,11 @@ def normalize_sheet_type(sheet_name, df, sheet_aliases):
     sheet_name_clean = (sheet_name or "").strip().lower()
     name_hint = "unclassified"
 
-    # 1) name-based alias
     for alias, norm in (sheet_aliases or {}).items():
         if alias.lower() in sheet_name_clean:
             name_hint = (norm or "unclassified").strip().lower()
             break
 
-    # 2) column-based
     feature_hint = _feature_hint_from_columns(df)
 
     # decision: inventory beats WIP if name says WIP
@@ -60,10 +63,10 @@ def normalize_sheet_type(sheet_name, df, sheet_aliases):
         return name_hint
     return feature_hint
 
-
 def classify_sheet(sheet_name, df, sheet_aliases):
     """
     Rich classifier for metadata. Returns dict with name_hint, feature_hint, final_type, type_resolution.
+    All logic uses plain lists (not pandas.Index) to avoid ambiguous truth-value errors.
     """
     sheet_name_clean = (sheet_name or "").strip().lower()
     name_hint = "unclassified"
@@ -92,15 +95,15 @@ def classify_sheet(sheet_name, df, sheet_aliases):
         "type_resolution": resolution
     }
 
-
 def extract_locations_and_context(filename, sheet_name, df):
+    cols_as_str = " ".join(_cols_list(df))
+    sample_rows = " ".join(df.head(20).astype(str).fillna("").agg(" ".join, axis=1).tolist())
+
     text_sources = {
-        "file_name": filename,
-        "sheet_name": sheet_name,
-        "column_headers": " ".join(df.columns.astype(str)),
-        "column_sample_values": " ".join(
-            df.head(20).astype(str).fillna("").agg(" ".join, axis=1).tolist()
-        )
+        "file_name": filename or "",
+        "sheet_name": sheet_name or "",
+        "column_headers": cols_as_str,
+        "column_sample_values": sample_rows
     }
 
     found_tags = set()

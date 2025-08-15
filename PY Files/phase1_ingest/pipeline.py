@@ -39,7 +39,7 @@ from metadata_utils import (
     save_cleansed_table, rollup_all_master_indexes
 )
 
-# ----- core helpers -----
+# ----- helpers -----
 
 def _first_nonempty_row(df: pd.DataFrame, limit: int = 150) -> int | None:
     limit = min(limit, len(df))
@@ -51,7 +51,7 @@ def _first_nonempty_row(df: pd.DataFrame, limit: int = 150) -> int | None:
 
 def _promote_headers(df0: pd.DataFrame, sheet_name: str, filename: str) -> pd.DataFrame:
     """Detect header row, promote manually, sanitize columns. df0 is read with header=None."""
-    alias_map = {}  # can be populated from alias files if needed
+    alias_map = {}
     hdr = detect_header_row(df0, alias_map)
     if hdr is None:
         hdr = _first_nonempty_row(df0, limit=300)
@@ -93,13 +93,28 @@ def run_pipeline(source: str | bytes, filename: str, paths: Dict[str, Any] | Non
         df = _promote_headers(df0, sheet, filename)
 
         # 3) classify -> normalized type (inventory/wip/unclassified)
-        cls = classify_sheet(sheet, df, sheet_aliases={})
-        stype = (cls.get("final_type") or "unclassified").lower()
+        try:
+            cls = classify_sheet(sheet, df, sheet_aliases={})
+            stype = (cls.get("final_type") or "unclassified").lower()
+        except Exception as e:
+            # defensive fallback for any pandas.Index truthiness errors or classifier crashes
+            msg = str(e).lower()
+            cols = [str(c).strip().lower() for c in df.columns]
+            has_part = any(k in c for c in cols for k in ("part", "sku", "item"))
+            has_job  = any(k in c for c in cols for k in ("job", "work order", "wo"))
+            if "truth value of a index is ambiguous" in msg:
+                if has_part and not has_job: stype = "inventory"
+                elif has_job and not has_part: stype = "wip"
+                elif has_part and has_job: stype = "inventory"
+                else: stype = "unclassified"
+            else:
+                # last-resort fallback
+                stype = "inventory" if has_part else ("wip" if has_job else "unclassified")
 
         # 4) clean
         df_clean, ops_log, clean_report = run_smart_autofix(df, sheet_name=sheet, aggressive_mode=False)
 
-        # 5) write RAW metadata (about the promoted-but-not-cleaned df)
+        # 5) RAW metadata (after header promotion)
         save_per_sheet_metadata(filename, sheet, {
             "stage": "raw",
             "normalized_sheet_type": stype,
@@ -107,10 +122,10 @@ def run_pipeline(source: str | bytes, filename: str, paths: Dict[str, Any] | Non
             "row_count": int(len(df))
         }, df=df)
 
-        # 6) save CLEANSed table (also acts as "split by type") -> XLSX only
+        # 6) CLEANSed table (split by type) -> XLSX only
         out_path = save_cleansed_table(df_clean, filename, sheet, normalized_type=stype)
 
-        # 7) write CLEANSed metadata
+        # 7) CLEANSed metadata
         save_per_sheet_metadata(filename, sheet, {
             "stage": "cleansed",
             "normalized_sheet_type": stype,
@@ -126,7 +141,7 @@ def run_pipeline(source: str | bytes, filename: str, paths: Dict[str, Any] | Non
             "business_insights": eda_doc.get("business_insights", {})
         })
 
-        # 9) Summaries + persist (multiple kinds allowed)
+        # 9) Summaries + persist
         sums = generate_comprehensive_summary(
             df_clean, sheet, filename,
             metadata=eda_doc.get("metadata"), eda_results=eda_doc, cleaning_log=ops_log
@@ -155,7 +170,6 @@ def run_pipeline(source: str | bytes, filename: str, paths: Dict[str, Any] | Non
 def run_pipeline_on_file(xls_path: str, alias_path: str | None = None, output_prefix: str | None = None, output_folder: str | None = None):
     """Thin wrapper for code that previously called this single-file entrypoint."""
     cleaned_sheets, per_sheet_meta = run_pipeline(source=xls_path, filename=os.path.basename(xls_path), paths=None)
-    # simple representative summary for legacy callers
     total_rows = sum(m["rows"] for m in per_sheet_meta)
     any_cols = len(next(iter(cleaned_sheets.values())).columns) if cleaned_sheets else 0
     return {
