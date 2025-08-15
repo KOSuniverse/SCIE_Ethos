@@ -92,8 +92,18 @@ def run_ingest_pipeline(
     source: bytes | bytearray | str,
     filename: Optional[str],
     paths: Optional[Any],
+    reporter: Optional[callable] = None,
 ) -> Tuple[Dict[str, pd.DataFrame], dict]:
-    cleaned_sheets, metadata = run_pipeline(source=source, filename=filename, paths=paths)
+    """
+    Thin wrapper around phase1_ingest.pipeline.run_pipeline.
+    If reporter is provided, it will receive progress events.
+    """
+    cleaned_sheets, metadata = run_pipeline(
+        source=source,
+        filename=filename,
+        paths=paths,
+        reporter=reporter,  # <-- NEW
+    )
     return cleaned_sheets, metadata
 
 
@@ -840,5 +850,108 @@ def classify_user_intent(user_question: str, client=None) -> Dict[str, Any]:
             "raw": None,
             "model_size": model_size,
         }
+# =============================================================================
+# Streamlit-friendly ingest helpers with a progress bar
+# =============================================================================
+def _streamlit_reporter():
+    """
+    Returns a reporter(ev:str, payload:dict) -> None that updates a Streamlit progress bar
+    without coupling the pipeline to Streamlit.
+    """
+    try:
+        import streamlit as st
+    except Exception:
+        # If Streamlit isn't available, return a no-op
+        def _noop(ev, payload): 
+            pass
+        return _noop
+
+    progress = st.progress(0.0)
+    status   = st.empty()
+    logbox   = st.empty()
+    tracker = {"done": 0, "total": 1}
+
+    def reporter(ev: str, payload: Dict[str, Any]):
+        if ev == "start_file":
+            sheets = int(payload.get("sheets", 1))
+            # events: read_ok, promoted, classified, cleaned, saved, eda_done, summary_done, sheet_done = ~8/sheet + 1 for rollup
+            tracker["total"] = max(1, sheets * 8 + 1)
+            status.write(f"Starting `{payload.get('filename','')}` with {sheets} sheet(s)")
+            progress.progress(0.0)
+            return
+
+        # advance
+        tracker["done"] += 1
+        pct = min(tracker["done"] / tracker["total"], 1.0)
+        progress.progress(pct)
+
+        # quick status and tail log
+        msg = f"{ev}: {payload.get('sheet','')}" if "sheet" in payload else ev
+        status.write(msg)
+        logbox.caption(f"{ev}: {payload}")
+
+    return reporter
+
+
+def ingest_streamlit_bytes(xls_bytes: bytes, filename: str) -> Dict[str, Any]:
+    """
+    Streamlit entrypoint for uploaded Excel bytes. Shows a progress bar and writes
+    per-sheet sidecars (metadata/summaries/eda) + split XLSX cleansed files to cloud.
+    """
+    try:
+        import streamlit as st
+        st.write(f"**Uploading**: {filename}")
+    except Exception:
+        pass
+
+    reporter = _streamlit_reporter()
+    cleaned_sheets, per_sheet_meta = run_pipeline(
+        source=xls_bytes,
+        filename=filename,
+        reporter=reporter,
+        paths=None,
+    )
+
+    try:
+        import streamlit as st
+        st.success("Ingest complete.")
+    except Exception:
+        pass
+
+    return {
+        "sheets": list(cleaned_sheets.keys()),
+        "meta_count": len(per_sheet_meta),
+    }
+
+
+def ingest_streamlit_path(xls_path: str) -> Dict[str, Any]:
+    """
+    Streamlit entrypoint for a Dropbox/S3-mapped path. Shows a progress bar and writes
+    per-sheet sidecars (metadata/summaries/eda) + split XLSX cleansed files to cloud.
+    """
+    try:
+        import streamlit as st
+        st.write(f"**Processing**: {xls_path}")
+    except Exception:
+        pass
+
+    reporter = _streamlit_reporter()
+    cleaned_sheets, per_sheet_meta = run_pipeline(
+        source=xls_path,
+        filename=os.path.basename(xls_path),
+        reporter=reporter,
+        paths=None,
+    )
+
+    try:
+        import streamlit as st
+        st.success("Ingest complete.")
+    except Exception:
+        pass
+
+    return {
+        "sheets": list(cleaned_sheets.keys()),
+        "meta_count": len(per_sheet_meta),
+    }
 
 
