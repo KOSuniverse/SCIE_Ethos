@@ -7,6 +7,8 @@ from typing import Dict, Any, List, Tuple, Optional, Callable
 # Robust header handling from your loader
 from loader import detect_header_row, _build_columns_from_rows, _sanitize_columns
 
+PIPELINE_VERSION = "v2.3-reporter-xlsx"
+
 # Classifier / cleaning / EDA / summaries (use your modules; graceful fallbacks)
 try:
     from sheet_utils import classify_sheet
@@ -128,10 +130,9 @@ def run_pipeline(
             errors.append(f"read_error: {e}")
             save_per_sheet_metadata(filename, sheet, {
                 "stage": "raw",
-                "normalized_sheet_type": stype,
-                "columns": [str(c) for c in df_clean.columns],      # <-- FIX
-                "row_count": int(len(df_clean)),
-                "output_path": out_path,
+                "normalized_sheet_type": "unclassified",
+                "columns": [],      # <-- FIX
+                "row_count": 0,
                 "errors": errors[:]
             }, df=df)
             _report("sheet_done", {"sheet": sheet, "errors": errors})
