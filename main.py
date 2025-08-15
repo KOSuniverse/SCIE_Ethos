@@ -57,6 +57,8 @@ def build_xlsx_bytes_from_sheets(sheets: dict[str, pd.DataFrame]) -> bytes:
     buf.seek(0)
     return buf.read()
 
+from sidecars import backend_info
+st.caption(f"Sidecars backend: {backend_info()}")
 
 # --- Build a human-readable Markdown summary from pipeline metadata ---
 def _build_summary_markdown(metadata: dict) -> str:
