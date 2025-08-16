@@ -20,9 +20,14 @@ from session import SessionState
 from logger import log_event, log_query_result
 from orchestrator import answer_question
 from assistant_bridge import auto_model, run_query, run_query_with_files
-from confidence import score_ravc, should_abstain
+from confidence import score_ravc, should_abstain, score_confidence_enhanced, get_service_level_zscore
 from path_utils import get_project_paths
 from dbx_utils import list_data_files
+
+# Phase 4 components
+from export_utils import ExportManager
+from sources_drawer import SourcesDrawer
+from data_needed_panel import DataNeededPanel
 
 # Set page configuration first
 st.set_page_config(
@@ -62,6 +67,16 @@ st.markdown("""
         padding: 12px;
         margin: 8px 0;
     }
+    .service-level-badge {
+        background: linear-gradient(135deg, #FF6B6B 0%, #4ECDC4 100%);
+        color: white;
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-size: 0.9rem;
+        font-weight: 600;
+        display: inline-block;
+        margin: 4px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -80,403 +95,279 @@ if "confidence_history" not in st.session_state:
     st.session_state.confidence_history = []
 if "selected_files" not in st.session_state:
     st.session_state.selected_files = []
+if "service_level" not in st.session_state:
+    st.session_state.service_level = 0.95
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper Functions
 # ─────────────────────────────────────────────────────────────────────────────
-def get_confidence_badge(score: float) -> str:
-    """Generate confidence badge with appropriate styling."""
-    if score >= 0.8:
-        css_class = "confidence-high"
-        level = "HIGH"
-    elif score >= 0.6:
-        css_class = "confidence-medium"
-        level = "MED"
-    else:
-        css_class = "confidence-low"
-        level = "LOW"
+def get_confidence_badge(score: float, service_level: float = 0.95) -> str:
+    """Generate enhanced confidence badge with service level context."""
+    # Use enhanced confidence scoring
+    confidence_data = score_confidence_enhanced(
+        recency=0.8,  # Placeholder values - should come from actual analysis
+        alignment=0.9,
+        variance=0.2,
+        coverage=0.8,
+        service_level=service_level
+    )
     
-    return f'<span class="badge {css_class}">{level} ({score:.2f})</span>'
-
-def get_model_badge(intent: str = None) -> str:
-    """Generate model badge based on current configuration."""
-    if os.getenv("ASSISTANT_ID"):
-        model_type = "assistant"
-        display = "ASSISTANT"
-        css_class = "model-assistant"
-    else:
-        # Use auto_model logic if available
-        if intent and auto_model:
-            model = auto_model(intent)
-            if "4o" in model and "mini" not in model:
-                model_type = "4o"
-                display = "GPT-4o"
-                css_class = "model-4o"
-            else:
-                model_type = "mini"
-                display = "GPT-4o-mini"
-                css_class = "model-mini"
-        else:
-            model_type = "pipeline"
-            display = "PIPELINE"
-            css_class = "model-mini"
+    css_class = confidence_data.get("css_class", "confidence-medium")
+    badge_text = confidence_data.get("badge", "MED")
     
-    return f'<span class="badge {css_class}">{display}</span>'
+    return f'<span class="badge {css_class}">{badge_text} ({score:.2f})</span>'
 
-def load_available_files() -> List[Dict[str, Any]]:
-    """Load available cleansed files from Dropbox."""
-    try:
-        files = list_data_files(CLEANSED)
-        return files
-    except Exception as e:
-        st.error(f"Could not load files from {CLEANSED}: {e}")
-        return []
-
-def format_conversation_name(name: str) -> str:
-    """Format conversation name for display."""
-    if name == "default":
-        return "🏠 Main Conversation"
-    return f"💬 {name}"
+def get_service_level_badge(service_level: float) -> str:
+    """Generate service level badge with z-score."""
+    z_score = get_service_level_zscore(service_level)
+    return f'<span class="service-level-badge">{service_level:.1%} (z={z_score:.3f})</span>'
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Sidebar: Conversation Management & System Status
+# Sidebar Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.title("🧠 SCIE Ethos Analyst")
+    st.header("🧠 SCIE Ethos Control Panel")
     
-    # ─── Conversation Management ───
-    st.subheader("💬 Conversations")
+    # Service Level Control
+    st.subheader("⚙️ Service Level")
+    service_level = st.selectbox(
+        "Select Service Level",
+        options=[0.90, 0.95, 0.975, 0.99],
+        index=1,  # Default to 95%
+        format_func=lambda x: f"{x:.1%}",
+        key="service_level_selector"
+    )
     
-    current_conv = st.session_state.current_conversation
-    conv_display = format_conversation_name(current_conv)
-    st.markdown(f"**Active:** {conv_display}")
+    # Update session state
+    if service_level != st.session_state.service_level:
+        st.session_state.service_level = service_level
+        st.rerun()
     
-    # Conversation rename/new
-    with st.expander("Manage Conversations"):
-        new_conv_name = st.text_input(
-            "Conversation Name", 
-            value=current_conv,
-            key="conv_rename"
-        )
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Rename", use_container_width=True):
-                st.session_state.current_conversation = new_conv_name
-                st.rerun()
-        
-        with col2:
-            if st.button("New Chat", use_container_width=True):
-                st.session_state.chat_messages = []
-                st.session_state.current_conversation = f"chat_{int(time.time())}"
-                st.session_state.last_sources = {}
-                st.rerun()
+    # Display service level badge
+    service_level_badge = get_service_level_badge(service_level)
+    st.markdown(f"**Current:** {service_level_badge}", unsafe_allow_html=True)
     
-    st.divider()
+    # Z-score explanation
+    z_score = get_service_level_zscore(service_level)
+    st.caption(f"Z-score: {z_score:.3f} (confidence interval)")
     
-    # ─── System Status ───
-    st.subheader("⚙️ System Status")
+    st.markdown("---")
     
-    # Model badge
-    last_intent = st.session_state.last_sources.get("intent", "general")
-    model_badge_html = get_model_badge(last_intent)
-    st.markdown(f"**Model:** {model_badge_html}", unsafe_allow_html=True)
+    # Model Selection
+    st.subheader("🤖 Model Selection")
+    model_choice = st.radio(
+        "Choose Model",
+        ["Auto (Recommended)", "GPT-4o", "GPT-5", "Assistant API"],
+        index=0
+    )
     
-    # Confidence badge (from last interaction)
+    # Confidence History
     if st.session_state.confidence_history:
-        last_confidence = st.session_state.confidence_history[-1]
-        confidence_badge_html = get_confidence_badge(last_confidence)
-        st.markdown(f"**Confidence:** {confidence_badge_html}", unsafe_allow_html=True)
+        st.subheader("📊 Confidence History")
+        st.line_chart(st.session_state.confidence_history)
     
-    st.divider()
+    # Data Needed Panel (Always rendered as per spec)
+    st.markdown("---")
+    st.subheader("📊 Data Needed & Gaps")
     
-    # ─── File Selection ───
-    st.subheader("📊 Data Files")
+    # Initialize data needed panel
+    if "data_needed_panel" not in st.session_state:
+        st.session_state.data_needed_panel = DataNeededPanel()
     
-    available_files = load_available_files()
-    if available_files:
-        file_options = []
-        file_map = {}
-        
-        for file in available_files:
-            display_name = f"{file['name']} ({file.get('file_type', 'excel')})"
-            if file.get('server_modified'):
-                display_name += f" — {file['server_modified'].strftime('%m/%d %H:%M')}"
-            
-            file_options.append(display_name)
-            file_map[display_name] = file['path_lower']
-        
-        selected_displays = st.multiselect(
-            "Select files for analysis:",
-            options=file_options,
-            default=st.session_state.selected_files,
-            key="file_selector"
-        )
-        
-        # Update session state
-        st.session_state.selected_files = selected_displays
-        selected_paths = [file_map[display] for display in selected_displays]
-        
-        if selected_paths:
-            st.success(f"✅ {len(selected_paths)} file(s) selected")
-        else:
-            st.info("💡 Select files to focus analysis")
-    else:
-        st.warning("No cleansed files found")
+    data_panel = st.session_state.data_needed_panel
+    data_panel.load_from_session()
     
-    st.divider()
-    
-    # ─── Project Info ───
-    st.subheader("🏗️ Project Paths")
-    with st.expander("System Paths"):
-        st.code(f"Project Root: {PROJECT_ROOT}")
-        st.code(f"Data Root: {DATA_ROOT}")
-        st.code(f"Metadata: {META_DIR}")
-        st.code(f"Cleansed Files: {CLEANSED}")
+    # Render data needed panel in sidebar
+    data_panel.render_panel(expanded=False)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main Chat Interface
 # ─────────────────────────────────────────────────────────────────────────────
-st.title("💬 Chat")
+st.title("🧠 SCIE Ethos LLM Assistant")
+st.caption("Architecture-Compliant Chat Interface with Enhanced Phase 4 Features")
 
-# Display chat history
+# Confidence badge (from last interaction)
+if st.session_state.confidence_history:
+    last_confidence = st.session_state.confidence_history[-1]
+    confidence_badge_html = get_confidence_badge(last_confidence, st.session_state.service_level)
+    st.markdown(f"**Confidence:** {confidence_badge_html}", unsafe_allow_html=True)
+
+# Chat messages display
 for message in st.session_state.chat_messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         
-        # Display artifacts if present
+        # Show artifacts if available
         if message.get("artifacts"):
-            with st.expander("📎 Artifacts"):
-                for artifact in message["artifacts"]:
-                    artifact_path = str(artifact)
-                    
-                    # Handle different artifact types
-                    if artifact_path.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
-                        if Path(artifact_path).exists():
-                            st.image(artifact_path, use_container_width=True)
-                        else:
-                            st.caption(f"🖼️ Chart: {artifact_path}")
-                    
-                    elif artifact_path.lower().endswith((".xlsx", ".csv")):
-                        st.caption(f"📊 Data: {artifact_path}")
-                    
-                    elif artifact_path.lower().endswith(".json"):
-                        st.caption(f"📄 Metadata: {artifact_path}")
-                    
-                    else:
-                        st.caption(f"📎 {artifact_path}")
+            st.markdown("**📎 Generated Artifacts:**")
+            for artifact in message["artifacts"]:
+                st.code(str(artifact))
 
 # Chat input
-user_question = st.chat_input("Ask about data, docs, KB, comparisons…")
-
-if user_question:
-    # Add user message to chat
-    st.session_state.chat_messages.append({
-        "role": "user", 
-        "content": user_question
-    })
-
+if prompt := st.chat_input("Ask about inventory, WIP, E&O, forecasting, or root cause analysis..."):
+    # Add user message to chat history
+    st.session_state.chat_messages.append({"role": "user", "content": prompt})
+    
     # Display user message
     with st.chat_message("user"):
-        st.markdown(user_question)
-
-    # Process assistant response
+        st.markdown(prompt)
+    
+    # Display assistant response placeholder
     with st.chat_message("assistant"):
-        thinking_placeholder = st.empty()
-        thinking_placeholder.markdown("🤔 _Analyzing your question..._")
-        start_time = time.time()
+        message_placeholder = st.empty()
+        
+        # Process the query
         try:
-            class AppPaths:
-                def __init__(self):
-                    self.dbx_cleansed_folder = CLEANSED
-                    self.dbx_metadata_folder = META_DIR
-                    self.dbx_summaries_folder = f"{DATA_ROOT}/03_Summaries"
-            app_paths = AppPaths()
-
-            # Always use enterprise orchestrator for free-form Q&A
-            ar = answer_question(user_question, app_paths, cleansed_paths=None)
-
-            answer = ar.get("final_text") or ""
-            confidence_obj = ar.get("confidence") or {}
-            confidence_score = confidence_obj.get("score")
-            if confidence_score is None:
-                confidence_score = score_ravc(recency=0.8, alignment=0.9, variance=0.2, coverage=0.8)["score"]
-
-            result = {
-                "final_text": answer,
-                "intent_info": ar.get("intent_info", {}),
-                "tool_calls": ar.get("tool_calls", []),
-                "artifacts": ar.get("artifacts", []),
-                "kb_citations": ar.get("kb_citations", []),
-                "debug": ar.get("debug", {}),
-            }
-
-            thinking_placeholder.markdown(answer)
-
-            artifacts = result.get("artifacts", [])
-            intent_info = result.get("intent_info", {})
-
-            st.session_state.last_sources = {
-                "intent": intent_info.get("intent"),
-                "confidence": confidence_score,
-                "tool_calls": result.get("tool_calls", []),
-                "artifacts": artifacts,
-                "kb_citations": result.get("kb_citations", []),
-                "response_time": time.time() - start_time
-            }
-
+            # Initialize export manager with current service level
+            export_manager = ExportManager(st.session_state.service_level)
+            
+            # Run query with appropriate model
+            if model_choice == "Assistant API":
+                # Use OpenAI Assistant API
+                response = run_query(prompt, selected_files=st.session_state.selected_files)
+            else:
+                # Use direct model calls
+                model_name = "gpt-4o" if model_choice == "GPT-4o" else "gpt-5"
+                response = run_query(prompt, model=model_name, selected_files=st.session_state.selected_files)
+            
+            # Extract response components
+            answer = response.get("answer", "No answer provided")
+            sources = response.get("sources", {})
+            confidence_score = response.get("confidence", 0.5)
+            
+            # Update confidence history
             st.session_state.confidence_history.append(confidence_score)
             if len(st.session_state.confidence_history) > 10:
                 st.session_state.confidence_history.pop(0)
-
+            
+            # Store last sources for export
+            st.session_state.last_sources = sources
+            
+            # Display response
+            message_placeholder.markdown(answer)
+            
+            # Show enhanced sources inline
+            sources_drawer = SourcesDrawer()
+            sources_drawer.render_inline_sources(sources, confidence_score)
+            
+            # Add assistant message to chat history
             st.session_state.chat_messages.append({
                 "role": "assistant",
                 "content": answer,
-                "artifacts": artifacts
+                "sources": sources,
+                "confidence": confidence_score,
+                "service_level": st.session_state.service_level
             })
-
-            try:
-                st.session_state.session_handler.add_entry(user_question, result)
-                log_query_result(
-                    user_question, 
-                    result, 
-                    save_path=f"{META_DIR}/chat_log.jsonl"
-                )
-                log_event(f"Chat Q: {user_question[:60]}... Intent: {intent_info.get('intent')} Duration: {time.time() - start_time:.2f}s")
-            except Exception as log_error:
-                st.caption(f"⚠️ Logging failed: {log_error}")
+            
         except Exception as e:
-            error_message = f"❌ **Error Processing Request**\n\n```\n{str(e)}\n```\n\nPlease try rephrasing your question."
-            thinking_placeholder.markdown(error_message)
+            error_message = f"❌ Error processing query: {str(e)}"
+            message_placeholder.error(error_message)
             st.session_state.chat_messages.append({
                 "role": "assistant",
                 "content": error_message,
-                "artifacts": []
+                "error": True
             })
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Sources & Context Drawer
-# ─────────────────────────────────────────────────────────────────────────────
-if st.session_state.last_sources:
-    with st.expander("🔍 Sources & Analysis Details"):
-        sources = st.session_state.last_sources
-        
-        # Analysis metadata
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            intent = sources.get("intent", "unknown")
-            st.markdown(f"**Intent:** `{intent}`")
-        
-        with col2:
-            confidence = sources.get("confidence", 0)
-            confidence_html = get_confidence_badge(confidence)
-            st.markdown(f"**Confidence:** {confidence_html}", unsafe_allow_html=True)
-        
-        with col3:
-            response_time = sources.get("response_time", 0)
-            st.markdown(f"**Response Time:** {response_time:.2f}s")
-        
-        # Tool calls
-        tool_calls = sources.get("tool_calls", [])
-        if tool_calls:
-            st.markdown("**🔧 Tools Used:**")
-            for i, call in enumerate(tool_calls, 1):
-                tool_name = call.get("tool", "unknown")
-                result_meta = call.get("result_meta", {})
-                
-                with st.container():
-                    st.markdown(f"**{i}.** `{tool_name}`")
-                    if result_meta:
-                        st.json(result_meta)
-        
-        # Knowledge base citations
-        kb_citations = sources.get("kb_citations", [])
-        if kb_citations:
-            st.markdown("**📚 Knowledge Base Sources:**")
-            for citation in kb_citations:
-                st.markdown(f"- {citation}")
-        
-        # Artifacts
-        artifacts = sources.get("artifacts", [])
-        if artifacts:
-            st.markdown("**📎 Generated Artifacts:**")
-            for artifact in artifacts:
-                st.code(str(artifact))
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Export Options
-# ─────────────────────────────────────────────────────────────────────────────
+# Enhanced Export Options
+# ─────────────────────────────────────────────────────────────
 if st.session_state.chat_messages:
     st.markdown("---")
+    st.header("📤 Export Options")
     
-    col1, col2, col3 = st.columns(3)
+    # Initialize export manager
+    export_manager = ExportManager(st.session_state.service_level)
+    
+    # Prepare export data
+    export_data = {
+        "messages": st.session_state.chat_messages,
+        "sources": st.session_state.last_sources,
+        "confidence_history": st.session_state.confidence_history,
+        "selected_files": st.session_state.selected_files,
+        "metadata": {
+            "conversation_id": st.session_state.current_conversation,
+            "service_level": st.session_state.service_level,
+            "exported_at": time.strftime('%Y-%m-%d %H:%M:%S'),
+            "total_messages": len(st.session_state.chat_messages)
+        }
+    }
+    
+    # Add data gaps summary
+    if "data_needed_panel" in st.session_state:
+        gaps_summary = st.session_state.data_needed_panel.get_gaps_summary()
+        export_data["data_gaps"] = gaps_summary
+    
+    # Export buttons in columns
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
-        if st.button("📄 Export Markdown", use_container_width=True):
-            # Generate markdown export
-            markdown_content = []
-            markdown_content.append(f"# SCIE Ethos Chat Export")
-            markdown_content.append(f"**Conversation:** {st.session_state.current_conversation}")
-            markdown_content.append(f"**Exported:** {time.strftime('%Y-%m-%d %H:%M:%S')}")
-            markdown_content.append("")
-            
-            for message in st.session_state.chat_messages:
-                role = message["role"].title()
-                content = message["content"]
-                markdown_content.append(f"## {role}")
-                markdown_content.append("")
-                markdown_content.append(content)
-                
-                if message.get("artifacts"):
-                    markdown_content.append("")
-                    markdown_content.append("**Artifacts:**")
-                    for artifact in message["artifacts"]:
-                        markdown_content.append(f"- {artifact}")
-                
-                markdown_content.append("")
-            
-            markdown_export = "\n".join(markdown_content)
-            
-            st.download_button(
-                label="Download Conversation.md",
-                data=markdown_export,
-                file_name=f"scie_ethos_chat_{st.session_state.current_conversation}_{int(time.time())}.md",
-                mime="text/markdown",
-                use_container_width=True
-            )
+        if st.button("📊 XLSX", use_container_width=True, help="Export to Excel with multiple sheets"):
+            try:
+                xlsx_content = export_manager.export_to_xlsx(export_data)
+                st.download_button(
+                    label="Download XLSX",
+                    data=xlsx_content,
+                    file_name=f"scie_ethos_export_{int(time.time())}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.error(f"XLSX export failed: {e}")
     
     with col2:
-        if st.button("📊 Export JSON", use_container_width=True):
-            # Generate JSON export with full metadata
-            export_data = {
-                "conversation_id": st.session_state.current_conversation,
-                "exported_at": time.time(),
-                "exported_at_human": time.strftime('%Y-%m-%d %H:%M:%S'),
-                "messages": st.session_state.chat_messages,
-                "last_sources": st.session_state.last_sources,
-                "confidence_history": st.session_state.confidence_history,
-                "selected_files": st.session_state.selected_files,
-                "system_info": {
-                    "project_root": PROJECT_ROOT,
-                    "data_root": DATA_ROOT,
-                    "metadata_dir": META_DIR
-                }
-            }
-            
-            json_export = json.dumps(export_data, indent=2, default=str)
-            
-            st.download_button(
-                label="Download Chat Data.json",
-                data=json_export,
-                file_name=f"scie_ethos_chat_data_{st.session_state.current_conversation}_{int(time.time())}.json",
-                mime="application/json",
-                use_container_width=True
-            )
+        if st.button("📄 Markdown", use_container_width=True, help="Export to Markdown format"):
+            try:
+                md_content = export_manager.export_to_markdown(export_data)
+                st.download_button(
+                    label="Download MD",
+                    data=md_content,
+                    file_name=f"scie_ethos_export_{int(time.time())}.md",
+                    mime="text/markdown",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.error(f"Markdown export failed: {e}")
     
     with col3:
-        st.markdown("**PDF Export**")
-        st.caption("Requires additional setup\n(wkhtmltopdf/reportlab)")
+        if st.button("📝 DOCX", use_container_width=True, help="Export to Word document"):
+            try:
+                docx_content = export_manager.export_to_docx(export_data)
+                st.download_button(
+                    label="Download DOCX",
+                    data=docx_content,
+                    file_name=f"scie_ethos_export_{int(time.time())}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.error(f"DOCX export failed: {e}")
+    
+    with col4:
+        if st.button("📊 PPTX", use_container_width=True, help="Export to PowerPoint"):
+            try:
+                pptx_content = export_manager.export_to_pptx(export_data)
+                st.download_button(
+                    label="Download PPTX",
+                    data=pptx_content,
+                    file_name=f"scie_ethos_export_{int(time.time())}.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.error(f"PPTX export failed: {e}")
+    
+    with col5:
+        if st.button("🚀 All Formats", use_container_width=True, help="Export to all formats + Dropbox + S3"):
+            with st.spinner("Exporting to all formats..."):
+                results = export_manager.export_all_formats(export_data)
+                
+                # Show results
+                st.success("Export completed!")
+                for format_name, success in results.items():
+                    if success:
+                        st.success(f"✅ {format_name.upper()}")
+                    else:
+                        st.error(f"❌ {format_name.upper()}")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Footer
@@ -484,7 +375,7 @@ if st.session_state.chat_messages:
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: #666; font-size: 0.8rem;'>"
-    "🧠 SCIE Ethos LLM Assistant | Architecture-Compliant Chat Interface"
+    "🧠 SCIE Ethos LLM Assistant | Enhanced Phase 4 UI with Service Level Control & Multi-Format Exports"
     "</div>", 
     unsafe_allow_html=True
 )
