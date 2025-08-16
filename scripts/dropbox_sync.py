@@ -55,9 +55,8 @@ def should_exclude_file(file_path: str, file_name: str, ext: str) -> tuple[bool,
     Determine if a file should be excluded from OpenAI File Search sync.
     Returns (should_exclude, reason)
     
-    Architecture principle: "tabular files use Assistant File Search"
-    REALITY: OpenAI File Search doesn't support CSV/Excel (platform limitation)
-    SOLUTION: Tabular files available via our tools, documents via OpenAI File Search
+    Architecture principle: "Documents use OpenAI File Search, Excel/CSV use Code Interpreter"
+    SOLUTION: PDFs/DOCs go to vector store, Excel/CSV stay in Dropbox for Code Interpreter
     """
     # Normalize path for comparison
     path_lower = file_path.lower().replace("\\", "/")
@@ -67,9 +66,10 @@ def should_exclude_file(file_path: str, file_name: str, ext: str) -> tuple[bool,
         if exclude_folder in path_lower:
             return True, f"Generated artifact folder: {exclude_folder}"
     
-    # Exclude tabular files (OpenAI limitation) - our tools handle these
+    # Exclude tabular files (OpenAI File Search doesn't support them)
+    # These will be available via Code Interpreter from Dropbox
     if ext in TABULAR_EXTS:
-        return True, "Tabular file (OpenAI File Search doesn't support CSV/Excel)"
+        return True, "Tabular file (available via Code Interpreter from Dropbox)"
     
     # Exclude unsupported extensions 
     if ext not in OPENAI_FILE_SEARCH_EXTS:
@@ -89,7 +89,10 @@ OPENAI_API_KEY = must("OPENAI_API_KEY")
 DBX_APP_KEY     = must("DROPBOX_APP_KEY")
 DBX_APP_SECRET  = must("DROPBOX_APP_SECRET")
 DBX_REFRESH_TOKEN = must("DROPBOX_REFRESH_TOKEN")
+
+# Assistant configuration - can be created automatically or use existing
 ASSISTANT_ID = SECRETS.get("ASSISTANT_ID")  # optional; can fall back to assistant.json if you keep one in Dropbox later
+AUTO_CREATE_ASSISTANT = SECRETS.get("AUTO_CREATE_ASSISTANT", "true").lower() == "true"
 
 # Optional
 DROPBOX_ROOT = get_optional("DROPBOX_ROOT", "").strip("/")   # e.g. "Project_Root"
@@ -173,10 +176,128 @@ def list_dropbox_files(dbx: dropbox.Dropbox, path: str):
     return [f for f in files if isinstance(f, dropbox.files.FileMetadata)]
 
 # ---------------- Assistant / Vector store ----------------
+def create_assistant() -> str:
+    """Create a new OpenAI Assistant with File Search + Code Interpreter."""
+    try:
+        # Load instructions from prompts/instructions_master.yaml
+        instructions_path = "prompts/instructions_master.yaml"
+        if os.path.exists(instructions_path):
+            import yaml
+            with open(instructions_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+            
+            # Convert YAML to instruction text
+            instructions_text = _yaml_to_instructions(config)
+        else:
+            # Fallback instructions
+            instructions_text = """You are SCIE Ethos — an enterprise supply-chain analyst copilot.
+You must produce accurate, auditable, and action-oriented answers grounded in data and cited sources.
+Use File Search to find relevant documents and Code Interpreter to analyze Excel/CSV data.
+Always cite your sources and separate findings from data gaps."""
+        
+        # Create the assistant
+        assistant = client.beta.assistants.create(
+            name="SCIE Ethos Supply Chain & Inventory Analyst",
+            description="Enterprise supply-chain analyst copilot with File Search + Code Interpreter",
+            model=OPENAI_MODEL,
+            instructions=instructions_text,
+            tools=[{"type": "file_search"}, {"type": "code_interpreter"}]
+        )
+        
+        # Save assistant metadata
+        assistant_meta = {
+            "assistant_id": assistant.id,
+            "name": assistant.name,
+            "model": assistant.model,
+            "created_at": datetime.utcnow().isoformat() + "Z"
+        }
+        
+        # Save to local file
+        os.makedirs("prompts", exist_ok=True)
+        with open("prompts/assistant.json", "w", encoding="utf-8") as f:
+            json.dump(assistant_meta, f, indent=2)
+        
+        # Also save to Dropbox for cloud access
+        dbx_write_json(f"{DBX_CONFIG_DIR}/assistant.json", assistant_meta)
+        
+        print(f"✅ Created new Assistant: {assistant.id}")
+        return assistant.id
+        
+    except Exception as e:
+        print(f"❌ Failed to create assistant: {e}")
+        raise
+
+def _yaml_to_instructions(config: dict) -> str:
+    """Convert YAML config to instruction text for the Assistant."""
+    lines = []
+    
+    # Assistant profile
+    ap = config.get("assistant_profile", {})
+    if ap.get("name") and ap.get("description"):
+        lines.append(f"You are {ap['name']}: {ap['description']}")
+    
+    # Core directives
+    directives = config.get("core_directives", [])
+    if directives:
+        lines.append("\nCore Directives:")
+        for directive in directives:
+            lines.append(f"- {directive}")
+    
+    # Intents
+    intents = config.get("intents", {})
+    if intents:
+        lines.append("\nIntents & Sub-skills:")
+        for intent, spec in intents.items():
+            desc = spec.get("description", "")
+            subs = spec.get("subskills", [])
+            lines.append(f"- {intent}: {desc}")
+            if subs:
+                lines.append(f"  * Sub-skills: {', '.join(subs)}")
+    
+    # Gap detection
+    gap_rules = config.get("gap_detection_rules", [])
+    if gap_rules:
+        lines.append("\nGap Detection Rules:")
+        for rule in gap_rules:
+            lines.append(f"- {rule}")
+    
+    # Output templates
+    templates = config.get("output_templates", {})
+    if templates:
+        lines.append("\nOutput Templates:")
+        for name, template in templates.items():
+            lines.append(f"\n{name}:")
+            lines.append(template)
+    
+    lines.append("\nAlways ground answers in retrieved files, cite sources, and separate 'Data Needed' from findings.")
+    return "\n".join(lines)
+
 def resolve_assistant_id() -> str:
+    """Resolve the assistant ID, creating one if needed."""
     if ASSISTANT_ID:
         return ASSISTANT_ID
-    raise FileNotFoundError("ASSISTANT_ID not set in secrets.")
+    
+    # Try to load from local file
+    try:
+        with open("prompts/assistant.json", "r", encoding="utf-8") as f:
+            meta = json.load(f)
+            return meta["assistant_id"]
+    except FileNotFoundError:
+        pass
+    
+    # Try to load from Dropbox
+    try:
+        meta = dbx_read_json(f"{DBX_CONFIG_DIR}/assistant.json")
+        if meta and meta.get("assistant_id"):
+            return meta["assistant_id"]
+    except Exception:
+        pass
+    
+    # Create new assistant if auto-creation is enabled
+    if AUTO_CREATE_ASSISTANT:
+        return create_assistant()
+    
+    raise FileNotFoundError("ASSISTANT_ID not set and auto-creation disabled. Set ASSISTANT_ID in secrets or enable AUTO_CREATE_ASSISTANT.")
 
 def get_or_create_vector_store() -> str:
     vs_meta = dbx_read_json(DBX_VECTOR_META_PATH) or {}
@@ -223,7 +344,14 @@ def _upload_batch_to_vector_store(vs_id: str, file_tuples: List[Tuple[str, bytes
     return vs.upload_batch_and_poll(vector_store_id=vs_id, files=files)
 
 # ---------------- Main sync ----------------
-def sync_dropbox_to_assistant(batch_size: int = 10):
+def sync_dropbox_to_assistant(batch_size: int = 10, specific_folders: List[str] = None):
+    """
+    Sync Dropbox files to OpenAI Assistant.
+    
+    Args:
+        batch_size: Number of files to upload in each batch
+        specific_folders: List of specific folders to sync (e.g., ["04_Data/00_Raw_Files", "06_LLM_Knowledge_Base"])
+    """
     assistant_id = resolve_assistant_id()
     dbx = init_dropbox()
     manifest = dbx_read_json(DBX_MANIFEST_PATH) or {}
@@ -276,16 +404,45 @@ def sync_dropbox_to_assistant(batch_size: int = 10):
 
     dbx_write_json(DBX_MANIFEST_PATH, manifest)
     print(f"✅ Sync complete!")
-    print(f"   📤 Uploaded to OpenAI: {uploaded}")
+    print(f"   📤 Uploaded to OpenAI File Search: {uploaded}")
     print(f"   ⏭️  Skipped (unchanged): {skipped}")
     print(f"   📁 Excluded (artifacts): {excluded_artifacts}")
-    print(f"   📊 Excluded (tabular data): {excluded_tabular}")
+    print(f"   📊 Excel/CSV files (Code Interpreter): {excluded_tabular}")
     print(f"   ❌ Excluded (unsupported): {unsupported}")
     print(f"   🔗 Vector store: {vs_id}")
-    print(f"   💾 Manifest saved: {DBX_VECTOR_META_PATH}")
+    print(f"   💾 Manifest saved: {DBX_MANIFEST_PATH}")
+    print(f"   📋 Total files in Dropbox: {len(dropbox_files)}")
+    print(f"   🔍 Files available for File Search: {uploaded + skipped}")
+    print(f"   📈 Files available for Code Interpreter: {excluded_tabular}")
+
+def sync_by_path_contract():
+    """Sync files according to the path contract structure."""
+    print("🔄 Syncing according to path contract...")
+    
+    # Define folders to sync based on path_contract.yaml
+    sync_folders = [
+        "04_Data/00_Raw_Files",           # Raw data files
+        "06_LLM_Knowledge_Base",          # Knowledge base documents
+        "04_Data/01_Cleansed_Files",      # Cleaned data files
+        "04_Data/04_Metadata",            # Metadata files
+    ]
+    
+    for folder in sync_folders:
+        print(f"\n📁 Syncing folder: {folder}")
+        try:
+            sync_dropbox_to_assistant(batch_size=5, specific_folders=[folder])
+        except Exception as e:
+            print(f"❌ Failed to sync {folder}: {e}")
+            continue
+    
+    print("\n✅ Path contract sync complete!")
 
 if __name__ == "__main__":
-    sync_dropbox_to_assistant()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "path-contract":
+        sync_by_path_contract()
+    else:
+        sync_dropbox_to_assistant()
 
 
 
