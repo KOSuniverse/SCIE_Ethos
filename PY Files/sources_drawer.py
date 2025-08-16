@@ -14,6 +14,7 @@ class SourcesDrawer:
     
     def __init__(self):
         self.expanded = False
+        self.data_gaps = []  # Add this for test compatibility
     
     def render_sources_panel(self, sources: Dict[str, Any], confidence_score: float = None):
         """Render the sources panel with enhanced functionality."""

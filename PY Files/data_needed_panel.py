@@ -109,11 +109,11 @@ class DataNeededPanel:
             suggested_actions = st.text_area("Suggested Actions", key="gap_actions", height=80)
             
             if st.button("Add Gap", key="add_gap"):
-                self._add_data_gap(description, impact, data_type, priority, suggested_actions)
+                self.add_data_gap(description, impact, data_type, priority, suggested_actions)
                 st.success("Data gap added successfully!")
                 st.rerun()
     
-    def _add_data_gap(self, description: str, impact: str, data_type: str, priority: str, actions: str):
+    def add_data_gap(self, description: str, impact: str, data_type: str, priority: str, actions: str):
         """Add a new data gap."""
         gap = {
             "description": description,
