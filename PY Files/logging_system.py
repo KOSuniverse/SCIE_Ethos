@@ -8,7 +8,7 @@ import os
 import json
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional, Union
 from pathlib import Path
 import hashlib
@@ -452,9 +452,24 @@ class AnalyticsEngine:
                         for line in f:
                             if line.strip():
                                 log_entry = json.loads(line)
-                                log_time = datetime.fromisoformat(log_entry["ts"].replace("Z", "+00:00"))
-                                if log_time >= cutoff_date:
-                                    logs_data.append(log_entry)
+                                try:
+                                    # Handle different timestamp formats
+                                    ts_str = log_entry["ts"]
+                                    if ts_str.endswith("Z"):
+                                        ts_str = ts_str.replace("Z", "+00:00")
+                                    
+                                    log_time = datetime.fromisoformat(ts_str)
+                                    # Make both datetimes timezone-aware for comparison
+                                    if log_time.tzinfo is None:
+                                        log_time = log_time.replace(tzinfo=timezone.utc)
+                                    if cutoff_date.tzinfo is None:
+                                        cutoff_date = cutoff_date.replace(tzinfo=timezone.utc)
+                                    
+                                    if log_time >= cutoff_date:
+                                        logs_data.append(log_entry)
+                                except Exception as parse_error:
+                                    print(f"Error parsing timestamp in {log_file}: {parse_error}")
+                                    continue
                 except Exception as e:
                     print(f"Error reading log file {log_file}: {e}")
                     continue
