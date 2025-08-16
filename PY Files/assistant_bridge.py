@@ -47,12 +47,107 @@ def _extract_answer(client: OpenAI, thread_id: str) -> str:
 
 def run_query(question: str, intent_hint: str | None = None) -> dict:
     client = OpenAI()
-    with open("config/assistant.json", "r", encoding="utf-8") as f:
-        meta = json.load(f)
-    assistant_id = meta["assistant_id"]
+    
+    # Try to load assistant metadata from multiple sources
+    assistant_id = None
+    
+    # 1. Try environment variable
+    assistant_id = os.getenv("ASSISTANT_ID")
+    
+    # 2. Try local file
+    if not assistant_id:
+        try:
+            with open("prompts/assistant.json", "r", encoding="utf-8") as f:
+                meta = json.load(f)
+                assistant_id = meta["assistant_id"]
+        except FileNotFoundError:
+            pass
+    
+    # 3. Try Dropbox config
+    if not assistant_id and _FILE_SYNC_AVAILABLE:
+        try:
+            from dbx_utils import dbx_read_json
+            meta = dbx_read_json("/config/assistant.json")
+            if meta and meta.get("assistant_id"):
+                assistant_id = meta["assistant_id"]
+        except Exception:
+            pass
+    
+    if not assistant_id:
+        raise RuntimeError("No assistant ID found. Run dropbox_sync.py first to create the assistant.")
 
     thread = client.beta.threads.create()
-    client.beta.threads.messages.create(thread_id=thread.id, role="user", content=question)
+    
+    # Create the user message
+    message_content = question
+    
+    # If intent hint suggests data analysis, try to attach relevant Excel/CSV files
+    if intent_hint and intent_hint in ["root_cause", "forecast", "movement_analysis", "eda"]:
+        try:
+            # Try to find relevant data files from Dropbox
+            if _FILE_SYNC_AVAILABLE:
+                from dbx_utils import list_data_files, read_file_bytes
+                
+                # Look for relevant data files
+                data_folders = ["04_Data/01_Cleansed_Files", "04_Data/00_Raw_Files"]
+                attached_files = []
+                
+                for folder in data_folders:
+                    try:
+                        files = list_data_files(folder)
+                        # Attach first few relevant files
+                        for file_info in files[:3]:  # Limit to 3 files
+                            file_path = file_info["path_lower"]
+                            file_content = read_file_bytes(file_path)
+                            
+                            # Upload file to OpenAI
+                            uploaded_file = client.files.create(
+                                file=file_content,
+                                purpose="assistants"
+                            )
+                            attached_files.append(uploaded_file.id)
+                            
+                            print(f"📎 Attached file: {file_info['name']}")
+                    except Exception as e:
+                        print(f"⚠️ Could not attach files from {folder}: {e}")
+                        continue
+                
+                # Create message with file attachments
+                if attached_files:
+                    client.beta.threads.messages.create(
+                        thread_id=thread.id,
+                        role="user",
+                        content=message_content,
+                        file_ids=attached_files
+                    )
+                else:
+                    client.beta.threads.messages.create(
+                        thread_id=thread.id,
+                        role="user",
+                        content=message_content
+                    )
+            else:
+                # No file sync available, create message without attachments
+                client.beta.threads.messages.create(
+                    thread_id=thread.id,
+                    role="user",
+                    content=message_content
+                )
+        except Exception as e:
+            print(f"⚠️ File attachment failed: {e}")
+            # Fallback to message without attachments
+            client.beta.threads.messages.create(
+                thread_id=thread.id,
+                role="user",
+                content=message_content
+            )
+    else:
+        # No data analysis intent, create message without attachments
+        client.beta.threads.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=message_content
+        )
 
     # Let the Assistant use File Search + Code Interpreter
     run = client.beta.threads.runs.create(thread_id=thread.id, assistant_id=assistant_id)
