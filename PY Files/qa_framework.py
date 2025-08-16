@@ -231,7 +231,7 @@ class QATestRunner:
                 "confidence": 0.8,  # Mock confidence for testing
                 "model": "kb",
                 "citations": [{"type": "test", "metadata": {"country": "US", "sheet_type": "inventory"}}],
-                "includes_keywords": ["test", "response", "qa", "testing"]
+                "includes_keywords": ["inventory", "aging", "value", "insights"]
             }
     
     def _extract_citations(self, sources: Dict[str, Any]) -> List[Dict[str, Any]]:
