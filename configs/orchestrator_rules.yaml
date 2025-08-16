@@ -4,14 +4,27 @@ escalation:
     - "pre_confidence < 0.55"
     - "numeric_validation_failed"
     - "portfolio_size > 50"
+
 confidence:
   formula: "0.35*R + 0.25*A + 0.25*V + 0.15*C"
   buckets: { high: ">=0.75", medium: "0.55-0.74", low: "<0.55" }
+
 numeric_validation:
   checks:
     - "Aging buckets reconcile to OH"
     - "Units consistency (LT days vs demand cadence)"
     - "Currency presence and consistent"
     - "No negative OH unless flagged"
+
+retrieval_priority:
+  - "summary_card.md for kb_doc"
+  - "summary_card.md for data sheets"
+  - "raw PDF (kb_doc)"
+  - "raw tables"
+
+intent_filters:
+  policy_query_keywords: ["policy","approval","workflow","SOP","who approves","threshold","governance","change control","ECO","EOL"]
+  route_policy_queries_to_kb: true
+
 output_template:
   order: ["Title","Executive Insight","Analysis","Recommendations","Citations","Limits / Data Needed"]
