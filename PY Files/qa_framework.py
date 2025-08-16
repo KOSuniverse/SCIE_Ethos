@@ -230,7 +230,10 @@ class QATestRunner:
                 "sources": {"hits": []},
                 "confidence": 0.8,  # Mock confidence for testing
                 "model": "kb",
-                "citations": [{"type": "test", "metadata": {"country": "US", "sheet_type": "inventory"}}],
+                "citations": [
+                    {"type": "test", "metadata": {"country": "US", "sheet_type": "inventory"}},
+                    {"type": "test", "metadata": {"country": "US", "sheet_type": "eo"}}
+                ],
                 "includes_keywords": ["inventory", "aging", "value", "insights"]
             }
     
