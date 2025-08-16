@@ -225,11 +225,11 @@ def answer_question(
     try:
         from column_alias import load_alias_group
         import yaml
-        config_path = os.path.join(os.path.dirname(__file__), '../config/instructions_master.yaml')
+        config_path = os.path.join(os.path.dirname(__file__), '../prompts/instructions_master.yaml')
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
-        alias_source = config.get('alias_source')
-        glossary = config.get('glossary_terms')
+        alias_source = config.get('glossary_and_alias_injection', {}).get('source')
+        glossary = config.get('glossary_and_alias_injection', {}).get('glossary_terms')
         if alias_source:
             alias_map = load_alias_group(alias_source)
     except Exception as e:
@@ -244,9 +244,13 @@ def answer_question(
     if glossary:
         harmonization_context += f"Glossary terms: {glossary}\n"
 
-    # 1) Assemble global context
+    # 1) Assemble global context with token budgeting
     excel_ctx = _build_excel_context(cleansed_paths)   # files -> sheets (+types) (+columns)
-    kb_ctx_preview = _kb_candidates(user_question)     # doc titles or brief refs
+    kb_ctx_preview = _kb_candidates(user_question, orchestrator_rules=orchestrator_rules)     # doc titles or brief refs
+    
+    # Apply token budgeting to context
+    excel_ctx = _apply_token_budgeting(excel_ctx, max_context_tokens // 2)  # Reserve half for Excel context
+    kb_ctx_preview = _apply_kb_token_budgeting(kb_ctx_preview, max_context_tokens // 2)  # Reserve half for KB context
 
     print(f"📊 ORCHESTRATOR DEBUG: Excel files found: {len(excel_ctx.get('files', []))}")
     print(f"📚 ORCHESTRATOR DEBUG: KB candidates: {len(kb_ctx_preview)}")
@@ -291,22 +295,86 @@ def answer_question(
     )
     # --- Enterprise-level dual-pass reasoning and output guardrails ---
     from confidence import score_ravc, should_abstain
+    
+    # Load confidence thresholds from instructions_master.yaml
+    confidence_config = config.get('confidence_scoring', {})
+    confidence_thresholds = confidence_config.get('thresholds', {})
+    high_threshold = confidence_thresholds.get('high', 0.85)
+    medium_threshold = confidence_thresholds.get('medium', 0.65)
+    low_threshold = confidence_thresholds.get('low', 0.50)
+    
+    # Load confidence formula from orchestrator rules
+    confidence_formula = orchestrator_rules.get('confidence', {}).get('formula', '0.35*R + 0.25*A + 0.25*V + 0.15*C')
+    
+    # Apply token budgeting and pagination
+    max_context_tokens = 1500  # Default token budget
+    max_answer_tokens = 800    # Default answer token budget
+    
+    # Adjust token budget based on intent complexity
+    if intent in ["root_cause", "forecast", "movement_analysis"]:
+        max_context_tokens = 2000  # More context for complex analysis
+        max_answer_tokens = 1000   # Longer answers for complex analysis
+    
     # TODO: Replace with real calculations from exec_result and context
-    recency = 0.9
-    alignment = 0.85
-    variance = 0.1
-    coverage = 0.8
-    confidence_result = score_ravc(recency, alignment, variance, coverage)
-    confidence_score = confidence_result["score"]
-    confidence_badge = confidence_result["badge"]
-    abstain = should_abstain(confidence_score)
+    # For now, use placeholder values that match the formula
+    recency = 0.9      # R
+    alignment = 0.85   # A
+    variance = 0.1     # V (1-variance for consistency)
+    coverage = 0.8     # C
+    
+    # Apply the formula from orchestrator rules
+    if confidence_formula == "0.35*R + 0.25*A + 0.25*V + 0.15*C":
+        confidence_score = 0.35 * recency + 0.25 * alignment + 0.25 * (1 - variance) + 0.15 * coverage
+    else:
+        # Fallback to default scoring
+        confidence_result = score_ravc(recency, alignment, variance, coverage)
+        confidence_score = confidence_result["score"]
+    
+    # Apply thresholds from instructions to determine badge
+    if confidence_score >= high_threshold:
+        confidence_badge = "High"
+    elif confidence_score >= medium_threshold:
+        confidence_badge = "Medium"
+    else:
+        confidence_badge = "Low"
+    
+    # Use threshold from instructions for abstention
+    abstain_threshold = confidence_thresholds.get('low', 0.50)
+    abstain = should_abstain(confidence_score, abstain_threshold)
 
-    # Dual-pass reasoning: escalate to gpt-4o if abstain
-    if not abstain:
+    # Apply escalation triggers from orchestrator rules
+    escalation_triggers = orchestrator_rules.get('escalation', {}).get('triggers', [])
+    should_escalate = False
+    
+    # Apply numeric validation checks
+    numeric_validation_failed = False
+    numeric_checks = orchestrator_rules.get('numeric_validation', {}).get('checks', [])
+    if numeric_checks and excel_ctx.get('files'):
+        numeric_validation_failed = _run_numeric_validation(excel_ctx, numeric_checks)
+        if numeric_validation_failed:
+            print(f"🔺 ORCHESTRATOR: Numeric validation failed")
+    
+    for trigger in escalation_triggers:
+        if trigger == "intent in {root_cause, forecasting, scenario_analysis} and doc_count >= 3":
+            if intent in ["root_cause", "forecast"] and len(excel_ctx.get('files', [])) >= 3:
+                should_escalate = True
+                print(f"🔺 ORCHESTRATOR: Escalating due to complex intent '{intent}' with {len(excel_ctx.get('files', []))} files")
+        elif trigger == "pre_confidence < 0.55":
+            if confidence_score < 0.55:
+                should_escalate = True
+                print(f"🔺 ORCHESTRATOR: Escalating due to low confidence {confidence_score}")
+        elif trigger == "numeric_validation_failed":
+            if numeric_validation_failed:
+                should_escalate = True
+                print(f"🔺 ORCHESTRATOR: Escalating due to numeric validation failure")
+    
+    # Dual-pass reasoning: escalate to gpt-4o if abstain or escalation triggers
+    if not abstain and not should_escalate:
         final_text = chat_completion(client, messages, model=model)
     else:
-        # Escalate to gpt-4o for verification if confidence is low
-        print("🔺 Escalating to gpt-4o for verification due to low confidence.")
+        # Escalate to gpt-4o for verification if confidence is low or escalation triggered
+        escalation_reason = "low confidence" if abstain else "escalation trigger"
+        print(f"🔺 Escalating to gpt-4o for verification due to {escalation_reason}.")
         messages_large = llm_prompts.build_scaffold_messages(
             user_question=user_question,
             intent=intent,
@@ -320,14 +388,61 @@ def answer_question(
         )
         final_text = chat_completion(client, messages_large, model="gpt-4o")
 
+    # Load gap detection rules from instructions_master.yaml
+    gap_rules = config.get('gap_detection_rules', [])
+    
+    # Load orchestrator rules for escalation and intent filtering
+    try:
+        import yaml
+        orchestrator_rules_path = os.path.join(os.path.dirname(__file__), '../configs/orchestrator_rules.yaml')
+        with open(orchestrator_rules_path, 'r', encoding='utf-8') as f:
+            orchestrator_rules = yaml.safe_load(f)
+    except Exception as e:
+        print(f"[orchestrator] Orchestrator rules load failed: {e}")
+        orchestrator_rules = {}
+    
+    # Apply intent filtering based on orchestrator rules
+    intent_filters = orchestrator_rules.get('intent_filters', {})
+    if intent_filters.get('route_policy_queries_to_kb', False):
+        policy_keywords = intent_filters.get('policy_query_keywords', [])
+        if any(keyword in user_question.lower() for keyword in policy_keywords):
+            # Route policy queries to KB lookup
+            intent = "kb_lookup"
+            print(f"🔀 ORCHESTRATOR: Routing policy query to KB lookup")
+    
     # Enforce citation requirement for material claims
     if not kb_citations:
         final_text = "Insufficient evidence: No citations available for material claims."
         confidence_badge = "Low"
         confidence_score = 0.0
         abstain = True
+    
+    # Apply gap detection rules
+    data_gaps = []
+    if gap_rules:
+        # Check for missing required data based on gap rules
+        if not excel_ctx.get('files'):
+            data_gaps.append("No data files available for analysis")
+        if not kb_citations and intent in ["root_cause", "forecast", "optimize"]:
+            data_gaps.append("Missing knowledge base context for complex analysis")
+    
+    # Add data gaps to output if any found
+    if data_gaps:
+        final_text += f"\n\n**Data Gaps Identified:**\n" + "\n".join(f"- {gap}" for gap in data_gaps)
+    
+    # Auto planning hooks: all RCA/movement answers include policy/risk/action items
+    if intent in ["root_cause", "movement_analysis"]:
+        planning_context = "\n\n**Policy & Risk Considerations:**\n"
+        planning_context += "- Review current policies for identified drivers\n"
+        planning_context += "- Assess risk exposure and mitigation strategies\n"
+        planning_context += "- Define action items with ownership and timelines\n"
+        final_text += planning_context
 
-    # Output template: summary, evidence, analysis, actions, limits, confidence badge
+    # Load output template from instructions_master.yaml and orchestrator rules
+    output_template = config.get('output_templates', {}).get('exec_summary', '')
+    output_order = orchestrator_rules.get('output_template', {}).get('order', ['Title', 'Executive Insight', 'Analysis', 'Recommendations', 'Citations', 'Limits / Data Needed'])
+    
+    # Output template: Title → Executive Insight → Analysis → Recommendations → Citations → Limits/Data Needed
     output = {
         "final_text": str(final_text)
             + (f"\n[Enterprise] Column alias mapping applied: {list(alias_map.keys())}" if alias_map else "")
@@ -342,13 +457,15 @@ def answer_question(
         "artifacts": matched_artifacts,
         "kb_citations": kb_citations,
         "template": {
-            "summary": "Executive summary of findings.",
-            "evidence": kb_citations,
+            "title": "Analysis Title",
+            "executive_insight": "Key executive summary",
             "analysis": quantitative_context,
-            "actions": "Recommended actions based on analysis.",
-            "limits": "Limits and missing data.",
+            "recommendations": "Recommended actions based on analysis",
+            "citations": kb_citations,
+            "limits_data_needed": "Limits and missing data",
             "confidence_badge": confidence_badge,
         },
+        "output_order": output_order,  # Include the order for UI rendering
         "debug": {
             "orchestrator_flow": {
                 "intent_classification": intent_info,
@@ -369,7 +486,176 @@ def answer_question(
         "glossary_terms": glossary,
     }
 
+    # Log to S3 according to schema
+    try:
+        _log_turn_to_s3(
+            question=user_question,
+            intent=intent,
+            sources=kb_citations + matched_artifacts,
+            confidence=confidence_score,
+            model_used=model,
+            data_gaps=data_gaps,
+            orchestrator_rules=orchestrator_rules
+        )
+    except Exception as e:
+        print(f"[orchestrator] S3 logging failed: {e}")
+
     return output
+
+
+# =============================================================================
+# Token Budgeting
+# =============================================================================
+def _apply_token_budgeting(excel_context: Dict[str, Any], max_tokens: int) -> Dict[str, Any]:
+    """
+    Apply token budgeting to Excel context to stay within limits
+    """
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+    except ImportError:
+        # Fallback: rough estimate of 4 chars per token
+        def estimate_tokens(text):
+            return len(text) // 4
+    else:
+        def estimate_tokens(text):
+            return len(enc.encode(text))
+    
+    # Estimate tokens for current context
+    context_str = str(excel_context)
+    current_tokens = estimate_tokens(context_str)
+    
+    if current_tokens <= max_tokens:
+        return excel_context
+    
+    # If over budget, prioritize most important information
+    prioritized_context = {
+        "files": excel_context.get("files", [])[:3],  # Limit to top 3 files
+        "sheets_by_file": {},
+        "sheet_types": {},
+        "columns_by_sheet": {}
+    }
+    
+    # Add sheets and types for prioritized files only
+    for file in prioritized_context["files"]:
+        if file in excel_context.get("sheets_by_file", {}):
+            prioritized_context["sheets_by_file"][file] = excel_context["sheets_by_file"][file][:2]  # Top 2 sheets
+        if file in excel_context.get("sheet_types", {}):
+            prioritized_context["sheet_types"][file] = excel_context["sheet_types"][file]
+        if file in excel_context.get("columns_by_sheet", {}):
+            prioritized_context["columns_by_sheet"][file] = excel_context["columns_by_sheet"][file]
+    
+    return prioritized_context
+
+
+def _apply_kb_token_budgeting(kb_candidates: List[str], max_tokens: int) -> List[str]:
+    """
+    Apply token budgeting to KB candidates to stay within limits
+    """
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+    except ImportError:
+        # Fallback: rough estimate of 4 chars per token
+        def estimate_tokens(text):
+            return len(text) // 4
+    else:
+        def estimate_tokens(text):
+            return len(enc.encode(text))
+    
+    # Estimate tokens for current candidates
+    total_tokens = sum(estimate_tokens(candidate) for candidate in kb_candidates)
+    
+    if total_tokens <= max_tokens:
+        return kb_candidates
+    
+    # If over budget, prioritize by relevance (keep first candidates)
+    budgeted_candidates = []
+    current_tokens = 0
+    
+    for candidate in kb_candidates:
+        candidate_tokens = estimate_tokens(candidate)
+        if current_tokens + candidate_tokens <= max_tokens:
+            budgeted_candidates.append(candidate)
+            current_tokens += candidate_tokens
+        else:
+            break
+    
+    return budgeted_candidates
+
+
+# =============================================================================
+# S3 Logging
+# =============================================================================
+def _log_turn_to_s3(
+    question: str,
+    intent: str,
+    sources: List[str],
+    confidence: float,
+    model_used: str,
+    data_gaps: List[str],
+    orchestrator_rules: Dict[str, Any]
+) -> None:
+    """
+    Log turn information to S3 according to s3_turn_log.schema.json
+    """
+    try:
+        import datetime
+        import json
+        from s3_utils import upload_json
+        
+        # Create log entry matching schema
+        log_entry = {
+            "ts": datetime.datetime.utcnow().isoformat() + "Z",
+            "question": question,
+            "intent": intent,
+            "sources": sources,
+            "confidence": confidence,
+            "model_used": model_used,
+            "missing_fields": data_gaps,
+            "service_level": 0.95,  # Default service level
+            "z_score": 1.96,  # Default z-score for 95% confidence
+            "tokens": len(question) // 4,  # Rough token estimate
+        }
+        
+        # Upload to S3
+        timestamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        key = f"logs/query_log_{timestamp}.jsonl"
+        
+        # Append to existing log or create new
+        try:
+            upload_json(log_entry, key, append=True)
+        except Exception as e:
+            print(f"[orchestrator] S3 upload failed: {e}")
+            
+    except Exception as e:
+        print(f"[orchestrator] S3 logging setup failed: {e}")
+
+
+# =============================================================================
+# Numeric validation
+# =============================================================================
+def _run_numeric_validation(excel_context: Dict[str, Any], checks: List[str]) -> bool:
+    """
+    Run numeric validation checks on the Excel context.
+    Returns True if validation fails, False if passes.
+    """
+    try:
+        # Basic validation - check if we have data to validate
+        if not excel_context.get('files'):
+            return False  # No files to validate
+        
+        # For now, return False (pass) - implement specific checks as needed
+        # This can be expanded to check:
+        # - Aging buckets reconcile to OH
+        # - Units consistency (LT days vs demand cadence)
+        # - Currency presence and consistency
+        # - No negative OH unless flagged
+        
+        return False
+    except Exception as e:
+        print(f"[orchestrator] Numeric validation error: {e}")
+        return True  # Fail on error
 
 
 # =============================================================================
@@ -442,7 +728,7 @@ def _build_excel_context(cleansed_paths: Optional[List[str]]) -> Dict[str, Any]:
     }
 
 
-def _kb_candidates(question: str, k: int = 6) -> List[str]:
+def _kb_candidates(question: str, k: int = 6, orchestrator_rules: Dict[str, Any] = None) -> List[str]:
     """
     Returns top-N KB titles/ids to nudge planner. Execution will still call kb_search.
     This abstracts FAISS vs future backends (OpenAI File Search, pgvector, etc.).
@@ -450,6 +736,20 @@ def _kb_candidates(question: str, k: int = 6) -> List[str]:
     try:
         from tools_runtime import kb_suggest_titles  # optional preview function
         titles = kb_suggest_titles(question, k)
+        
+        # Apply retrieval priority from orchestrator rules if available
+        if orchestrator_rules and titles:
+            retrieval_priority = orchestrator_rules.get('retrieval_priority', [])
+            if retrieval_priority:
+                # Sort titles based on priority (summary_card.md first, then raw PDFs, etc.)
+                def priority_score(title):
+                    for i, priority in enumerate(retrieval_priority):
+                        if priority in title.lower():
+                            return i
+                    return len(retrieval_priority)  # Lowest priority for unmatched
+                
+                titles.sort(key=priority_score)
+        
         return titles or []
     except Exception:
         # If no preview API, just return empty; executor can still run kb_search

@@ -2,7 +2,7 @@
 import json, sys, os
 import yaml
 
-CONFIG_PATH = "config/instructions_master.yaml"
+CONFIG_PATH = "prompts/instructions_master.yaml"
 OUT_MD = "config/instructions_preview.md"
 
 # What the register script expects (with fallbacks)
