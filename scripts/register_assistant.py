@@ -5,8 +5,8 @@ from typing import Optional
 import yaml
 from openai import OpenAI
 
-CONFIG_PATH = "config/instructions_master.yaml"
-ASSISTANT_META_PATH = "config/assistant.json"
+CONFIG_PATH = "prompts/instructions_master.yaml"
+ASSISTANT_META_PATH = "prompts/assistant.json"
 
 ASSISTANT_NAME = "SCIE Ethos Supply Chain & Inventory Analyst"
 

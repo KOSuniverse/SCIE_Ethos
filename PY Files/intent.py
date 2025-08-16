@@ -5,23 +5,29 @@ import re
 
 from llm_client import get_openai_client, chat_completion
 
-# Allowed intents (keep in sync with orchestrator/tools)
+# Allowed intents (keep in sync with orchestrator/tools and instructions_master.yaml)
 ALLOWED_INTENTS = [
-    "compare",     # compare time windows/segments/regions
-    "root_cause",  # explain drivers and anomalies
-    "forecast",    # demand/SS/ROP/E&O projections
-    "eda",         # explore data distributions/rollups
-    "rank",        # top-N by a metric
-    "kb_lookup",   # guidance/policy/SOP lookup
-    "anomaly",     # detect outliers/spikes
-    "optimize",    # propose actions under constraints
-    "filter",      # retrieve a filtered table preview
+    "compare",         # compare time windows/segments/regions
+    "root_cause",      # explain drivers and anomalies (RCA)
+    "forecast",        # demand/SS/ROP/E&O projections
+    "movement_analysis", # compare movement between periods (Q1→Q2)
+    "eda",             # explore data distributions/rollups
+    "rank",            # top-N by a metric
+    "kb_lookup",       # guidance/policy/SOP lookup
+    "anomaly",         # detect outliers/spikes
+    "optimize",        # propose actions under constraints
+    "filter",          # retrieve a filtered table preview
+    "eo_analysis",     # Excess & Obsolete analysis
+    "scenario",        # what-if analysis
+    "exec_summary",    # executive summaries
+    "gap_check",       # identify missing data
 ]
 
 # Lightweight, cheap regex/keyword mapping
 KEYMAP = [
     (r"\b(root cause|why|driver|explain|due to|cause of|reason)\b", "root_cause"),
     (r"\bforecast|predict|projection|expected|plan|plan(?:ning)?\b", "forecast"),
+    (r"\b(movement|trend|shift|aging|bucket|q1|q2|quarter|period)\b", "movement_analysis"),
     (r"\bcompare|vs\.|versus|delta|change|difference\b", "compare"),
     (r"\btop\s*\d+|rank|ranking|highest|lowest|top[-\s]?n\b", "rank"),
     (r"\banomal(y|ies)|outlier|spike|unexpected|deviation\b", "anomaly"),
@@ -29,10 +35,14 @@ KEYMAP = [
     (r"\bfilter|where|only.*rows|subset|slice\b", "filter"),
     (r"\bpolicy|SOP|guidance|how do we|best practice|kb\b", "kb_lookup"),
     (r"\bdistribution|histogram|profile|breakdown|EDA\b", "eda"),
+    (r"\b(excess|obsolete|E&O|slow moving|write.?down)\b", "eo_analysis"),
+    (r"\b(scenario|what.?if|simulation|assumption)\b", "scenario"),
+    (r"\b(executive|summary|overview|kpi|recap)\b", "exec_summary"),
+    (r"\b(missing|gap|incomplete|coverage)\b", "gap_check"),
 ]
 
 # Intents that typically need the larger model for reasoning
-LARGE_MODEL_INTENTS = {"root_cause", "forecast", "optimize"}
+LARGE_MODEL_INTENTS = {"root_cause", "forecast", "movement_analysis", "optimize", "scenario", "eo_analysis"}
 
 
 def _cheap_rules(question: str) -> Tuple[str, float, str]:
@@ -73,8 +83,13 @@ def classify_intent(question: str) -> Dict[str, str]:
                 "- If the question is purely about company policy/SOPs or 'how to', use 'kb_lookup'.\n"
                 "- If it's about explaining why a metric changed, use 'root_cause'.\n"
                 "- If it's about future values or parameters (SS/ROP/E&O), use 'forecast'.\n"
+                "- If it's about comparing movement between periods (Q1→Q2), use 'movement_analysis'.\n"
+                "- If it's about excess/obsolete inventory analysis, use 'eo_analysis'.\n"
+                "- If it's about what-if scenarios or simulations, use 'scenario'.\n"
+                "- If it's asking for executive summary or KPI recap, use 'exec_summary'.\n"
                 "- If it's asking to rank or top-N, use 'rank'.\n"
                 "- If it's asking for a filtered subset or table preview, use 'filter'.\n"
+                "- If it's about identifying missing data gaps, use 'gap_check'.\n"
                 "- If none of the above, choose 'eda'.\n\n"
                 f"User question: {question!r}"
             )
