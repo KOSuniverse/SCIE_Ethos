@@ -8,6 +8,7 @@ sheet_types:
   lead_time: ["Lead Time","Receipts vs PO","Supplier LT","LT History"]
   supplier: ["Supplier Perf","ASN","OTD","Quality","Vendor Performance"]
   repair_refurb: ["Repair","Refurbish","Service","RMA","Reman","Overhaul"]
+  kb_doc: ["KB","Knowledge Base","Policy","SOP","Contract","Presentation","Deck","Meeting Notes","Spec","Playbook","Runbook"]
 
 column_aliases:
   part_number: ["part_no","item","item_number","sku","material","materiale","artikelnummer","teilenummer","kit_number","part"]

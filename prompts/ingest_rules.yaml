@@ -27,7 +27,24 @@ artifacts:
   eda_profile_fields: ["shape","null_pct","dtype_map","candidate_keys","alias_coverage_pct","date_span","granularity","joinability_matrix","lt_stats_if_present"]
   summary_card_template: "/templates/summary_card.template.md"
 
-
 paths:
   path_contract_file: "/configs/path_contract.yaml"
-  # The sync must resolve output directories from this file.
+
+knowledge_base_ingest:
+  include: true
+  path_ref: "${folders.knowledge_base}"
+  file_types: ["pdf"]
+  ocr: true
+  emit_summary_card: true
+  tags:
+    sheet_type: "kb_doc"
+    confidentiality: "internal"
+  folder_to_tag_rules:
+    - match: "Policy|SOP"
+      set: { doc_type: "policy_or_sop" }
+    - match: "Contracts|Legal"
+      set: { doc_type: "contract" }
+    - match: "Presentations|Slides|Decks"
+      set: { doc_type: "deck" }
+    - match: "Meetings|Notes"
+      set: { doc_type: "meeting_notes" }
