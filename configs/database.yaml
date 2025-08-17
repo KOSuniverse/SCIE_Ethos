@@ -1,0 +1,55 @@
+# configs/database.yaml
+# Phase 6: Database Configuration
+# PostgreSQL connection settings and performance tuning
+
+# Database connection settings
+host: ${DB_HOST:-localhost}
+port: ${DB_PORT:-5432}
+database: ${DB_NAME:-scie_ethos}
+user: ${DB_USER:-postgres}
+password: ${DB_PASSWORD:-}
+
+# Connection pooling
+pool_size: ${DB_POOL_SIZE:-20}
+max_overflow: ${DB_MAX_OVERFLOW:-30}
+pool_timeout: ${DB_POOL_TIMEOUT:-30}
+use_threaded_pool: true
+
+# SSL configuration
+ssl_mode: ${DB_SSL_MODE:-prefer}
+ssl_cert: ${DB_SSL_CERT:-}
+ssl_key: ${DB_SSL_KEY:-}
+ssl_ca: ${DB_SSL_CA:-}
+
+# Performance tuning
+slow_query_threshold: ${DB_SLOW_QUERY_THRESHOLD:-1.0}
+max_query_history: ${DB_MAX_QUERY_HISTORY:-1000}
+connection_timeout: ${DB_CONNECTION_TIMEOUT:-10}
+statement_timeout: ${DB_STATEMENT_TIMEOUT:-300}
+
+# Monitoring and logging
+enable_query_logging: true
+enable_performance_monitoring: true
+log_slow_queries: true
+log_connection_errors: true
+
+# Backup and recovery
+backup_enabled: true
+backup_schedule: "0 2 * * *"  # Daily at 2 AM
+backup_retention_days: 30
+point_in_time_recovery: true
+
+# High availability
+read_replicas:
+  - host: ${DB_READ_REPLICA_1:-}
+    port: ${DB_READ_REPLICA_1_PORT:-5432}
+    weight: 1
+  - host: ${DB_READ_REPLICA_2:-}
+    port: ${DB_READ_REPLICA_2_PORT:-5432}
+    weight: 1
+
+# Connection health checks
+health_check_interval: 30
+health_check_timeout: 5
+max_failed_connections: 5
+connection_retry_delay: 5

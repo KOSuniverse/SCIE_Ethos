@@ -1,0 +1,75 @@
+# configs/cache.yaml
+# Phase 6: Cache Configuration
+# Redis connection settings and performance tuning
+
+# Redis connection settings
+host: ${REDIS_HOST:-localhost}
+port: ${REDIS_PORT:-6379}
+db: ${REDIS_DB:-0}
+password: ${REDIS_PASSWORD:-}
+ssl: ${REDIS_SSL:-false}
+
+# Connection pooling
+connection_pool_size: ${REDIS_POOL_SIZE:-20}
+socket_timeout: ${REDIS_TIMEOUT:-5}
+socket_connect_timeout: ${REDIS_CONNECT_TIMEOUT:-2}
+retry_on_timeout: true
+
+# Performance tuning
+slow_operation_threshold: ${REDIS_SLOW_OP_THRESHOLD:-0.1}
+max_operation_history: ${REDIS_MAX_OP_HISTORY:-1000}
+default_ttl: ${REDIS_DEFAULT_TTL:-3600}
+compression_threshold: ${REDIS_COMPRESSION_THRESHOLD:-1024}
+
+# Cache strategies
+cache_strategy: "write-through"  # write-through, write-behind, write-around
+eviction_policy: "allkeys-lru"   # allkeys-lru, volatile-lru, allkeys-random, volatile-random, volatile-ttl
+max_memory_policy: "allkeys-lru"
+
+# Pattern invalidation
+enable_pattern_invalidation: true
+enable_tag_invalidation: true
+max_patterns: 1000
+max_tags_per_key: 10
+
+# Monitoring and logging
+enable_operation_logging: true
+enable_performance_monitoring: true
+log_slow_operations: true
+log_cache_misses: true
+
+# Health checks
+health_check_interval: ${REDIS_HEALTH_CHECK_INTERVAL:-30}
+health_check_timeout: 5
+max_failed_operations: 10
+operation_retry_delay: 1
+
+# High availability
+sentinel_enabled: ${REDIS_SENTINEL_ENABLED:-false}
+sentinel_masters:
+  - name: ${REDIS_SENTINEL_MASTER:-mymaster}
+    host: ${REDIS_SENTINEL_HOST:-localhost}
+    port: ${REDIS_SENTINEL_PORT:-26379}
+
+# Cluster configuration
+cluster_enabled: ${REDIS_CLUSTER_ENABLED:-false}
+cluster_nodes:
+  - host: ${REDIS_CLUSTER_NODE_1:-localhost}
+    port: ${REDIS_CLUSTER_NODE_1_PORT:-7000}
+  - host: ${REDIS_CLUSTER_NODE_2:-localhost}
+    port: ${REDIS_CLUSTER_NODE_2_PORT:-7001}
+  - host: ${REDIS_CLUSTER_NODE_3:-localhost}
+    port: ${REDIS_CLUSTER_NODE_3_PORT:-7002}
+
+# Backup and persistence
+backup_enabled: true
+backup_schedule: "0 3 * * *"  # Daily at 3 AM
+backup_retention_days: 7
+persistence_mode: "rdb"  # rdb, aof, both
+
+# Security
+enable_authentication: true
+enable_ssl: false
+ssl_cert: ${REDIS_SSL_CERT:-}
+ssl_key: ${REDIS_SSL_KEY:-}
+ssl_ca: ${REDIS_SSL_CA:-}
