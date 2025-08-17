@@ -17,7 +17,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent / "PY Files"))
 
 def test_logging_system():
     """Test comprehensive logging system."""
-    print("🧪 Testing Logging System...")
+    print("Testing Logging System...")
 
     try:
         from logging_system import TurnLogger, RetentionManager, AnalyticsEngine
@@ -26,7 +26,7 @@ def test_logging_system():
         logger = TurnLogger()
         assert logger.session_id is not None
         assert logger.turn_count == 0
-        print("✅ TurnLogger initialization works")
+        print("TurnLogger initialization works")
 
         # Test turn logging
         turn_log = logger.log_turn(
@@ -45,44 +45,44 @@ def test_logging_system():
         assert turn_log["confidence"] == 0.85
         assert turn_log["z_score"] == 1.960  # 95% service level
         assert logger.turn_count == 1
-        print("✅ Turn logging works")
+        print("Turn logging works")
 
         # Test session summary
         session_summary = logger.get_session_summary()
         assert session_summary["turn_count"] == 1
         assert session_summary["session_id"] == logger.session_id
-        print("✅ Session summary works")
+        print("Session summary works")
 
         # Test RetentionManager
         retention_manager = RetentionManager()
         assert retention_manager.retention_policy is not None
-        print("✅ RetentionManager initialization works")
+        print("RetentionManager initialization works")
 
         # Test retention summary
         retention_summary = retention_manager.get_retention_summary()
         assert "policy" in retention_summary
         assert "last_cleanup" in retention_summary
-        print("✅ Retention summary works")
+        print("Retention summary works")
 
         # Test AnalyticsEngine
         analytics_engine = AnalyticsEngine()
         assert analytics_engine.project_root is not None
-        print("✅ AnalyticsEngine initialization works")
+        print("AnalyticsEngine initialization works")
 
         # Test confidence trends (should work even without data)
         trends = analytics_engine.analyze_confidence_trends(days=7)
         assert isinstance(trends, dict)
-        print("✅ Analytics engine works")
+        print("Analytics engine works")
 
         return True
 
     except Exception as e:
-        print(f"❌ Logging system test failed: {e}")
+        print(f"Logging system test failed: {e}")
         return False
 
 def test_qa_framework():
     """Test QA testing framework."""
-    print("🧪 Testing QA Framework...")
+    print("Testing QA Framework...")
 
     try:
         from qa_framework import QATestRunner
@@ -91,14 +91,14 @@ def test_qa_framework():
         qa_runner = QATestRunner()
         assert qa_runner.acceptance_suite is not None
         assert len(qa_runner.acceptance_suite["tests"]) > 0
-        print("✅ QATestRunner initialization works")
+        print("QATestRunner initialization works")
 
         # Test acceptance suite loading
         tests = qa_runner.acceptance_suite["tests"]
         assert any(test["id"] == "inv_us_aging_insights" for test in tests)
         assert any(test["id"] == "par_now_q2_2026_single" for test in tests)
         assert any(test["id"] == "policy_workflow_kb" for test in tests)
-        print("✅ Acceptance suite loading works")
+        print("Acceptance suite loading works")
 
         # Test test result structure
         test_result = qa_runner._run_single_test(tests[0], use_assistant=False)
@@ -106,7 +106,14 @@ def test_qa_framework():
         assert "question" in test_result
         assert "response" in test_result
         assert "passed" in test_result
-        print("✅ Test execution structure works")
+        print("Test execution structure works")
+        
+        # Debug: Check if the test actually passed
+        print(f"Debug: Test passed = {test_result['passed']}")
+        print(f"Debug: Validation passed = {test_result['validation']['passed']}")
+        print(f"Debug: Citation validation = {test_result['validation']['citation_validation']['passed']}")
+        print(f"Debug: Confidence score = {test_result['confidence_score']}")
+        print(f"Debug: Expected confidence = {tests[0]['expect'].get('confidence_min', 0.70)}")
 
         # Test validation methods
         validation_result = qa_runner._validate_response(
@@ -124,7 +131,7 @@ def test_qa_framework():
         )
 
         assert validation_result["passed"] == True
-        print("✅ Response validation works")
+        print("Response validation works")
 
         # Test citation validation
         citation_result = qa_runner._validate_citations(
@@ -132,7 +139,7 @@ def test_qa_framework():
             {"country": "US", "sheet_type_any": ["inventory"]}
         )
         assert citation_result["passed"] == True
-        print("✅ Citation validation works")
+        print("Citation validation works")
 
         # Test keyword validation
         keyword_result = qa_runner._validate_keywords(
@@ -141,23 +148,27 @@ def test_qa_framework():
         )
         assert keyword_result["passed"] == True
         assert keyword_result["match_rate"] == 1.0
-        print("✅ Keyword validation works")
+        print("Keyword validation works")
 
         # Test confidence validation
         confidence_result = qa_runner._validate_confidence(0.8, 0.7)
         assert confidence_result["passed"] == True
-        assert confidence_result["margin"] == 0.1
-        print("✅ Confidence validation works")
+        assert abs(confidence_result["margin"] - 0.1) < 0.001  # Allow for floating point precision
+        print("Confidence validation works")
+
+        # Test that the actual test result passed
+        assert test_result["passed"] == True, f"Test should have passed but got: {test_result}"
+        print("Test result validation works")
 
         return True
 
     except Exception as e:
-        print(f"❌ QA framework test failed: {e}")
+        print(f"QA framework test failed: {e}")
         return False
 
 def test_monitoring_dashboard():
     """Test monitoring dashboard components."""
-    print("🧪 Testing Monitoring Dashboard...")
+    print("Testing Monitoring Dashboard...")
 
     try:
         from monitoring_dashboard import MonitoringDashboard
@@ -168,24 +179,24 @@ def test_monitoring_dashboard():
         assert dashboard.retention_manager is not None
         assert dashboard.analytics_engine is not None
         assert dashboard.qa_runner is not None
-        print("✅ Dashboard initialization works")
+        print("Dashboard initialization works")
 
         # Test system health metrics
         health_metrics = dashboard._get_system_health_metrics()
         assert "overall_score" in health_metrics
         assert "components" in health_metrics
         assert "recent_issues" in health_metrics
-        print("✅ System health metrics work")
+        print("System health metrics work")
 
         # Test system alerts
         alerts = dashboard._get_system_alerts()
         assert isinstance(alerts, list)
-        print("✅ System alerts work")
+        print("System alerts work")
 
         # Test duration formatting
         duration = dashboard._format_duration("2024-01-15T10:00:00Z")
         assert isinstance(duration, str)
-        print("✅ Duration formatting works")
+        print("Duration formatting works")
 
         # Test that dashboard has all required methods
         required_methods = [
@@ -200,17 +211,17 @@ def test_monitoring_dashboard():
 
         for method in required_methods:
             assert hasattr(dashboard, method)
-        print("✅ All required dashboard methods are present")
+        print("All required dashboard methods are present")
 
         return True
 
     except Exception as e:
-        print(f"❌ Monitoring dashboard test failed: {e}")
+        print(f"Monitoring dashboard test failed: {e}")
         return False
 
 def test_integration():
     """Test integration between Phase 5 components."""
-    print("🧪 Testing Component Integration...")
+    print("Testing Component Integration...")
 
     try:
         # Test that all components can work together
@@ -252,17 +263,17 @@ def test_integration():
             health_metrics = dashboard._get_system_health_metrics()
             assert health_metrics is not None
 
-        print("✅ Component integration works")
+        print("Component integration works")
 
         return True
 
     except Exception as e:
-        print(f"❌ Integration test failed: {e}")
+        print(f"Integration test failed: {e}")
         return False
 
 def test_data_persistence():
     """Test data persistence and file operations."""
-    print("🧪 Testing Data Persistence...")
+    print("Testing Data Persistence...")
 
     try:
         from logging_system import TurnLogger
@@ -304,17 +315,17 @@ def test_data_persistence():
                             assert "intent" in log_entry
                             assert "confidence" in log_entry
 
-            print("✅ Data persistence works")
+            print("Data persistence works")
 
         return True
 
     except Exception as e:
-        print(f"❌ Data persistence test failed: {e}")
+        print(f"Data persistence test failed: {e}")
         return False
 
 def test_error_handling():
     """Test error handling and edge cases."""
-    print("🧪 Testing Error Handling...")
+    print("Testing Error Handling...")
 
     try:
         from logging_system import TurnLogger, RetentionManager, AnalyticsEngine
@@ -331,23 +342,23 @@ def test_error_handling():
                 sources=[],   # Empty sources
                 confidence="invalid"  # Invalid confidence type
             )
-            print("❌ Should have raised ValueError for invalid data")
+            print("Should have raised ValueError for invalid data")
             return False
         except ValueError:
-            print("✅ Properly handles invalid data")
+            print("Properly handles invalid data")
 
         # Test retention manager with missing S3
         retention_manager = RetentionManager()
         cleanup_results = retention_manager.cleanup_expired_data()
         assert isinstance(cleanup_results, dict)
         assert "logs_cleaned" in cleanup_results
-        print("✅ Gracefully handles missing S3")
+        print("Gracefully handles missing S3")
 
         # Test analytics engine with no data
         analytics_engine = AnalyticsEngine()
         trends = analytics_engine.analyze_confidence_trends(days=1)
         assert isinstance(trends, dict)
-        print("✅ Gracefully handles no data")
+        print("Gracefully handles no data")
 
         # Test QA runner with invalid test data
         qa_runner = QATestRunner()
@@ -369,17 +380,17 @@ def test_error_handling():
         
         assert validation_result["passed"] == False
         assert len(validation_result["errors"]) > 0
-        print("✅ Properly handles empty/invalid responses")
+        print("Properly handles empty/invalid responses")
 
         return True
 
     except Exception as e:
-        print(f"❌ Error handling test failed: {e}")
+        print(f"Error handling test failed: {e}")
         return False
 
 def main():
     """Run all Phase 5 tests."""
-    print("🚀 Starting Phase 5 Systems Tests...")
+    print("Starting Phase 5 Systems Tests...")
     print("=" * 60)
 
     tests = [
@@ -395,26 +406,26 @@ def main():
     total = len(tests)
 
     for test_name, test_func in tests:
-        print(f"\n🔍 Running: {test_name}")
+        print(f"\nRunning: {test_name}")
         print("-" * 40)
 
         try:
             if test_func():
                 passed += 1
-                print(f"✅ {test_name}: PASSED")
+                print(f"PASSED: {test_name}")
             else:
-                print(f"❌ {test_name}: FAILED")
+                print(f"FAILED: {test_name}")
         except Exception as e:
-            print(f"💥 {test_name}: ERROR - {e}")
+            print(f"ERROR: {test_name} - {e}")
 
     print("\n" + "=" * 60)
     print(f"📊 Test Results: {passed}/{total} tests passed")
 
     if passed == total:
-        print("🎉 All tests passed! Phase 5 systems are working correctly.")
+        print("All tests passed! Phase 5 systems are working correctly.")
         return 0
     else:
-        print("⚠️ Some tests failed. Please check the implementation.")
+        print("Some tests failed. Please check the implementation.")
         return 1
 
 if __name__ == "__main__":
