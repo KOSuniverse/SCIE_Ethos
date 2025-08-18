@@ -1963,7 +1963,7 @@ try:
         st.markdown("### 📤 Upload Files for Comparison")
         st.write("You can upload files directly for comparison without running the full ingestion pipeline.")
         
-                        uploaded_files = st.file_uploader(
+        uploaded_files = st.file_uploader(
             "Choose 2 or more Excel files for comparison",
             type=['xlsx'],
             accept_multiple_files=True,
