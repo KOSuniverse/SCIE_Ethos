@@ -67,7 +67,7 @@ def run_query(question: str, intent_hint: str | None = None) -> dict:
     if not assistant_id and _FILE_SYNC_AVAILABLE:
         try:
             from dbx_utils import dbx_read_json
-            meta = dbx_read_json("/config/assistant.json")
+            meta = dbx_read_json("/prompts/assistant.json")
             if meta and meta.get("assistant_id"):
                 assistant_id = meta["assistant_id"]
         except Exception:
@@ -198,7 +198,7 @@ def run_query(question: str, intent_hint: str | None = None) -> dict:
 
 def run_query_with_files(question: str, dropbox_paths: list[str]) -> dict:
     client = OpenAI()
-    with open("config/assistant.json", "r", encoding="utf-8") as f:
+    with open("prompts/assistant.json", "r", encoding="utf-8") as f:
         meta = json.load(f)
     assistant_id = meta["assistant_id"]
 
