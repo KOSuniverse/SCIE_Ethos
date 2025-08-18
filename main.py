@@ -46,6 +46,15 @@ from phase4_knowledge.knowledgebase_builder import status as kb_status, build_or
 from phase4_knowledge.knowledgebase_retriever import search_topk, pack_context
 from phase4_knowledge.response_composer import compose_response
 
+# Phase 6: Production Infrastructure (Monitoring & Caching)
+try:
+    from monitoring_client import MonitoringClient
+    from infrastructure.caching import CacheManager
+    PHASE6_AVAILABLE = True
+except ImportError as e:
+    st.sidebar.warning(f"Phase 6 components not available: {e}")
+    PHASE6_AVAILABLE = False
+
 def build_xlsx_bytes_from_sheets(sheets: dict[str, pd.DataFrame]) -> bytes:
     import io
     import pandas as pd
@@ -59,6 +68,29 @@ def build_xlsx_bytes_from_sheets(sheets: dict[str, pd.DataFrame]) -> bytes:
 
 from sidecars import backend_info
 st.caption(f"Sidecars backend: {backend_info()}")
+
+# Initialize Phase 6 components if available
+if PHASE6_AVAILABLE:
+    try:
+        # Initialize monitoring client
+        monitoring = MonitoringClient()
+        st.sidebar.success("Phase 6: Monitoring enabled")
+        
+        # Initialize cache manager
+        cache = CacheManager()
+        st.sidebar.success("Phase 6: Caching enabled")
+        
+        # Monitor application startup
+        monitoring.increment("app.starts", 1, environment="streamlit")
+        monitoring.gauge("app.memory_usage", 0.0, environment="streamlit")  # Will be updated later
+        
+    except Exception as e:
+        st.sidebar.error(f"Phase 6 initialization failed: {e}")
+        PHASE6_AVAILABLE = False
+else:
+    # Fallback monitoring and caching
+    monitoring = None
+    cache = None
 
 # --- Build a human-readable Markdown summary from pipeline metadata ---
 def _build_summary_markdown(metadata: dict) -> str:
@@ -257,7 +289,7 @@ if interface_mode == "💬 Chat Assistant":
             st.markdown("""
             **Core Features:**
             - 🧠 **Assistants API Integration**: Full OpenAI Assistant with File Search
-            - �📊 **File Selection**: Choose specific cleansed files for analysis  
+            - 📊 **File Selection**: Choose specific cleansed files for analysis  
             - 🎯 **Intent Classification**: Auto-routing to appropriate models
             - 📈 **Confidence Scoring**: R/A/V/C methodology with abstention
             - 💬 **Conversation Management**: Named conversations with history
@@ -541,7 +573,38 @@ if raw_files:
                     heartbeat_status = st.empty()
                     heartbeat_status.write("💓 Processing... (this may take a moment)")
                 
-                cleaned_sheets, metadata = run_pipeline(b, filename, app_paths)
+                # Phase 6: Monitor pipeline execution
+                pipeline_start_time = time.time()
+                if PHASE6_AVAILABLE and monitoring:
+                    monitoring.increment("pipeline.executions", 1, pipeline="phase1_ingest")
+                    monitoring.gauge("pipeline.file_size", len(b), filename=filename)
+                
+                # Check cache for existing results
+                cache_key = None
+                if PHASE6_AVAILABLE and cache:
+                    import hashlib
+                    file_hash = hashlib.md5(b).hexdigest()
+                    cache_key = f"pipeline:{file_hash}:{filename}"
+                    cached_result = cache.get(cache_key)
+                    if cached_result:
+                        cleaned_sheets, metadata = cached_result
+                        st.success("🚀 Retrieved results from cache!")
+                        if monitoring:
+                            monitoring.increment("cache.hits", 1, type="pipeline_results")
+                    else:
+                        cleaned_sheets, metadata = run_pipeline(b, filename, app_paths)
+                        # Cache the results
+                        cache.set(cache_key, (cleaned_sheets, metadata), ttl=3600, tags=["pipeline", "results"])
+                        if monitoring:
+                            monitoring.increment("cache.misses", 1, type="pipeline_results")
+                else:
+                    cleaned_sheets, metadata = run_pipeline(b, filename, app_paths)
+                
+                # Phase 6: Monitor pipeline completion
+                if PHASE6_AVAILABLE and monitoring:
+                    pipeline_execution_time = time.time() - pipeline_start_time
+                    monitoring.timing("pipeline.execution_time", pipeline_execution_time, pipeline="phase1_ingest")
+                    monitoring.gauge("pipeline.sheets_processed", len(cleaned_sheets), filename=filename)
                 
                 # Clear heartbeat
                 heartbeat_status.empty()
@@ -639,6 +702,11 @@ if raw_files:
                         
                         with st.spinner("Running comprehensive EDA analysis..."):
                             try:
+                                # Phase 6: Monitor EDA execution
+                                eda_start_time = time.time()
+                                if PHASE6_AVAILABLE and monitoring:
+                                    monitoring.increment("eda.executions", 1, sheet=sheet_name, filename=filename)
+                                
                                 # Run enhanced EDA system
                                 eda_results = run_enhanced_eda(
                                     df, 
@@ -648,6 +716,12 @@ if raw_files:
                                     summaries_folder=getattr(app_paths, "dbx_summaries_folder", "/Project_Root/04_Data/03_Summaries"),
                                     max_rounds=3
                                 )
+                                
+                                # Phase 6: Monitor EDA completion
+                                if PHASE6_AVAILABLE and monitoring:
+                                    eda_execution_time = time.time() - eda_start_time
+                                    monitoring.timing("eda.execution_time", eda_execution_time, sheet=sheet_name, filename=filename)
+                                    monitoring.gauge("eda.charts_generated", len(eda_results.get("chart_paths", [])), sheet=sheet_name)
                                 
                                 all_eda_results[sheet_name] = eda_results
                                 chart_paths = eda_results.get("chart_paths", [])
@@ -1416,15 +1490,27 @@ with st.expander("Knowledge Base controls"):
     include_text = st.checkbox("Include .txt/.md", value=True)
     force_rebuild = st.checkbox("Force full rebuild", value=False)
     if st.button("🔧 Build / Update KB"):
-        with st.spinner("Building knowledge base..."):
-            res = build_or_update_knowledgebase(
-                project_root=PROJECT_ROOT,
-                scan_folders=None,
-                force_rebuild=force_rebuild,
-                include_text_files=include_text
-            )
-        st.success("KB build complete")
-        st.json(res)
+            with st.spinner("Building knowledge base..."):
+                # Phase 6: Monitor KB build
+                kb_start_time = time.time()
+                if PHASE6_AVAILABLE and monitoring:
+                    monitoring.increment("kb.builds", 1, force_rebuild=force_rebuild)
+                
+                res = build_or_update_knowledgebase(
+                    project_root=PROJECT_ROOT,
+                    scan_folders=None,
+                    force_rebuild=force_rebuild,
+                    include_text_files=include_text
+                )
+                
+                # Phase 6: Monitor KB build completion
+                if PHASE6_AVAILABLE and monitoring:
+                    kb_build_time = time.time() - kb_start_time
+                    monitoring.timing("kb.build_time", kb_build_time, force_rebuild=force_rebuild)
+                    monitoring.gauge("kb.files_processed", res.get("files_processed", 0), project_root=PROJECT_ROOT)
+                
+                st.success("KB build complete")
+                st.json(res)
 
 # =========================
 # 4) Ask questions about a Cleansed workbook (cloud-only)
@@ -1472,6 +1558,12 @@ else:
         run_btn = st.button("Run Q&A", type="primary", disabled=(not user_q.strip()))
         if run_btn:
             with st.spinner("Thinking with GPT and running tools…"):
+                # Phase 6: Monitor Q&A execution
+                qa_start_time = time.time()
+                if PHASE6_AVAILABLE and monitoring:
+                    monitoring.increment("qa.queries", 1, has_files=bool(cleansed_paths))
+                    monitoring.gauge("qa.question_length", len(user_q), question_type="user_query")
+                
                 try:
                     # Import assistant functions only when needed
                     try:
@@ -1487,6 +1579,12 @@ else:
                             ar = run_query_with_files(user_q, cleansed_paths)
                         else:
                             ar = run_query(user_q)
+                        
+                        # Phase 6: Monitor Q&A completion
+                        if PHASE6_AVAILABLE and monitoring:
+                            qa_execution_time = time.time() - qa_start_time
+                            monitoring.timing("qa.execution_time", qa_execution_time, has_files=bool(cleansed_paths))
+                            monitoring.gauge("qa.answer_length", len(ar.get("answer", "")), question_type="user_query")
 
                         # Normalize for existing UI
                         answer = ar.get("answer") or ""
@@ -1604,3 +1702,69 @@ with st.expander("🧭 Project manifest (repo snapshot)"):
             st.caption(f"Saved to S3: s3://{bucket}/{key}")
         except Exception as e:
             st.warning(f"S3 save failed: {e}")
+
+# =============================================================================
+# Phase 6: Production Infrastructure Status
+# =============================================================================
+if PHASE6_AVAILABLE:
+    st.markdown("---")
+    st.header("🚀 Phase 6: Production Infrastructure Status")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Monitoring status
+        if monitoring:
+            monitoring_health = monitoring.health_check()
+            st.metric("Monitoring", monitoring_health["status"])
+            st.caption(f"Enabled: {monitoring_health['enabled']}")
+        else:
+            st.metric("Monitoring", "Not Available")
+    
+    with col2:
+        # Caching status
+        if cache:
+            cache_health = cache.health_check()
+            st.metric("Caching", cache_health["status"])
+            cache_stats = cache.get_statistics()
+            st.caption(f"Hit Rate: {cache_stats['cache_stats'].get('hit_rate', 0):.1%}")
+        else:
+            st.metric("Caching", "Not Available")
+    
+    with col3:
+        # Performance metrics
+        if monitoring and cache:
+            st.metric("Operations", "Active")
+            st.caption("Phase 6 Ready")
+        else:
+            st.metric("Operations", "Limited")
+            st.caption("Fallback Mode")
+    
+    # Cleanup Phase 6 components on app shutdown
+    if st.button("🧹 Cleanup Phase 6 Resources"):
+        try:
+            if cache:
+                cache.close()
+                st.success("Cache manager closed")
+            st.success("Phase 6 cleanup completed")
+        except Exception as e:
+            st.error(f"Cleanup failed: {e}")
+
+# =============================================================================
+# App Cleanup (Streamlit lifecycle)
+# =============================================================================
+def cleanup_on_exit():
+    """Cleanup function for Streamlit app shutdown"""
+    if PHASE6_AVAILABLE:
+        try:
+            if 'cache' in globals() and cache:
+                cache.close()
+            if 'monitoring' in globals() and monitoring:
+                # Send final metrics
+                monitoring.increment("app.shutdowns", 1, environment="streamlit")
+        except Exception as e:
+            pass  # Silent cleanup on exit
+
+# Register cleanup
+import atexit
+atexit.register(cleanup_on_exit)
