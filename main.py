@@ -1957,196 +1957,98 @@ try:
                 'dataframe': df
             })
     
-    # Check for uploaded files if no session state files
+    # Show available cleansed files for comparison
     if len(comparison_files) == 0:
-        # Provide alternative: direct file upload for comparison
-        st.markdown("### 📤 Upload Files for Comparison")
-        st.write("You can upload files directly for comparison without running the full ingestion pipeline.")
+        st.info("📁 No cleansed files available for comparison.")
+        st.markdown("""
+        ### 🚀 How to Enable Multi-File Comparison:
         
-        uploaded_files = st.file_uploader(
-            "Choose 2 or more Excel files for comparison",
-            type=['xlsx'],
-            accept_multiple_files=True,
-            help="Select multiple .xlsx files to compare"
-        )
+        1. **Upload and cleanse your files first** using the data ingestion sections above
+        2. **Process multiple files** from different time periods (Q1, Q2, etc.)
+        3. **Come back here** to compare the cleansed data
         
-        if uploaded_files and len(uploaded_files) >= 2:
-            st.success(f"✅ Uploaded {len(uploaded_files)} files for comparison")
-            
-            # Show sheet selection for all files first
-            st.markdown("### 📋 Sheet Selection")
-            sheet_selections = {}
-            
-            for uploaded_file in uploaded_files:
-                try:
-                    excel_file = pd.ExcelFile(uploaded_file)
-                    sheet_names = excel_file.sheet_names
-                    
-                    if len(sheet_names) > 1:
-                        st.info(f"📋 **{uploaded_file.name}** has {len(sheet_names)} sheets: {', '.join(sheet_names)}")
-                        selected_sheet = st.selectbox(
-                            f"Select sheet from {uploaded_file.name}",
-                            sheet_names,
-                            key=f"sheet_{uploaded_file.name}_{hash(uploaded_file.name)}"
-                        )
-                        sheet_selections[uploaded_file.name] = selected_sheet
-                    else:
-                        sheet_selections[uploaded_file.name] = sheet_names[0]
-                except Exception as e:
-                    st.error(f"Error reading {uploaded_file.name}: {e}")
-            
-            # Process files with selected sheets
-            st.markdown("### 📊 Processing Selected Sheets")
-            
-            for uploaded_file in uploaded_files:
-                try:
-                    selected_sheet = sheet_selections.get(uploaded_file.name, 0)
-                    df = pd.read_excel(uploaded_file, sheet_name=selected_sheet)
-                    
-                    st.success(f"✅ Loaded {uploaded_file.name} - Sheet: {selected_sheet} ({len(df)} rows, {len(df.columns)} cols)")
-                    
-                    # Extract period information from filename
-                    filename = uploaded_file.name.lower()
-                    period_info = "Unknown"
-                    
-                    if 'q1' in filename or 'quarter1' in filename:
-                        period_info = "Q1"
-                    elif 'q2' in filename or 'quarter2' in filename:
-                        period_info = "Q2"
-                    elif 'q3' in filename or 'quarter3' in filename:
-                        period_info = "Q3"
-                    elif 'q4' in filename or 'quarter4' in filename:
-                        period_info = "Q4"
-                    elif 'jan' in filename or 'january' in filename:
-                        period_info = "Q1"
-                    elif 'feb' in filename or 'february' in filename:
-                        period_info = "Q1"
-                    elif 'mar' in filename or 'march' in filename:
-                        period_info = "Q1"
-                    elif 'apr' in filename or 'april' in filename:
-                        period_info = "Q2"
-                    elif 'may' in filename:
-                        period_info = "Q2"
-                    elif 'jun' in filename or 'june' in filename:
-                        period_info = "Q2"
-                    elif 'jul' in filename or 'july' in filename:
-                        period_info = "Q3"
-                    elif 'aug' in filename or 'august' in filename:
-                        period_info = "Q3"
-                    elif 'sep' in filename or 'september' in filename:
-                        period_info = "Q3"
-                    elif 'oct' in filename or 'october' in filename:
-                        period_info = "Q4"
-                    elif 'nov' in filename or 'november' in filename:
-                        period_info = "Q4"
-                    elif 'dec' in filename or 'december' in filename:
-                        period_info = "Q4"
-                    else:
-                        # If no clear period detected, use filename as period
-                        period_info = f"File_{len(comparison_files) + 1}"
-                    
-                    comparison_files.append({
-                        'path': uploaded_file.name,
-                        'period': period_info,
-                        'rows': len(df),
-                        'columns': len(df.columns),
-                        'dataframe': df
-                    })
-                except Exception as e:
-                    st.error(f"Error reading {uploaded_file.name}: {e}")
+        💡 **Tip**: Upload files with clear period indicators in the filename (e.g., "inventory_Q1.xlsx", "wip_march.xlsx") for automatic period detection.
+        """)
     
     # Process comparison files regardless of source (session state or uploaded)
     if len(comparison_files) >= 2:
         st.success(f"✅ Found {len(comparison_files)} files for comparison")
         
-        # Display file summary
-        st.markdown("### Available Files:")
+        # Display available files
+        st.markdown("### 📋 Available Cleansed Files:")
         for i, file_info in enumerate(comparison_files):
             st.write(f"**{i+1}.** {file_info['period']} - {file_info['path']} ({file_info['rows']} rows, {file_info['columns']} cols)")
         
-        # Auto-pairing logic
-        st.markdown("### 🔗 Auto-Pairing Strategy")
+        # Multi-file selection interface
+        st.markdown("### 🔄 Select Files to Compare")
         
-        # Group files by period
-        period_groups = {}
-        for file_info in comparison_files:
-            period = file_info['period']
-            if period not in period_groups:
-                period_groups[period] = []
-            period_groups[period].append(file_info)
+        # Create file selection dropdowns
+        col1, col2, col3 = st.columns(3)
         
-        # Find pairs for comparison
-        comparison_pairs = []
-        periods = sorted(period_groups.keys())
+        with col1:
+            file_options = [f"{info['period']} - {info['path']}" for info in comparison_files]
+            selected_file1_idx = st.selectbox(
+                "First File",
+                range(len(comparison_files)),
+                format_func=lambda x: file_options[x],
+                key="file1_selector"
+            )
         
-        for i in range(len(periods) - 1):
-            for j in range(i + 1, len(periods)):
-                period1, period2 = periods[i], periods[j]
-                files1 = period_groups[period1]
-                files2 = period_groups[period2]
-                
-                # Create pairs
-                for file1 in files1:
-                    for file2 in files2:
-                        comparison_pairs.append({
-                            'period1': period1,
-                            'period2': period2,
-                            'file1': file1,
-                            'file2': file2,
-                            'description': f"{period1} vs {period2}"
-                        })
-        
-        if comparison_pairs:
-            st.success(f"🔗 Auto-detected {len(comparison_pairs)} comparison pairs")
-            
-            # Display comparison pairs
-            st.markdown("### Comparison Pairs:")
-            for i, pair in enumerate(comparison_pairs):
-                st.write(f"**{i+1}.** {pair['description']}")
-                st.write(f"   - {pair['file1']['path']} → {pair['file2']['path']}")
-            
-            # Comparison execution
-            st.markdown("### 🚀 Execute Comparison")
-            
-            # Let user select comparison type and pair
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                comparison_type = st.selectbox(
-                    "Comparison Type",
-                    ["Auto-Detect", "WIP Aging", "Inventory", "Financials"],
-                    help="Auto-Detect will analyze data structure to determine best comparison method"
+        with col2:
+            # Filter out the first selected file from second dropdown
+            available_for_second = [i for i in range(len(comparison_files)) if i != selected_file1_idx]
+            if available_for_second:
+                selected_file2_idx = st.selectbox(
+                    "Second File", 
+                    available_for_second,
+                    format_func=lambda x: file_options[x],
+                    key="file2_selector"
                 )
+            else:
+                selected_file2_idx = None
+                st.warning("Need at least 2 files for comparison")
+        
+        with col3:
+            comparison_type = st.selectbox(
+                "Comparison Type",
+                ["Auto-Detect", "WIP Aging", "Inventory", "Financials"],
+                help="Auto-Detect will analyze data structure to determine best comparison method"
+            )
+        
+        # Create comparison pair from selections
+        if selected_file2_idx is not None:
+            selected_pair = {
+                'period1': comparison_files[selected_file1_idx]['period'],
+                'period2': comparison_files[selected_file2_idx]['period'],
+                'file1': comparison_files[selected_file1_idx],
+                'file2': comparison_files[selected_file2_idx],
+                'description': f"{comparison_files[selected_file1_idx]['period']} vs {comparison_files[selected_file2_idx]['period']}"
+            }
             
-            with col2:
-                if comparison_pairs:
-                    selected_pair_idx = st.selectbox(
-                        "Select Comparison Pair",
-                        range(len(comparison_pairs)),
-                        format_func=lambda x: comparison_pairs[x]['description']
-                    )
-                    selected_pair = comparison_pairs[selected_pair_idx]
-                else:
-                    selected_pair = None
-            
-            if st.button("🔄 Run Comparison Analysis") and selected_pair:
-                with st.spinner("Running comparison analysis..."):
-                    try:
-                        # Prepare dataframes for comparison
-                        df1 = selected_pair['file1']['dataframe'].copy()
-                        df2 = selected_pair['file2']['dataframe'].copy()
-                        
-                        # Debug: Show column information
-                        st.markdown("### 🔍 Column Analysis")
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            st.markdown(f"**{selected_pair['period1']} Columns:**")
-                            st.write(list(df1.columns))
-                        
-                        with col2:
-                            st.markdown(f"**{selected_pair['period2']} Columns:**")
-                            st.write(list(df2.columns))
+            st.info(f"🔄 Ready to compare: **{selected_pair['description']}**")
+            st.write(f"📁 {selected_pair['file1']['path']} → {selected_pair['file2']['path']}")
+        else:
+            selected_pair = None
+        
+        # Comparison execution button
+        if selected_pair and st.button("🔄 Run Comparison Analysis"):
+            with st.spinner("Running comparison analysis..."):
+                try:
+                    # Prepare dataframes for comparison
+                    df1 = selected_pair['file1']['dataframe'].copy()
+                    df2 = selected_pair['file2']['dataframe'].copy()
+                    
+                    # Show column information
+                    st.markdown("### 🔍 Column Analysis")
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown(f"**{selected_pair['period1']} Columns:**")
+                        st.write(list(df1.columns))
+                    
+                    with col2:
+                        st.markdown(f"**{selected_pair['period2']} Columns:**")
+                        st.write(list(df2.columns))
                         
                         # Add period and source information
                         df1['period'] = selected_pair['period1']
