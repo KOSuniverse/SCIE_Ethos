@@ -7,6 +7,7 @@ import pandas as pd
 from typing import Dict, List, Optional, Any, Union
 from pathlib import Path
 import numpy as np
+import time # Added for delta waterfall timestamp
 
 # Enhanced foundation imports
 try:
@@ -679,6 +680,289 @@ def create_moq_histogram(df: pd.DataFrame, output_path: str) -> str:
     except Exception as e:
         log_event(f"MOQ histogram failed: {e}")
         return ""
+
+# =============================================================================
+# Phase 2: Comparison-Aware Visuals
+# =============================================================================
+
+def create_delta_waterfall(df, output_path=None):
+    """
+    Create a waterfall chart showing the delta changes between periods.
+    
+    Args:
+        df: DataFrame with delta column and identifier columns
+        output_path: Path to save the chart image
+    
+    Returns:
+        str: Path to saved chart image
+    """
+    try:
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        
+        # Ensure output path is set
+        if output_path is None:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            output_path = f"delta_waterfall_{timestamp}.png"
+        
+        # Canonicalize output path
+        output_path = _ensure_charts_folder(output_path)
+        
+        # Prepare data for waterfall chart
+        if 'delta' in df.columns:
+            # Sort by absolute delta value
+            df_sorted = df.sort_values('delta', key=abs, ascending=False).head(20)
+            
+            # Create waterfall chart
+            fig, ax = plt.subplots(figsize=(12, 8))
+            
+            # Calculate positions for bars
+            positions = range(len(df_sorted))
+            deltas = df_sorted['delta'].values
+            
+            # Color bars based on positive/negative
+            colors = ['green' if d > 0 else 'red' for d in deltas]
+            
+            # Create waterfall bars
+            bars = ax.bar(positions, deltas, color=colors, alpha=0.7)
+            
+            # Add value labels on bars
+            for i, (bar, delta) in enumerate(zip(bars, deltas)):
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height + (0.01 * max(deltas)),
+                       f'{delta:,.0f}', ha='center', va='bottom', fontsize=8)
+            
+            # Customize chart
+            ax.set_title('Delta Waterfall Chart - Top 20 Changes', fontsize=16, fontweight='bold')
+            ax.set_xlabel('Items', fontsize=12)
+            ax.set_ylabel('Delta Value', fontsize=12)
+            ax.grid(True, alpha=0.3)
+            
+            # Rotate x-axis labels if needed
+            if len(df_sorted) > 10:
+                plt.xticks(rotation=45, ha='right')
+            
+            # Add zero line
+            ax.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+            
+            plt.tight_layout()
+            plt.savefig(output_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            return output_path
+        else:
+            # Create a placeholder chart if no delta column
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.text(0.5, 0.5, 'No delta column found\nfor waterfall chart', 
+                   ha='center', va='center', transform=ax.transAxes, fontsize=14)
+            ax.set_title('Delta Waterfall Chart - No Data Available')
+            plt.savefig(output_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            return output_path
+            
+    except Exception as e:
+        print(f"Error creating delta waterfall chart: {e}")
+        return None
+
+def create_aging_shift_chart(df, output_path=None):
+    """
+    Create a chart showing aging shifts between periods.
+    
+    Args:
+        df: DataFrame with aging bucket and period columns
+        output_path: Path to save the chart image
+    
+    Returns:
+        str: Path to saved chart image
+    """
+    try:
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        
+        # Ensure output path is set
+        if output_path is None:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            output_path = f"aging_shift_{timestamp}.png"
+        
+        # Canonicalize output path
+        output_path = _ensure_charts_folder(output_path)
+        
+        # Look for aging-related columns
+        aging_cols = [col for col in df.columns if 'aging' in col.lower() or 'shift' in col.lower()]
+        
+        if aging_cols:
+            # Create aging shift visualization
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+            
+            # First subplot: Aging bucket comparison
+            if 'aging_bucket' in df.columns:
+                # Group by aging bucket and sum values
+                aging_summary = df.groupby('aging_bucket').agg({
+                    col: 'sum' for col in df.columns if col not in ['aging_bucket', 'aging_shift']
+                }).reset_index()
+                
+                # Plot aging buckets
+                if len(aging_summary) > 0:
+                    x_pos = range(len(aging_summary))
+                    width = 0.35
+                    
+                    # Find period columns
+                    period_cols = [col for col in aging_summary.columns if col not in ['aging_bucket']]
+                    if len(period_cols) >= 2:
+                        ax1.bar([x - width/2 for x in x_pos], aging_summary[period_cols[0]], 
+                               width, label=period_cols[0], alpha=0.7)
+                        ax1.bar([x + width/2 for x in x_pos], aging_summary[period_cols[1]], 
+                               width, label=period_cols[1], alpha=0.7)
+                        
+                        ax1.set_xlabel('Aging Bucket')
+                        ax1.set_ylabel('Value')
+                        ax1.set_title('Aging Bucket Comparison')
+                        ax1.legend()
+                        ax1.grid(True, alpha=0.3)
+                        
+                        # Rotate x-axis labels
+                        ax1.set_xticks(x_pos)
+                        ax1.set_xticklabels(aging_summary['aging_bucket'], rotation=45, ha='right')
+            
+            # Second subplot: Aging shift
+            if 'aging_shift' in df.columns:
+                shift_data = df[df['aging_shift'] != 0].copy()
+                if not shift_data.empty:
+                    shift_data = shift_data.sort_values('aging_shift', key=abs, ascending=False).head(15)
+                    
+                    colors = ['green' if x > 0 else 'red' for x in shift_data['aging_shift']]
+                    ax2.barh(range(len(shift_data)), shift_data['aging_shift'], color=colors, alpha=0.7)
+                    
+                    ax2.set_yticks(range(len(shift_data)))
+                    ax2.set_yticklabels(shift_data['aging_bucket'] if 'aging_bucket' in shift_data.columns else range(len(shift_data)))
+                    ax2.set_xlabel('Aging Shift')
+                    ax2.set_title('Top Aging Shifts')
+                    ax2.grid(True, alpha=0.3)
+                    
+                    # Add zero line
+                    ax2.axvline(x=0, color='black', linestyle='-', alpha=0.5)
+                else:
+                    ax2.text(0.5, 0.5, 'No aging shifts detected', 
+                            ha='center', va='center', transform=ax2.transAxes, fontsize=14)
+                    ax2.set_title('Aging Shifts - No Data')
+            else:
+                ax2.text(0.5, 0.5, 'No aging shift data available', 
+                        ha='center', va='center', transform=ax2.transAxes, fontsize=14)
+                ax2.set_title('Aging Shifts - No Data')
+            
+            plt.tight_layout()
+            plt.savefig(output_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            return output_path
+        else:
+            # Create placeholder chart
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.text(0.5, 0.5, 'No aging columns found\nfor aging shift chart', 
+                   ha='center', va='center', transform=ax.transAxes, fontsize=14)
+            ax.set_title('Aging Shift Chart - No Data Available')
+            plt.savefig(output_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            return output_path
+            
+    except Exception as e:
+        print(f"Error creating aging shift chart: {e}")
+        return None
+
+def create_movers_scatter(df, output_path=None):
+    """
+    Create a scatter plot showing movers (items with significant changes).
+    
+    Args:
+        df: DataFrame with period columns and delta information
+        output_path: Path to save the chart image
+    
+    Returns:
+        str: Path to saved chart image
+    """
+    try:
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        
+        # Ensure output path is set
+        if output_path is None:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            output_path = f"movers_scatter_{timestamp}.png"
+        
+        # Canonicalize output path
+        output_path = _ensure_charts_folder(output_path)
+        
+        # Find period columns
+        period_cols = [col for col in df.columns if not col.endswith(('_delta', '_pct', 'delta_pct'))]
+        period_cols = [col for col in period_cols if col not in ['source_file', 'header_row', 'sheet_type']]
+        
+        if len(period_cols) >= 2:
+            # Create scatter plot
+            fig, ax = plt.subplots(figsize=(12, 8))
+            
+            # Get the two period columns
+            p1_col = period_cols[0]
+            p2_col = period_cols[1]
+            
+            # Filter out rows with valid data in both periods
+            valid_data = df[(df[p1_col] > 0) & (df[p2_col] > 0)].copy()
+            
+            if not valid_data.empty:
+                # Calculate percentage change for sizing
+                valid_data['pct_change'] = ((valid_data[p2_col] - valid_data[p1_col]) / valid_data[p1_col]) * 100
+                
+                # Create scatter plot with size based on percentage change
+                scatter = ax.scatter(valid_data[p1_col], valid_data[p2_col], 
+                                   s=abs(valid_data['pct_change']) * 10, 
+                                   c=valid_data['pct_change'], 
+                                   cmap='RdYlGn', alpha=0.7)
+                
+                # Add colorbar
+                cbar = plt.colorbar(scatter)
+                cbar.set_label('Percentage Change (%)')
+                
+                # Add diagonal line for no change
+                max_val = max(valid_data[p1_col].max(), valid_data[p2_col].max())
+                ax.plot([0, max_val], [0, max_val], 'k--', alpha=0.5, label='No Change')
+                
+                # Customize chart
+                ax.set_xlabel(f'{p1_col} Value', fontsize=12)
+                ax.set_ylabel(f'{p2_col} Value', fontsize=12)
+                ax.set_title('Movers Scatter Plot - Items with Significant Changes', fontsize=14, fontweight='bold')
+                ax.grid(True, alpha=0.3)
+                ax.legend()
+                
+                # Add some annotations for extreme movers
+                top_movers = valid_data.nlargest(5, 'pct_change')
+                for idx, row in top_movers.iterrows():
+                    ax.annotate(f'{row["pct_change"]:.1f}%', 
+                               (row[p1_col], row[p2_col]),
+                               xytext=(5, 5), textcoords='offset points',
+                               fontsize=8, bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7))
+                
+            else:
+                ax.text(0.5, 0.5, 'No valid data for both periods\nfound for scatter plot', 
+                       ha='center', va='center', transform=ax.transAxes, fontsize=14)
+                ax.set_title('Movers Scatter Plot - No Data Available')
+            
+            plt.tight_layout()
+            plt.savefig(output_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            return output_path
+        else:
+            # Create placeholder chart
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.text(0.5, 0.5, 'Insufficient period columns\nfor movers scatter plot', 
+                   ha='center', va='center', transform=ax.transAxes, fontsize=14)
+            ax.set_title('Movers Scatter Plot - No Data Available')
+            plt.savefig(output_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            return output_path
+            
+    except Exception as e:
+        print(f"Error creating movers scatter chart: {e}")
+        return None
 
 # ================== HELPER FUNCTIONS ==================
 
