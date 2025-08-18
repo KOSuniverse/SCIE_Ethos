@@ -2142,13 +2142,26 @@ try:
                         
                         st.info(f"🔍 Using comparison strategy: **{comparison_type}**")
                         
-                        # Execute comparison based on type
+                        # Execute comparison based on type with local output folder
+                        import tempfile
+                        import os
+                        local_output = os.path.join(tempfile.gettempdir(), "scie_ethos_comparisons")
+                        try:
+                            os.makedirs(local_output, exist_ok=True)
+                            st.info(f"📁 Using output directory: `{local_output}`")
+                        except Exception as e:
+                            st.error(f"Failed to create output directory: {e}")
+                            # Fallback to current directory
+                            local_output = "./comparisons"
+                            os.makedirs(local_output, exist_ok=True)
+                            st.info(f"📁 Using fallback directory: `{local_output}`")
+                        
                         if comparison_type == "WIP Aging":
-                            result = compare_wip_aging([df1, df2])
+                            result = compare_wip_aging([df1, df2], output_folder=local_output)
                         elif comparison_type == "Financials":
-                            result = compare_financials([df1, df2])
+                            result = compare_financials([df1, df2], output_folder=local_output)
                         else:  # Default to inventory
-                            result = compare_inventory([df1, df2])
+                            result = compare_inventory([df1, df2], output_folder=local_output)
                         
                         if result and not isinstance(result, dict):
                             st.error(f"Comparison failed: {result}")
