@@ -1922,11 +1922,7 @@ try:
     # Auto-file pairing detection
     st.subheader("📁 File Pairing & Comparison")
     
-    # Debug: Show session state info
-    st.caption(f"Session state keys: {list(st.session_state.keys())}")
-    if 'cleaned_sheets' in st.session_state:
-        st.caption(f"Cleaned sheets count: {len(st.session_state.cleaned_sheets) if st.session_state.cleaned_sheets else 0}")
-    
+
     # Get available files for comparison from session state
     comparison_files = []
     
@@ -1961,6 +1957,37 @@ try:
                 'dataframe': df
             })
     
+    # Check for uploaded files if no session state files
+    if len(comparison_files) == 0:
+        # Provide alternative: direct file upload for comparison
+        st.markdown("### 📤 Upload Files for Comparison")
+        st.write("You can upload files directly for comparison without running the full ingestion pipeline.")
+        
+        uploaded_files = st.file_uploader(
+            "Choose 2 or more Excel files for comparison",
+            type=['xlsx'],
+            accept_multiple_files=True,
+            help="Select multiple .xlsx files to compare"
+        )
+        
+        if uploaded_files and len(uploaded_files) >= 2:
+            st.success(f"✅ Uploaded {len(uploaded_files)} files for comparison")
+            
+            # Process uploaded files for comparison and add them to comparison_files
+            for uploaded_file in uploaded_files:
+                try:
+                    df = pd.read_excel(uploaded_file, sheet_name=0)  # Read first sheet
+                    comparison_files.append({
+                        'path': uploaded_file.name,
+                        'period': "Uploaded",  # Default period
+                        'rows': len(df),
+                        'columns': len(df.columns),
+                        'dataframe': df
+                    })
+                except Exception as e:
+                    st.error(f"Error reading {uploaded_file.name}: {e}")
+    
+    # Process comparison files regardless of source (session state or uploaded)
     if len(comparison_files) >= 2:
         st.success(f"✅ Found {len(comparison_files)} files for comparison")
         
@@ -2195,42 +2222,7 @@ try:
     elif len(comparison_files) == 1:
         st.info("📁 Found 1 file. Need at least 2 files for comparison.")
     else:
-        st.info("📁 No files available for comparison. Please run data ingestion first.")
-        
-        # Provide alternative: direct file upload for comparison
-        st.markdown("### 📤 Upload Files for Comparison")
-        st.write("You can upload files directly for comparison without running the full ingestion pipeline.")
-        
-        uploaded_files = st.file_uploader(
-            "Choose 2 or more Excel files for comparison",
-            type=['xlsx'],
-            accept_multiple_files=True,
-            help="Select multiple .xlsx files to compare"
-        )
-        
-        if uploaded_files and len(uploaded_files) >= 2:
-            st.success(f"✅ Uploaded {len(uploaded_files)} files for comparison")
-            
-            # Process uploaded files for comparison
-            comparison_files = []
-            for uploaded_file in uploaded_files:
-                try:
-                    df = pd.read_excel(uploaded_file, sheet_name=0)  # Read first sheet
-                    comparison_files.append({
-                        'path': uploaded_file.name,
-                        'period': "Uploaded",  # Default period
-                        'rows': len(df),
-                        'columns': len(df.columns),
-                        'dataframe': df
-                    })
-                except Exception as e:
-                    st.error(f"Error reading {uploaded_file.name}: {e}")
-            
-            if len(comparison_files) >= 2:
-                st.success(f"✅ Ready to compare {len(comparison_files)} files!")
-                # Continue with the comparison logic below
-            else:
-                st.warning("⚠️ Need at least 2 valid files for comparison")
+        st.info("📁 No files available for comparison. Please run data ingestion first or use the upload option above.")
         
 except ImportError as e:
     st.error(f"Comparison module not available: {e}")
