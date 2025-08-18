@@ -101,21 +101,8 @@ if "service_level" not in st.session_state:
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper Functions
 # ─────────────────────────────────────────────────────────────────────────────
-def get_confidence_badge(score: float, service_level: float = 0.95) -> str:
-    """Generate enhanced confidence badge with service level context."""
-    # Use enhanced confidence scoring
-    confidence_data = score_confidence_enhanced(
-        recency=0.8,  # Placeholder values - should come from actual analysis
-        alignment=0.9,
-        variance=0.2,
-        coverage=0.8,
-        service_level=service_level
-    )
-    
-    css_class = confidence_data.get("css_class", "confidence-medium")
-    badge_text = confidence_data.get("badge", "MED")
-    
-    return f'<span class="badge {css_class}">{badge_text} ({score:.2f})</span>'
+# Import confidence badge function from confidence module
+from confidence import get_confidence_badge
 
 def get_service_level_badge(service_level: float) -> str:
     """Generate service level badge with z-score."""
