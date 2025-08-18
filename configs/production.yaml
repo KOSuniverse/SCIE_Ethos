@@ -1,0 +1,164 @@
+# configs/production.yaml
+# Phase 6: Production Configuration
+# Production environment settings and enterprise features
+
+# Environment settings
+environment: production
+debug: false
+log_level: INFO
+log_format: json
+
+# Application settings
+app_name: "SCIE Ethos LLM Assistant"
+app_version: "1.0.0"
+app_environment: "production"
+app_timezone: "UTC"
+
+# Server configuration
+server:
+  host: "0.0.0.0"
+  port: 8501
+  workers: 4
+  worker_class: "sync"
+  max_requests: 1000
+  max_requests_jitter: 100
+  timeout: 30
+  keepalive: 2
+
+# Database configuration
+database:
+  host: ${DB_HOST}
+  port: ${DB_PORT:-5432}
+  name: ${DB_NAME}
+  user: ${DB_USER}
+  password: ${DB_PASSWORD}
+  pool_size: ${DB_POOL_SIZE:-20}
+  ssl_mode: ${DB_SSL_MODE:-require}
+  connection_timeout: 10
+  statement_timeout: 300
+
+# Cache configuration
+cache:
+  host: ${REDIS_HOST}
+  port: ${REDIS_PORT:-6379}
+  password: ${REDIS_PASSWORD}
+  db: ${REDIS_DB:-0}
+  ssl: ${REDIS_SSL:-true}
+  pool_size: ${REDIS_POOL_SIZE:-20}
+  default_ttl: 3600
+
+# Monitoring and observability
+monitoring:
+  enabled: true
+  metrics_port: 9090
+  health_check_interval: 30
+  prometheus_enabled: true
+  jaeger_enabled: false
+  datadog_enabled: false
+  new_relic_enabled: false
+
+# Logging configuration
+logging:
+  level: INFO
+  format: json
+  output: stdout
+  file_path: /app/logs/app.log
+  max_size: 100MB
+  max_files: 10
+  compress: true
+
+# Security configuration
+security:
+  jwt_secret: ${JWT_SECRET}
+  jwt_expiry: 3600
+  mfa_required: true
+  rate_limit_enabled: true
+  rate_limit_requests: 100
+  rate_limit_window: 60
+  cors_enabled: true
+  cors_origins: ["*"]
+
+# API configuration
+api:
+  version: "v1"
+  prefix: "/api/v1"
+  rate_limit_enabled: true
+  authentication_required: true
+  swagger_enabled: false
+
+# External services
+external_services:
+  openai:
+    api_key: ${OPENAI_API_KEY}
+    base_url: "https://api.openai.com/v1"
+    timeout: 30
+    max_retries: 3
+  
+  aws:
+    region: ${AWS_DEFAULT_REGION:-us-east-1}
+    access_key_id: ${AWS_ACCESS_KEY_ID}
+    secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+    s3_bucket: ${S3_BUCKET}
+  
+  dropbox:
+    access_token: ${DROPBOX_ACCESS_TOKEN}
+    app_key: ${DROPBOX_APP_KEY}
+    app_secret: ${DROPBOX_APP_SECRET}
+
+# Performance tuning
+performance:
+  cache_enabled: true
+  compression_enabled: true
+  async_processing: true
+  worker_processes: 4
+  max_concurrent_requests: 100
+  request_timeout: 30
+
+# High availability
+high_availability:
+  enabled: true
+  load_balancer_enabled: true
+  health_check_path: "/_stcore/health"
+  readiness_path: "/_stcore/health"
+  liveness_path: "/_stcore/health"
+
+# Backup and recovery
+backup:
+  enabled: true
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  retention_days: 30
+  storage_type: "s3"
+  compression: true
+  encryption: true
+
+# Disaster recovery
+disaster_recovery:
+  enabled: true
+  rto_target: 3600  # 1 hour
+  rpo_target: 300   # 5 minutes
+  backup_verification: true
+  recovery_testing: true
+
+# Compliance and audit
+compliance:
+  audit_logging: true
+  data_retention_days: 2555  # 7 years
+  pii_detection: true
+  encryption_at_rest: true
+  encryption_in_transit: true
+
+# Feature flags
+features:
+  advanced_analytics: true
+  machine_learning: true
+  real_time_processing: true
+  batch_processing: true
+  api_gateway: true
+  service_mesh: false
+
+# Maintenance
+maintenance:
+  enabled: false
+  maintenance_window: "02:00-04:00 UTC"
+  auto_updates: false
+  backup_before_update: true

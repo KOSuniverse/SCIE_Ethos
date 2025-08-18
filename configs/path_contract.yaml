@@ -1,0 +1,29 @@
+# Path Contract — Dropbox
+# Cursor must NOT change the structure. It may create missing output folders ONLY under base_data_dir.
+
+# If your Dropbox has a wrapper folder above Project_Root, set it here (or leave blank).
+dropbox_root_prefix: ""   # e.g., "/Apps/Ethos LLM" or "" if Project_Root is the root
+
+base_data_dir: "Project_Root/04_Data"
+
+folders:
+  raw: "00_Raw_Files"
+  cleansed: "01_Cleansed_Files"
+  eda_charts: "02_EDA_Charts"
+  summaries: "03_Summaries"
+  metadata: "04_Metadata"
+  merged: "05_Merged_Comparisons"
+  exports: "Project_Root/05_Exports"   # outside 04_Data
+  logs: "Project_Root/06_Logs"         # outside 04_Data
+  knowledge_base: "Project_Root/06_LLM_Knowledge_Base"  # PDFs, SOPs, decks; optional FAISS archive
+
+rules:
+  - "Never overwrite or rename files in ${base_data_dir}/${folders.raw}"
+  - "Write cleansed outputs only to ${base_data_dir}/${folders.cleansed}"
+  - "Write EDA charts only to ${base_data_dir}/${folders.eda_charts}"
+  - "Write summaries only to ${base_data_dir}/${folders.summaries}"
+  - "Write master_catalog.jsonl, eda_profile.json, summary_card.md to ${base_data_dir}/${folders.metadata}"
+  - "Write any merged/roll-up files to ${base_data_dir}/${folders.merged}"
+  - "Exports (PDF/MD/XLSX/DOCX/PPTX) go to ${folders.exports} and are mirrored to S3"
+  - "Logs (JSONL) go to ${folders.logs}"
+  - "Knowledge Base PDFs are read-only; Assistant ingests and summarizes but does not modify them."

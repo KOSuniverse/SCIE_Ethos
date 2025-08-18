@@ -1,0 +1,5 @@
+s3:
+  logs:    { prefix: "project-root/logs/",    retention_days: 365 }
+  exports: { prefix: "project-root/exports/", retention_days: 180 }
+dropbox:
+  exports: { base_path: "/Apps/Ethos LLM/Project_Root/03_Summaries" }

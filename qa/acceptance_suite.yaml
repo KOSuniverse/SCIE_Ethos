@@ -1,0 +1,15 @@
+tests:
+  - id: inv_us_aging_insights
+    ask: "Show US inventory by value and aging. Real insights."
+    expect: { citations: { country: "US", sheet_type_any: ["inventory","eo"] }, confidence_min: 0.70 }
+
+  - id: par_now_q2_2026_single
+    ask: "What Par do we need today and by Q2-2026 for SKU 12345 in Germany?"
+    expect: { includes: ["SS","ROP","Par","sensitivity"], citations: { country: "DE" }, confidence_min: 0.70 }
+
+  - id: policy_workflow_kb
+    ask: "What is the current reorder approval workflow and thresholds?"
+    expect:
+      citations: { sheet_type_any: ["kb_doc"] }
+      includes: ["who approves","dollar thresholds","exceptions","effective date"]
+      confidence_min: 0.70

@@ -1,0 +1,27 @@
+playbooks:
+  forecasting:
+    description: "Demand forecasting and inventory planning models"
+    steps:
+      - "Load historical data (WIP, inventory, demand)"
+      - "Identify seasonality and trends"
+      - "Apply exponential smoothing or ARIMA models"
+      - "Generate confidence intervals"
+      - "Recommend par levels and reorder points"
+    
+  optimization:
+    description: "Inventory optimization and cost reduction strategies"
+    steps:
+      - "Analyze current stock levels vs. demand patterns"
+      - "Identify excess and obsolete inventory"
+      - "Calculate safety stock requirements"
+      - "Optimize reorder quantities"
+      - "Recommend supplier lead time adjustments"
+    
+  scenario_analysis:
+    description: "What-if analysis for policy and process changes"
+    steps:
+      - "Define baseline scenario with current data"
+      - "Model policy changes (lead times, safety stock, etc.)"
+      - "Simulate demand variations"
+      - "Calculate impact on inventory costs and service levels"
+      - "Present recommendations with confidence levels"
