@@ -1963,7 +1963,7 @@ try:
         st.markdown("### 📤 Upload Files for Comparison")
         st.write("You can upload files directly for comparison without running the full ingestion pipeline.")
         
-        uploaded_files = st.file_uploader(
+                        uploaded_files = st.file_uploader(
             "Choose 2 or more Excel files for comparison",
             type=['xlsx'],
             accept_multiple_files=True,
@@ -1976,7 +1976,21 @@ try:
             # Process uploaded files for comparison and add them to comparison_files
             for uploaded_file in uploaded_files:
                 try:
-                    df = pd.read_excel(uploaded_file, sheet_name=0)  # Read first sheet
+                    # Read all sheets and let user choose
+                    excel_file = pd.ExcelFile(uploaded_file)
+                    sheet_names = excel_file.sheet_names
+                    
+                    if len(sheet_names) > 1:
+                        st.info(f"📋 **{uploaded_file.name}** has {len(sheet_names)} sheets: {', '.join(sheet_names)}")
+                        selected_sheet = st.selectbox(
+                            f"Select sheet from {uploaded_file.name}",
+                            sheet_names,
+                            key=f"sheet_{uploaded_file.name}"
+                        )
+                        df = pd.read_excel(uploaded_file, sheet_name=selected_sheet)
+                    else:
+                        df = pd.read_excel(uploaded_file, sheet_name=0)  # Read first sheet
+                        selected_sheet = sheet_names[0]
                     
                     # Extract period information from filename
                     filename = uploaded_file.name.lower()
@@ -2260,11 +2274,6 @@ try:
                                             
                                             # Create accessible Excel file in current directory (not temp)
                                             accessible_file = f"comparison_q1_vs_q2_{timestamp}.xlsx"
-                                            st.info(f"📁 Creating Excel file: {accessible_file}")
-                                            
-                                            # Create a comprehensive Excel output (in current directory)
-                                            full_path = os.path.abspath(accessible_file)
-                                            st.info(f"📁 Full file path: {full_path}")
                                             
                                             with pd.ExcelWriter(accessible_file, engine='openpyxl') as writer:
                                                 # Raw data sheets
@@ -2297,31 +2306,102 @@ try:
                                                     top_q1.to_excel(writer, sheet_name=f'Top_{selected_pair["period1"]}', index=False)
                                                     top_q2.to_excel(writer, sheet_name=f'Top_{selected_pair["period2"]}', index=False)
                                             
-                                            # Create detailed analysis text
+                                            # Enhanced AI-like analysis
+                                            # Analyze aging buckets for deeper insights
+                                            aging_cols = ['0-30 Days', '31-60 Days', '61-90 Days', '91-120 Days', '121-150 Days', '151-180 Days', 'Over 180 Days']
+                                            aging_analysis = ""
+                                            
+                                            # Check which aging columns exist in both datasets
+                                            common_aging = [col for col in aging_cols if col in df1.columns and col in df2.columns]
+                                            
+                                            if common_aging:
+                                                aging_changes = {}
+                                                for col in common_aging:
+                                                    q1_aging = df1[col].sum()
+                                                    q2_aging = df2[col].sum()
+                                                    aging_changes[col] = q2_aging - q1_aging
+                                                
+                                                # Find biggest changes
+                                                biggest_increase = max(aging_changes.items(), key=lambda x: x[1])
+                                                biggest_decrease = min(aging_changes.items(), key=lambda x: x[1])
+                                                
+                                                if biggest_increase[1] > 0:
+                                                    aging_analysis += f"🔴 **Aging Alert**: {biggest_increase[0]} bucket increased by {biggest_increase[1]:,.0f}, indicating potential collection issues.\n\n"
+                                                
+                                                if biggest_decrease[1] < 0:
+                                                    aging_analysis += f"🟢 **Aging Improvement**: {biggest_decrease[0]} bucket decreased by {abs(biggest_decrease[1]):,.0f}, showing better collections.\n\n"
+                                            
+                                            # Analyze job status if available
+                                            status_analysis = ""
+                                            if 'Job Status' in df1.columns and 'Job Status' in df2.columns:
+                                                q1_statuses = df1['Job Status'].value_counts()
+                                                q2_statuses = df2['Job Status'].value_counts()
+                                                
+                                                # Find status changes
+                                                all_statuses = set(q1_statuses.index) | set(q2_statuses.index)
+                                                status_changes = {}
+                                                for status in all_statuses:
+                                                    q1_count = q1_statuses.get(status, 0)
+                                                    q2_count = q2_statuses.get(status, 0)
+                                                    status_changes[status] = q2_count - q1_count
+                                                
+                                                # Report significant changes
+                                                for status, change in status_changes.items():
+                                                    if abs(change) >= 2:  # Only report changes of 2+ jobs
+                                                        if change > 0:
+                                                            status_analysis += f"📊 **Status Trend**: {change} more jobs in '{status}' status.\n"
+                                                        else:
+                                                            status_analysis += f"📊 **Status Trend**: {abs(change)} fewer jobs in '{status}' status.\n"
+                                                
+                                                if status_analysis:
+                                                    status_analysis += "\n"
+                                            
+                                            # Create comprehensive analysis text
                                             analysis_text = f"""
-## 📊 Inventory Comparison Analysis: {selected_pair['period1']} vs {selected_pair['period2']}
+## 🎯 AI-Powered WIP & Inventory Analysis: {selected_pair['period1']} vs {selected_pair['period2']}
 
 ### Executive Summary
 - **Primary Metric**: {primary_col}
-- **{selected_pair['period1']} Total**: {total_q1:,.2f}
-- **{selected_pair['period2']} Total**: {total_q2:,.2f}
-- **Change**: {change:+,.2f} ({change_pct:+.1f}%)
-- **Records**: {len(df1)} → {len(df2)}
+- **{selected_pair['period1']} Total**: ${total_q1:,.0f}
+- **{selected_pair['period2']} Total**: ${total_q2:,.0f}
+- **Net Change**: ${change:+,.0f} ({change_pct:+.1f}%)
+- **Portfolio Size**: {len(df1)} → {len(df2)} jobs
 
-### Key Insights
+### 🔍 AI-Generated Insights
+
 """
                                             
-                                            if change > 0:
-                                                analysis_text += f"📈 **Increase**: The {primary_col} increased by {change:,.2f} ({change_pct:.1f}%) from {selected_pair['period1']} to {selected_pair['period2']}.\n\n"
-                                            elif change < 0:
-                                                analysis_text += f"📉 **Decrease**: The {primary_col} decreased by {abs(change):,.2f} ({abs(change_pct):.1f}%) from {selected_pair['period1']} to {selected_pair['period2']}.\n\n"
-                                            else:
-                                                analysis_text += f"➖ **No Change**: The {primary_col} remained stable between periods.\n\n"
+                                            # Smart trend analysis
+                                            if abs(change_pct) > 20:
+                                                analysis_text += f"🚨 **Significant Change Alert**: The {change_pct:+.1f}% change in {primary_col} represents a major shift in your WIP portfolio that requires immediate attention.\n\n"
+                                            elif abs(change_pct) > 10:
+                                                analysis_text += f"⚠️ **Notable Change**: The {change_pct:+.1f}% change in {primary_col} indicates meaningful portfolio movement worth investigating.\n\n"
+                                            elif abs(change_pct) < 2:
+                                                analysis_text += f"✅ **Stable Portfolio**: The {change_pct:+.1f}% change shows your WIP portfolio remained relatively stable between periods.\n\n"
                                             
-                                            if len(df2) > len(df1):
-                                                analysis_text += f"📋 **Inventory Growth**: {len(df2) - len(df1)} new items added to inventory.\n\n"
-                                            elif len(df2) < len(df1):
-                                                analysis_text += f"📋 **Inventory Reduction**: {len(df1) - len(df2)} items removed from inventory.\n\n"
+                                            # Portfolio size analysis
+                                            job_change = len(df2) - len(df1)
+                                            if job_change > 0:
+                                                analysis_text += f"📈 **Portfolio Expansion**: Added {job_change} new jobs to your WIP portfolio, indicating business growth or project intake acceleration.\n\n"
+                                            elif job_change < 0:
+                                                analysis_text += f"📉 **Portfolio Contraction**: Completed or removed {abs(job_change)} jobs from WIP, suggesting improved project velocity or reduced intake.\n\n"
+                                            
+                                            # Add aging and status insights
+                                            analysis_text += aging_analysis
+                                            analysis_text += status_analysis
+                                            
+                                            # Strategic recommendations
+                                            analysis_text += "### 💡 Strategic Recommendations\n\n"
+                                            
+                                            if change_pct > 15:
+                                                analysis_text += "🎯 **Action Required**: Consider investigating the drivers of this WIP increase - is it due to new project intake, slower completion rates, or collection delays?\n\n"
+                                            elif change_pct < -15:
+                                                analysis_text += "🎯 **Positive Trend**: The WIP reduction suggests improved project completion or collection efficiency. Consider analyzing successful practices for replication.\n\n"
+                                            
+                                            if 'Over 180 Days' in common_aging and aging_changes.get('Over 180 Days', 0) > 0:
+                                                analysis_text += "🔴 **Collection Priority**: Focus on the Over 180 Days bucket as it represents the highest risk for bad debt.\n\n"
+                                            
+                                            analysis_text += "📊 **Next Steps**: Review the detailed Excel workbook for item-level analysis and consider setting up automated alerts for significant WIP changes.\n"
                                             
                                             # Create a simple comparison result
                                             result = {
@@ -2339,10 +2419,6 @@ try:
                                             
                                             st.success("✅ Flexible comparison completed!")
                                             
-                                            # Debug: Show what we created
-                                            st.write("**Debug - Created result keys:**", list(result.keys()))
-                                            st.write("**Debug - Analysis text length:**", len(result.get('analysis_text', '')))
-                                            
                                             # Store results in session state for Q&A
                                             st.session_state.comparison_result = result
                                             st.session_state.comparison_df1 = df1
@@ -2359,15 +2435,10 @@ try:
                         elif result:
                             st.success("✅ Comparison completed successfully!")
                             
-                            # Debug: Show what's in result
-                            st.write("**Debug - Result keys:**", list(result.keys()) if result else "No result")
-                            
                             # Display detailed analysis if available
                             if 'analysis_text' in result:
                                 st.markdown("### 📊 Detailed Analysis")
                                 st.markdown(result['analysis_text'])
-                            else:
-                                st.warning("No detailed analysis available in result")
                             
                             # Display results
                             st.markdown("### 📊 Comparison Results")
@@ -2389,17 +2460,24 @@ try:
                                 st.write(f"**Excel Workbook:** `{result['excel_file']}`")
                                 st.info("💡 **File Location**: The Excel file is saved in your current working directory and can be downloaded from your browser.")
                                 
-                                # Add download button
+                                # Add download button with key to prevent UI clearing
                                 try:
-                                    with open(result['excel_file'], 'rb') as file:
+                                    if os.path.exists(result['excel_file']):
+                                        with open(result['excel_file'], 'rb') as file:
+                                            file_data = file.read()
+                                        
                                         st.download_button(
                                             label="📥 Download Comparison Excel File",
-                                            data=file.read(),
-                                            file_name=result['excel_file'],
-                                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                                            data=file_data,
+                                            file_name=os.path.basename(result['excel_file']),
+                                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                            key="download_comparison_excel"
                                         )
+                                    else:
+                                        st.error(f"File not found: {result['excel_file']}")
                                 except Exception as e:
                                     st.warning(f"Download not available: {e}")
+                                    st.write(f"Debug - Excel file path: {result.get('excel_file', 'No file path')}")
                                 
                                 if 'json_file' in result:
                                     st.write(f"**JSON Data:** `{result['json_file']}`")
@@ -2421,35 +2499,112 @@ try:
                             
                             user_question = st.text_input(
                                 "What would you like to know about this comparison?",
-                                placeholder="e.g., What are the top 3 items that changed the most? Which categories saw the biggest increase?",
+                                placeholder="e.g., What are the top 3 jobs that changed the most? Which aging buckets saw the biggest increase?",
                                 key="comparison_question"
                             )
                             
-                            if st.button("🔍 Analyze Question") and user_question:
+                            if st.button("🔍 Analyze Question", key="analyze_question") and user_question:
                                 with st.spinner("Analyzing your question..."):
                                     try:
-                                        # Simple Q&A based on the comparison data
-                                        answer = f"""
-**Your Question:** {user_question}
+                                        # Enhanced Q&A based on the comparison data
+                                        if 'comparison_df1' in st.session_state and 'comparison_df2' in st.session_state:
+                                            df1_qa = st.session_state.comparison_df1
+                                            df2_qa = st.session_state.comparison_df2
+                                            primary_col = result['metadata']['primary_column']
+                                            
+                                            # Analyze the question for key terms
+                                            question_lower = user_question.lower()
+                                            
+                                            answer = f"**Your Question:** {user_question}\n\n"
+                                            
+                                            if any(word in question_lower for word in ['top', 'largest', 'biggest', 'highest']):
+                                                # Find top changes
+                                                if 'Job Name' in df1_qa.columns and 'Job Name' in df2_qa.columns:
+                                                    # Merge dataframes to find changes
+                                                    merged = pd.merge(df1_qa[['Job Name', primary_col]], 
+                                                                    df2_qa[['Job Name', primary_col]], 
+                                                                    on='Job Name', how='outer', suffixes=('_Q1', '_Q2'))
+                                                    merged = merged.fillna(0)
+                                                    merged['Change'] = merged[f'{primary_col}_Q2'] - merged[f'{primary_col}_Q1']
+                                                    
+                                                    # Get top 3 increases and decreases
+                                                    top_increases = merged.nlargest(3, 'Change')
+                                                    top_decreases = merged.nsmallest(3, 'Change')
+                                                    
+                                                    answer += "**📈 Top 3 Increases:**\n"
+                                                    for _, row in top_increases.iterrows():
+                                                        if row['Change'] > 0:
+                                                            answer += f"- {row['Job Name']}: +${row['Change']:,.0f}\n"
+                                                    
+                                                    answer += "\n**📉 Top 3 Decreases:**\n"
+                                                    for _, row in top_decreases.iterrows():
+                                                        if row['Change'] < 0:
+                                                            answer += f"- {row['Job Name']}: ${row['Change']:,.0f}\n"
+                                                else:
+                                                    answer += f"Job-level comparison not available. Overall change: ${result['total_delta']:+,.0f}\n"
+                                            
+                                            elif any(word in question_lower for word in ['aging', 'bucket', 'days']):
+                                                # Analyze aging buckets
+                                                aging_cols = ['0-30 Days', '31-60 Days', '61-90 Days', '91-120 Days', '121-150 Days', '151-180 Days', 'Over 180 Days']
+                                                aging_changes = {}
+                                                
+                                                for col in aging_cols:
+                                                    if col in df1_qa.columns and col in df2_qa.columns:
+                                                        q1_total = df1_qa[col].sum()
+                                                        q2_total = df2_qa[col].sum()
+                                                        aging_changes[col] = q2_total - q1_total
+                                                
+                                                if aging_changes:
+                                                    answer += "**📊 Aging Bucket Changes:**\n"
+                                                    for bucket, change in sorted(aging_changes.items(), key=lambda x: abs(x[1]), reverse=True):
+                                                        if abs(change) > 1000:  # Only show significant changes
+                                                            answer += f"- {bucket}: ${change:+,.0f}\n"
+                                                else:
+                                                    answer += "Aging bucket analysis not available with current data structure.\n"
+                                            
+                                            elif any(word in question_lower for word in ['status', 'job status']):
+                                                # Analyze job status changes
+                                                if 'Job Status' in df1_qa.columns and 'Job Status' in df2_qa.columns:
+                                                    q1_status = df1_qa['Job Status'].value_counts()
+                                                    q2_status = df2_qa['Job Status'].value_counts()
+                                                    
+                                                    answer += "**📊 Job Status Changes:**\n"
+                                                    all_statuses = set(q1_status.index) | set(q2_status.index)
+                                                    for status in all_statuses:
+                                                        q1_count = q1_status.get(status, 0)
+                                                        q2_count = q2_status.get(status, 0)
+                                                        change = q2_count - q1_count
+                                                        if change != 0:
+                                                            answer += f"- {status}: {q1_count} → {q2_count} ({change:+})\n"
+                                                else:
+                                                    answer += "Job status analysis not available with current data structure.\n"
+                                            
+                                            else:
+                                                # General analysis
+                                                answer += f"""**General Analysis:**
 
-**Analysis based on {selected_pair['period1']} vs {selected_pair['period2']} comparison:**
+Based on the comparison using '{primary_col}':
+- **{selected_pair['period1']} Total**: ${df1_qa[primary_col].sum():,.0f}
+- **{selected_pair['period2']} Total**: ${df2_qa[primary_col].sum():,.0f}
+- **Net Change**: ${result['total_delta']:+,.0f}
+- **Job Count**: {len(df1_qa)} → {len(df2_qa)}
 
-Based on the comparison data using the '{result['metadata']['primary_column']}' column:
-- **{selected_pair['period1']} Total**: {st.session_state.comparison_df1[result['metadata']['primary_column']].sum():,.2f}
-- **{selected_pair['period2']} Total**: {st.session_state.comparison_df2[result['metadata']['primary_column']].sum():,.2f}
-- **Change**: {result['total_delta']:+,.2f}
-
-For more detailed analysis, please refer to the Excel file which contains:
-- Raw data for both periods
-- Executive summary with key metrics  
-- Top items for each period
-- Detailed breakdowns by category (if available)
-
-*Note: For more sophisticated question answering, the full knowledge base system would need to be integrated.*
+For more specific insights, try asking about:
+- "What are the top 3 jobs that changed the most?"
+- "Which aging buckets saw the biggest changes?"
+- "How did job statuses change between periods?"
 """
+                                            
+                                            answer += f"\n💡 **Tip**: Check the Excel file '{os.path.basename(result['excel_file'])}' for detailed item-level analysis."
+                                            
+                                        else:
+                                            answer = "Comparison data not available for analysis. Please run the comparison first."
+                                        
                                         st.markdown(answer)
+                                        
                                     except Exception as e:
                                         st.error(f"Error analyzing question: {e}")
+                                        st.write("Debug info:", str(e))
                             
                             # Debug caption showing comparison details
                             st.caption(f"Intent=compare | Mode=data_processing | Strategy={comparison_type} | Pair={selected_pair['period1']}→{selected_pair['period2']}")
