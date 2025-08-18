@@ -1973,10 +1973,12 @@ try:
         if uploaded_files and len(uploaded_files) >= 2:
             st.success(f"✅ Uploaded {len(uploaded_files)} files for comparison")
             
-            # Process uploaded files for comparison and add them to comparison_files
+            # Show sheet selection for all files first
+            st.markdown("### 📋 Sheet Selection")
+            sheet_selections = {}
+            
             for uploaded_file in uploaded_files:
                 try:
-                    # Read all sheets and let user choose
                     excel_file = pd.ExcelFile(uploaded_file)
                     sheet_names = excel_file.sheet_names
                     
@@ -1985,12 +1987,23 @@ try:
                         selected_sheet = st.selectbox(
                             f"Select sheet from {uploaded_file.name}",
                             sheet_names,
-                            key=f"sheet_{uploaded_file.name}"
+                            key=f"sheet_{uploaded_file.name}_{hash(uploaded_file.name)}"
                         )
-                        df = pd.read_excel(uploaded_file, sheet_name=selected_sheet)
+                        sheet_selections[uploaded_file.name] = selected_sheet
                     else:
-                        df = pd.read_excel(uploaded_file, sheet_name=0)  # Read first sheet
-                        selected_sheet = sheet_names[0]
+                        sheet_selections[uploaded_file.name] = sheet_names[0]
+                except Exception as e:
+                    st.error(f"Error reading {uploaded_file.name}: {e}")
+            
+            # Process files with selected sheets
+            st.markdown("### 📊 Processing Selected Sheets")
+            
+            for uploaded_file in uploaded_files:
+                try:
+                    selected_sheet = sheet_selections.get(uploaded_file.name, 0)
+                    df = pd.read_excel(uploaded_file, sheet_name=selected_sheet)
+                    
+                    st.success(f"✅ Loaded {uploaded_file.name} - Sheet: {selected_sheet} ({len(df)} rows, {len(df.columns)} cols)")
                     
                     # Extract period information from filename
                     filename = uploaded_file.name.lower()
@@ -2272,8 +2285,21 @@ try:
                                             top_q1 = df1.nlargest(5, primary_col)[['description', primary_col]] if 'description' in df1.columns else df1.nlargest(5, primary_col)
                                             top_q2 = df2.nlargest(5, primary_col)[['description', primary_col]] if 'description' in df2.columns else df2.nlargest(5, primary_col)
                                             
-                                            # Create accessible Excel file in current directory (not temp)
-                                            accessible_file = f"comparison_q1_vs_q2_{timestamp}.xlsx"
+                                            # Create Excel file for both local download and Dropbox storage
+                                            local_file = f"comparison_q1_vs_q2_{timestamp}.xlsx"
+                                            
+                                            # Also save to Dropbox merged comparisons folder if available
+                                            try:
+                                                from dbx_utils import upload_bytes
+                                                from path_utils import join_root
+                                                dropbox_path = join_root("04_Data/05_Merged_Comparisons", f"comparison_q1_vs_q2_{timestamp}.xlsx")
+                                                save_to_dropbox = True
+                                                st.info(f"📁 Will save to: Local download + Dropbox: {dropbox_path}")
+                                            except ImportError:
+                                                save_to_dropbox = False
+                                                st.info(f"📁 Will save to: Local download only")
+                                            
+                                            accessible_file = local_file
                                             
                                             with pd.ExcelWriter(accessible_file, engine='openpyxl') as writer:
                                                 # Raw data sheets
@@ -2305,6 +2331,17 @@ try:
                                                 if not top_q1.empty and not top_q2.empty:
                                                     top_q1.to_excel(writer, sheet_name=f'Top_{selected_pair["period1"]}', index=False)
                                                     top_q2.to_excel(writer, sheet_name=f'Top_{selected_pair["period2"]}', index=False)
+                                            
+                                            # Upload to Dropbox if available
+                                            if save_to_dropbox:
+                                                try:
+                                                    with open(accessible_file, 'rb') as f:
+                                                        file_bytes = f.read()
+                                                    upload_bytes(dropbox_path, file_bytes)
+                                                    st.success(f"✅ Saved to Dropbox: {dropbox_path}")
+                                                except Exception as e:
+                                                    st.warning(f"⚠️ Dropbox upload failed: {e}")
+                                                    st.info("File is still available for local download")
                                             
                                             # Enhanced AI-like analysis
                                             # Analyze aging buckets for deeper insights
@@ -2424,7 +2461,29 @@ try:
                                             st.session_state.comparison_df1 = df1
                                             st.session_state.comparison_df2 = df2
                                         else:
-                                            raise ValueError("No common numeric columns found between files")
+                                            st.error("❌ **No Common Numeric Columns Found**")
+                                            st.info("The selected sheets have completely different column structures. Please:")
+                                            st.write("1. **Check if you selected the right sheets** - both files should have similar data types")
+                                            st.write("2. **Try different sheet combinations** - use the sheet selectors above")
+                                            st.write("3. **Verify data structure** - both sheets should be inventory/WIP data")
+                                            
+                                            # Show column comparison for debugging
+                                            st.markdown("### 🔍 Column Structure Comparison")
+                                            col1, col2 = st.columns(2)
+                                            
+                                            with col1:
+                                                st.markdown(f"**{selected_pair['period1']} Columns:**")
+                                                for i, col in enumerate(value_cols_df1):
+                                                    st.write(f"{i+1}. {col}")
+                                            
+                                            with col2:
+                                                st.markdown(f"**{selected_pair['period2']} Columns:**")
+                                                for i, col in enumerate(value_cols_df2):
+                                                    st.write(f"{i+1}. {col}")
+                                            
+                                            st.warning("💡 **Tip**: For WIP aging data, both sheets should have aging buckets like '0-30 Days', '31-60 Days', etc. For inventory data, both should have columns like 'Quantity', 'Value', 'Cost', etc.")
+                                            
+                                            return  # Exit the comparison process
                                     else:
                                         raise ValueError("No numeric columns found in either file")
                                 else:
@@ -2497,13 +2556,17 @@ try:
                             # Add Q&A Section
                             st.markdown("### 💬 Ask Questions About This Comparison")
                             
-                            user_question = st.text_input(
-                                "What would you like to know about this comparison?",
-                                placeholder="e.g., What are the top 3 jobs that changed the most? Which aging buckets saw the biggest increase?",
-                                key="comparison_question"
-                            )
+                            # Use form to prevent UI from clearing
+                            with st.form("qa_form"):
+                                user_question = st.text_input(
+                                    "What would you like to know about this comparison?",
+                                    placeholder="e.g., What are the top 3 jobs that changed the most? Which aging buckets saw the biggest increase?",
+                                    key="comparison_question_form"
+                                )
+                                
+                                analyze_button = st.form_submit_button("🔍 Analyze Question")
                             
-                            if st.button("🔍 Analyze Question", key="analyze_question") and user_question:
+                            if analyze_button and user_question:
                                 with st.spinner("Analyzing your question..."):
                                     try:
                                         # Enhanced Q&A based on the comparison data
