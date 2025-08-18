@@ -91,13 +91,80 @@ def compare_wip_aging(wip_dfs, output_folder=None):
     pivot['delta_pct'] = ((pivot[p2] - pivot[p1]) / (pivot[p1] + 1e-9)) * 100  # Avoid division by zero
     pivot_sorted = pivot.sort_values(by='delta', key=abs, ascending=False)
 
-    # Generate enterprise artifacts
+    # Generate comprehensive comparison workbook
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     file_prefix = f"wip_comparison_{p1.lower()}_to_{p2.lower()}_{timestamp}"
     
-    # Excel file with enterprise path
+    # Create Excel workbook with multiple sheets
     excel_path = join_root(output_folder, f"{file_prefix}.xlsx")
-    pivot_sorted.to_excel(excel_path, index=False)
+    
+    with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+        # Sheet 1: Aligned (main comparison)
+        pivot_sorted.to_excel(writer, sheet_name='Aligned', index=False)
+        
+        # Sheet 2: Delta (only changes)
+        delta_only = pivot_sorted[pivot_sorted['delta'] != 0].copy()
+        if not delta_only.empty:
+            delta_only.to_excel(writer, sheet_name='Delta', index=False)
+        else:
+            pd.DataFrame({'message': ['No changes detected']}).to_excel(writer, sheet_name='Delta', index=False)
+        
+        # Sheet 3: Only_A (items only in first period)
+        only_a = pivot_sorted[pivot_sorted[p1] > 0].copy()
+        only_a = only_a[only_a[p2] == 0].copy()
+        if not only_a.empty:
+            only_a.to_excel(writer, sheet_name='Only_A', index=False)
+        else:
+            pd.DataFrame({'message': ['No items found only in first period']}).to_excel(writer, sheet_name='Only_A', index=False)
+        
+        # Sheet 4: Only_B (items only in second period)
+        only_b = pivot_sorted[pivot_sorted[p2] > 0].copy()
+        only_b = only_b[only_b[p1] == 0].copy()
+        if not only_b.empty:
+            only_b.to_excel(writer, sheet_name='Only_B', index=False)
+        else:
+            pd.DataFrame({'message': ['No items found only in second period']}).to_excel(writer, sheet_name='Only_B', index=False)
+        
+        # Sheet 5: Aging_Shift (aging bucket analysis)
+        aging_shift = melted_wip.groupby(['aging_bucket', 'period'])['value'].sum().reset_index()
+        aging_pivot = aging_shift.pivot_table(
+            index='aging_bucket',
+            columns='period',
+            values='value',
+            fill_value=0
+        ).reset_index()
+        aging_pivot['aging_shift'] = aging_pivot[p2] - aging_pivot[p1]
+        aging_pivot.to_excel(writer, sheet_name='Aging_Shift', index=False)
+        
+        # Sheet 6: Schema_Mismatch_Report
+        schema_report = []
+        for i, df in enumerate(wip_dfs):
+            schema_report.append({
+                'file': f"file_{i+1}",
+                'period': periods[i] if i < len(periods) else f"Period_{i+1}",
+                'columns': list(df.columns),
+                'rows': len(df),
+                'aging_columns_found': [col for col in df.columns if col in aging_columns],
+                'id_columns_found': [col for col in df.columns if col in id_columns]
+            })
+        
+        schema_df = pd.DataFrame(schema_report)
+        schema_df.to_excel(writer, sheet_name='Schema_Mismatch_Report', index=False)
+        
+        # Sheet 7: Charts_Data (summary data for visualization)
+        charts_data = {
+            'metric': ['Total_Value_P1', 'Total_Value_P2', 'Total_Delta', 'Records_Compared', 'Positive_Changes', 'Negative_Changes'],
+            'value': [
+                pivot[p1].sum(),
+                pivot[p2].sum(),
+                pivot['delta'].sum(),
+                len(pivot),
+                len(pivot[pivot['delta'] > 0]),
+                len(pivot[pivot['delta'] < 0])
+            ]
+        }
+        charts_df = pd.DataFrame(charts_data)
+        charts_df.to_excel(writer, sheet_name='Charts_Data', index=False)
     
     # JSON file for programmatic access
     json_path = join_root(output_folder, f"{file_prefix}.json")
@@ -186,12 +253,100 @@ def compare_inventory(inventory_dfs, output_folder=None):
         if f'{col}_{p1}' in pivot.columns and f'{col}_{p2}' in pivot.columns:
             pivot[f'{col}_delta'] = pivot[f'{col}_{p2}'] - pivot[f'{col}_{p1}']
 
-    # Generate enterprise artifacts  
+    # Generate comprehensive comparison workbook
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     file_prefix = f"inventory_comparison_{p1.lower()}_to_{p2.lower()}_{timestamp}"
     
+    # Create Excel workbook with multiple sheets
     excel_path = join_root(output_folder, f"{file_prefix}.xlsx")
-    pivot.to_excel(excel_path, index=False)
+    
+    with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+        # Sheet 1: Aligned (main comparison)
+        pivot.to_excel(writer, sheet_name='Aligned', index=False)
+        
+        # Sheet 2: Delta (only changes)
+        delta_cols = [col for col in pivot.columns if 'delta' in col]
+        if delta_cols:
+            delta_only = pivot[pivot[delta_cols].abs().sum(axis=1) > 0].copy()
+            if not delta_only.empty:
+                delta_only.to_excel(writer, sheet_name='Delta', index=False)
+            else:
+                pd.DataFrame({'message': ['No changes detected']}).to_excel(writer, sheet_name='Delta', index=False)
+        else:
+            pd.DataFrame({'message': ['No delta columns available']}).to_excel(writer, sheet_name='Delta', index=False)
+        
+        # Sheet 3: Only_A (items only in first period)
+        p1_cols = [col for col in pivot.columns if col.endswith(f'_{p1}')]
+        p2_cols = [col for col in pivot.columns if col.endswith(f'_{p2}')]
+        
+        if p1_cols and p2_cols:
+            only_a = pivot[pivot[p1_cols].sum(axis=1) > 0].copy()
+            only_a = only_a[only_a[p2_cols].sum(axis=1) == 0].copy()
+            if not only_a.empty:
+                only_a.to_excel(writer, sheet_name='Only_A', index=False)
+            else:
+                pd.DataFrame({'message': ['No items found only in first period']}).to_excel(writer, sheet_name='Only_A', index=False)
+        else:
+            pd.DataFrame({'message': ['Period columns not available']}).to_excel(writer, sheet_name='Only_A', index=False)
+        
+        # Sheet 4: Only_B (items only in second period)
+        if p1_cols and p2_cols:
+            only_b = pivot[pivot[p2_cols].sum(axis=1) > 0].copy()
+            only_b = only_b[only_b[p1_cols].sum(axis=1) == 0].copy()
+            if not only_b.empty:
+                only_b.to_excel(writer, sheet_name='Only_B', index=False)
+            else:
+                pd.DataFrame({'message': ['No items found only in second period']}).to_excel(writer, sheet_name='Only_B', index=False)
+        else:
+            pd.DataFrame({'message': ['Period columns not available']}).to_excel(writer, sheet_name='Only_B', index=False)
+        
+        # Sheet 5: Aging_Shift (if aging columns exist)
+        aging_cols = [col for col in df_all.columns if 'aging' in col.lower()]
+        if aging_cols:
+            aging_shift = df_all.groupby(aging_cols + ['period'])[value_columns].sum().reset_index()
+            aging_pivot = aging_shift.pivot_table(
+                index=aging_cols,
+                columns='period',
+                values=value_columns,
+                fill_value=0
+            ).reset_index()
+            # Calculate aging shift
+            for col in value_columns:
+                if f'{col}_{p1}' in aging_pivot.columns and f'{col}_{p2}' in aging_pivot.columns:
+                    aging_pivot[f'{col}_aging_shift'] = aging_pivot[f'{col}_{p2}'] - aging_pivot[f'{col}_{p1}']
+            aging_pivot.to_excel(writer, sheet_name='Aging_Shift', index=False)
+        else:
+            pd.DataFrame({'message': ['No aging columns found for aging shift analysis']}).to_excel(writer, sheet_name='Aging_Shift', index=False)
+        
+        # Sheet 6: Schema_Mismatch_Report
+        schema_report = []
+        for i, df in enumerate(inventory_dfs):
+            schema_report.append({
+                'file': f"file_{i+1}",
+                'period': periods[i] if i < len(periods) else f"Period_{i+1}",
+                'columns': list(df.columns),
+                'rows': len(df),
+                'id_columns_found': [col for col in df.columns if col in id_columns],
+                'value_columns_found': [col for col in df.columns if col in value_columns]
+            })
+        
+        schema_df = pd.DataFrame(schema_report)
+        schema_df.to_excel(writer, sheet_name='Schema_Mismatch_Report', index=False)
+        
+        # Sheet 7: Charts_Data (summary data for visualization)
+        charts_data = {
+            'metric': ['Total_Records_P1', 'Total_Records_P2', 'Records_Compared', 'Items_Only_P1', 'Items_Only_P2', 'Items_Changed'],
+            'value': [
+                len(df_all[df_all['period'] == p1]),
+                len(df_all[df_all['period'] == p2]),
+                len(pivot),
+                len(only_a) if 'only_a' in locals() and not only_a.empty else 0,
+                len(only_b) if 'only_b' in locals() and not only_b.empty else 0,
+                len(delta_only) if 'delta_only' in locals() and not delta_only.empty else 0
+            ]
+        }
+        charts_df = pd.DataFrame(charts_data)
+        charts_df.to_excel(writer, sheet_name='Charts_Data', index=False)
     
     # JSON file
     json_path = join_root(output_folder, f"{file_prefix}.json")
@@ -237,6 +392,7 @@ def compare_financials(financial_dfs, output_folder=None):
     periods = sorted(df_all['period'].unique())
     if len(periods) < 2:
         raise ValueError("Need at least two periods.")
+
     p1, p2 = periods[0], periods[-1]
 
     # Dynamic account column detection
@@ -268,13 +424,88 @@ def compare_financials(financial_dfs, output_folder=None):
     ).reset_index()
 
     pivot['value_delta'] = pivot[p2] - pivot[p1]
+    pivot['delta_pct'] = ((pivot[p2] - pivot[p1]) / (pivot[p1] + 1e-9)) * 100  # Avoid division by zero
 
-    # Generate enterprise artifacts
+    # Generate comprehensive comparison workbook
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     file_prefix = f"financial_comparison_{p1.lower()}_to_{p2.lower()}_{timestamp}"
     
+    # Create Excel workbook with multiple sheets
     excel_path = join_root(output_folder, f"{file_prefix}.xlsx")
-    pivot.to_excel(excel_path, index=False)
+    
+    with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+        # Sheet 1: Aligned (main comparison)
+        pivot.to_excel(writer, sheet_name='Aligned', index=False)
+        
+        # Sheet 2: Delta (only changes)
+        delta_only = pivot[pivot['value_delta'] != 0].copy()
+        if not delta_only.empty:
+            delta_only.to_excel(writer, sheet_name='Delta', index=False)
+        else:
+            pd.DataFrame({'message': ['No changes detected']}).to_excel(writer, sheet_name='Delta', index=False)
+        
+        # Sheet 3: Only_A (accounts only in first period)
+        only_a = pivot[pivot[p1] > 0].copy()
+        only_a = only_a[only_a[p2] == 0].copy()
+        if not only_a.empty:
+            only_a.to_excel(writer, sheet_name='Only_A', index=False)
+        else:
+            pd.DataFrame({'message': ['No accounts found only in first period']}).to_excel(writer, sheet_name='Only_A', index=False)
+        
+        # Sheet 4: Only_B (accounts only in second period)
+        only_b = pivot[pivot[p2] > 0].copy()
+        only_b = only_b[only_b[p1] == 0].copy()
+        if not only_b.empty:
+            only_b.to_excel(writer, sheet_name='Only_B', index=False)
+        else:
+            pd.DataFrame({'message': ['No accounts found only in second period']}).to_excel(writer, sheet_name='Only_B', index=False)
+        
+        # Sheet 5: Aging_Shift (account category analysis if available)
+        # Try to detect account categories from account numbers
+        if account_col in pivot.columns:
+            # Extract account category (first few digits)
+            pivot_copy = pivot.copy()
+            pivot_copy['account_category'] = pivot_copy[account_col].astype(str).str[:3]
+            
+            category_summary = pivot_copy.groupby('account_category').agg({
+                p1: 'sum',
+                p2: 'sum',
+                'value_delta': 'sum'
+            }).reset_index()
+            category_summary['aging_shift'] = category_summary[p2] - category_summary[p1]
+            category_summary.to_excel(writer, sheet_name='Aging_Shift', index=False)
+        else:
+            pd.DataFrame({'message': ['Account category analysis not available']}).to_excel(writer, sheet_name='Aging_Shift', index=False)
+        
+        # Sheet 6: Schema_Mismatch_Report
+        schema_report = []
+        for i, df in enumerate(financial_dfs):
+            schema_report.append({
+                'file': f"file_{i+1}",
+                'period': periods[i] if i < len(periods) else f"Period_{i+1}",
+                'columns': list(df.columns),
+                'rows': len(df),
+                'account_column_found': account_col in df.columns,
+                'value_column_found': value_col in df.columns
+            })
+        
+        schema_df = pd.DataFrame(schema_report)
+        schema_df.to_excel(writer, sheet_name='Schema_Mismatch_Report', index=False)
+        
+        # Sheet 7: Charts_Data (summary data for visualization)
+        charts_data = {
+            'metric': ['Total_Value_P1', 'Total_Value_P2', 'Total_Delta', 'Accounts_Compared', 'Positive_Changes', 'Negative_Changes'],
+            'value': [
+                pivot[p1].sum(),
+                pivot[p2].sum(),
+                pivot['value_delta'].sum(),
+                len(pivot),
+                len(pivot[pivot['value_delta'] > 0]),
+                len(pivot[pivot['value_delta'] < 0])
+            ]
+        }
+        charts_df = pd.DataFrame(charts_data)
+        charts_df.to_excel(writer, sheet_name='Charts_Data', index=False)
     
     # JSON file
     json_path = join_root(output_folder, f"{file_prefix}.json")
