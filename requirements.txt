@@ -24,3 +24,4 @@ scipy>=1.11
 scikit-learn>=1.4
 # ydata-profiling>=4.6  # Commented out - requires Python <3.13
 plotly>=5.17
+snowflake-connector-python
