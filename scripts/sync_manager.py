@@ -34,7 +34,7 @@ except ImportError as e:
 
 # Configuration
 SYNC_INTERVAL = int(os.getenv("SYNC_INTERVAL_SECONDS", "300"))  # 5 minutes default
-MANIFEST_PATH = "/config/dropbox_manifest.json"
+MANIFEST_PATH = "/prompts/dropbox_manifest.json"
 WATCH_FOLDERS = [
     "04_Data/00_Raw_Files",
     "04_Data/01_Cleansed_Files", 

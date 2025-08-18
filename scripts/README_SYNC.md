@@ -160,8 +160,8 @@ The sync manager provides real-time status:
 
 Sync activity is logged to:
 - Console output
-- Dropbox manifest (`/config/dropbox_manifest.json`)
-- Vector store metadata (`/config/vector_store.json`)
+- Dropbox manifest (`/prompts/dropbox_manifest.json`)
+- Vector store metadata (`/prompts/vector_store.json`)
 
 ## Troubleshooting
 
