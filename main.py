@@ -1977,9 +1977,50 @@ try:
             for uploaded_file in uploaded_files:
                 try:
                     df = pd.read_excel(uploaded_file, sheet_name=0)  # Read first sheet
+                    
+                    # Extract period information from filename
+                    filename = uploaded_file.name.lower()
+                    period_info = "Unknown"
+                    
+                    if 'q1' in filename or 'quarter1' in filename:
+                        period_info = "Q1"
+                    elif 'q2' in filename or 'quarter2' in filename:
+                        period_info = "Q2"
+                    elif 'q3' in filename or 'quarter3' in filename:
+                        period_info = "Q3"
+                    elif 'q4' in filename or 'quarter4' in filename:
+                        period_info = "Q4"
+                    elif 'jan' in filename or 'january' in filename:
+                        period_info = "Q1"
+                    elif 'feb' in filename or 'february' in filename:
+                        period_info = "Q1"
+                    elif 'mar' in filename or 'march' in filename:
+                        period_info = "Q1"
+                    elif 'apr' in filename or 'april' in filename:
+                        period_info = "Q2"
+                    elif 'may' in filename:
+                        period_info = "Q2"
+                    elif 'jun' in filename or 'june' in filename:
+                        period_info = "Q2"
+                    elif 'jul' in filename or 'july' in filename:
+                        period_info = "Q3"
+                    elif 'aug' in filename or 'august' in filename:
+                        period_info = "Q3"
+                    elif 'sep' in filename or 'september' in filename:
+                        period_info = "Q3"
+                    elif 'oct' in filename or 'october' in filename:
+                        period_info = "Q4"
+                    elif 'nov' in filename or 'november' in filename:
+                        period_info = "Q4"
+                    elif 'dec' in filename or 'december' in filename:
+                        period_info = "Q4"
+                    else:
+                        # If no clear period detected, use filename as period
+                        period_info = f"File_{len(comparison_files) + 1}"
+                    
                     comparison_files.append({
                         'path': uploaded_file.name,
-                        'period': "Uploaded",  # Default period
+                        'period': period_info,
                         'rows': len(df),
                         'columns': len(df.columns),
                         'dataframe': df
