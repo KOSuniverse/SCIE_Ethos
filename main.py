@@ -1898,3 +1898,286 @@ def cleanup_on_exit():
 # Register cleanup
 import atexit
 atexit.register(cleanup_on_exit)
+
+# =============================================================================
+# Phase 2: Multi-File Comparison Engine
+# =============================================================================
+st.markdown("---")
+st.header("🔄 Multi-File Comparison Engine")
+
+# Import comparison functions
+try:
+    from phase3_comparison.comparison_utils import compare_wip_aging, compare_inventory, compare_financials
+    from path_utils import join_root
+    import pandas as pd
+    
+    # Auto-file pairing detection
+    st.subheader("📁 File Pairing & Comparison")
+    
+    # Get available files for comparison
+    comparison_files = []
+    if 'cleaned_sheets' in locals() and cleaned_sheets:
+        for file_path, df in cleaned_sheets.items():
+            # Extract period information from filename or data
+            period_info = "Unknown"
+            if 'q1' in file_path.lower() or 'quarter1' in file_path.lower():
+                period_info = "Q1"
+            elif 'q2' in file_path.lower() or 'quarter2' in file_path.lower():
+                period_info = "Q2"
+            elif 'q3' in file_path.lower() or 'quarter3' in file_path.lower():
+                period_info = "Q3"
+            elif 'q4' in file_path.lower() or 'quarter4' in file_path.lower():
+                period_info = "Q4"
+            elif 'jan' in file_path.lower() or 'feb' in file_path.lower() or 'mar' in file_path.lower():
+                period_info = "Q1"
+            elif 'apr' in file_path.lower() or 'may' in file_path.lower() or 'jun' in file_path.lower():
+                period_info = "Q2"
+            elif 'jul' in file_path.lower() or 'aug' in file_path.lower() or 'sep' in file_path.lower():
+                period_info = "Q3"
+            elif 'oct' in file_path.lower() or 'nov' in file_path.lower() or 'dec' in file_path.lower():
+                period_info = "Q4"
+            
+            comparison_files.append({
+                'path': file_path,
+                'period': period_info,
+                'rows': len(df),
+                'columns': len(df.columns),
+                'dataframe': df
+            })
+    
+    if len(comparison_files) >= 2:
+        st.success(f"✅ Found {len(comparison_files)} files for comparison")
+        
+        # Display file summary
+        st.markdown("### Available Files:")
+        for i, file_info in enumerate(comparison_files):
+            st.write(f"**{i+1}.** {file_info['period']} - {file_info['path']} ({file_info['rows']} rows, {file_info['columns']} cols)")
+        
+        # Auto-pairing logic
+        st.markdown("### 🔗 Auto-Pairing Strategy")
+        
+        # Group files by period
+        period_groups = {}
+        for file_info in comparison_files:
+            period = file_info['period']
+            if period not in period_groups:
+                period_groups[period] = []
+            period_groups[period].append(file_info)
+        
+        # Find pairs for comparison
+        comparison_pairs = []
+        periods = sorted(period_groups.keys())
+        
+        for i in range(len(periods) - 1):
+            for j in range(i + 1, len(periods)):
+                period1, period2 = periods[i], periods[j]
+                files1 = period_groups[period1]
+                files2 = period_groups[period2]
+                
+                # Create pairs
+                for file1 in files1:
+                    for file2 in files2:
+                        comparison_pairs.append({
+                            'period1': period1,
+                            'period2': period2,
+                            'file1': file1,
+                            'file2': file2,
+                            'description': f"{period1} vs {period2}"
+                        })
+        
+        if comparison_pairs:
+            st.success(f"🔗 Auto-detected {len(comparison_pairs)} comparison pairs")
+            
+            # Display comparison pairs
+            st.markdown("### Comparison Pairs:")
+            for i, pair in enumerate(comparison_pairs):
+                st.write(f"**{i+1}.** {pair['description']}")
+                st.write(f"   - {pair['file1']['path']} → {pair['file2']['path']}")
+            
+            # Comparison execution
+            st.markdown("### 🚀 Execute Comparison")
+            
+            # Let user select comparison type and pair
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                comparison_type = st.selectbox(
+                    "Comparison Type",
+                    ["Auto-Detect", "WIP Aging", "Inventory", "Financials"],
+                    help="Auto-Detect will analyze data structure to determine best comparison method"
+                )
+            
+            with col2:
+                if comparison_pairs:
+                    selected_pair_idx = st.selectbox(
+                        "Select Comparison Pair",
+                        range(len(comparison_pairs)),
+                        format_func=lambda x: comparison_pairs[x]['description']
+                    )
+                    selected_pair = comparison_pairs[selected_pair_idx]
+                else:
+                    selected_pair = None
+            
+            if st.button("🔄 Run Comparison Analysis") and selected_pair:
+                with st.spinner("Running comparison analysis..."):
+                    try:
+                        # Prepare dataframes for comparison
+                        df1 = selected_pair['file1']['dataframe'].copy()
+                        df2 = selected_pair['file2']['dataframe'].copy()
+                        
+                        # Add period and source information
+                        df1['period'] = selected_pair['period1']
+                        df1['source_file'] = selected_pair['file1']['path']
+                        df2['period'] = selected_pair['period2']
+                        df2['source_file'] = selected_pair['file2']['path']
+                        
+                        # Add lineage columns
+                        df1['header_row'] = 'auto-detected'
+                        df1['sheet_type'] = 'auto-detected'
+                        df2['header_row'] = 'auto-detected'
+                        df2['sheet_type'] = 'auto-detected'
+                        
+                        # Determine comparison strategy
+                        if comparison_type == "Auto-Detect":
+                            # Analyze data structure to determine type
+                            columns1 = set(df1.columns)
+                            columns2 = set(df2.columns)
+                            
+                            # Check for WIP/aging indicators
+                            wip_indicators = ['job_no', 'job_name', 'aging', 'wip', 'work_in_progress']
+                            if any(indicator in ' '.join(columns1).lower() for indicator in wip_indicators):
+                                comparison_type = "WIP Aging"
+                            # Check for inventory indicators
+                            elif any(indicator in ' '.join(columns1).lower() for indicator in ['part_number', 'sku', 'inventory', 'stock']):
+                                comparison_type = "Inventory"
+                            # Check for financial indicators
+                            elif any(indicator in ' '.join(columns1).lower() for indicator in ['gl_account', 'account', 'financial', 'cost']):
+                                comparison_type = "Financials"
+                            else:
+                                comparison_type = "Inventory"  # Default fallback
+                        
+                        st.info(f"🔍 Using comparison strategy: **{comparison_type}**")
+                        
+                        # Execute comparison based on type
+                        if comparison_type == "WIP Aging":
+                            result = compare_wip_aging([df1, df2])
+                        elif comparison_type == "Financials":
+                            result = compare_financials([df1, df2])
+                        else:  # Default to inventory
+                            result = compare_inventory([df1, df2])
+                        
+                        if result and not isinstance(result, dict):
+                            st.error(f"Comparison failed: {result}")
+                        elif result:
+                            st.success("✅ Comparison completed successfully!")
+                            
+                            # Display results
+                            st.markdown("### 📊 Comparison Results")
+                            
+                            # Show metadata
+                            if 'metadata' in result:
+                                meta = result['metadata']
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("Type", meta.get('comparison_type', 'Unknown'))
+                                with col2:
+                                    st.metric("Periods", f"{meta.get('periods', ['Unknown'])[0]} → {meta.get('periods', ['Unknown'])[-1]}")
+                                with col3:
+                                    st.metric("Records", meta.get('records_compared', 0))
+                            
+                            # Show file paths
+                            if 'excel_file' in result:
+                                st.markdown("### 📁 Generated Files")
+                                st.write(f"**Excel Workbook:** `{result['excel_file']}`")
+                                if 'json_file' in result:
+                                    st.write(f"**JSON Data:** `{result['json_file']}`")
+                                if 'summary_file' in result:
+                                    st.write(f"**Summary:** `{result['summary_file']}`")
+                            
+                            # Show delta information if available
+                            if 'total_delta' in result:
+                                delta = result['total_delta']
+                                if delta > 0:
+                                    st.success(f"📈 **Total Change:** +{delta:,.2f}")
+                                elif delta < 0:
+                                    st.error(f"📉 **Total Change:** {delta:,.2f}")
+                                else:
+                                    st.info(f"➖ **Total Change:** {delta:,.2f} (no change)")
+                            
+                            # Debug caption showing comparison details
+                            st.caption(f"Intent=compare | Mode=data_processing | Strategy={comparison_type} | Pair={selected_pair['period1']}→{selected_pair['period2']}")
+                            
+                            # Generate comparison charts
+                            st.markdown("### 📊 Comparison Charts Generation")
+                            
+                            try:
+                                from charting import create_delta_waterfall, create_aging_shift_chart, create_movers_scatter
+                                
+                                if st.button("🎨 Generate Comparison Charts"):
+                                    with st.spinner("Generating comparison charts..."):
+                                        charts_generated = []
+                                        
+                                        # 1. Delta Waterfall Chart
+                                        waterfall_path = f"delta_waterfall_{timestamp}.png"
+                                        waterfall_result = create_delta_waterfall(pivot_sorted if 'pivot_sorted' in locals() else pivot, waterfall_path)
+                                        if waterfall_result:
+                                            charts_generated.append(("Delta Waterfall", waterfall_result))
+                                        
+                                        # 2. Aging Shift Chart
+                                        aging_shift_path = f"aging_shift_{timestamp}.png"
+                                        aging_shift_result = create_aging_shift_chart(pivot_sorted if 'pivot_sorted' in locals() else pivot, aging_shift_path)
+                                        if aging_shift_result:
+                                            charts_generated.append(("Aging Shift", aging_shift_result))
+                                        
+                                        # 3. Movers Scatter Plot
+                                        movers_path = f"movers_scatter_{timestamp}.png"
+                                        movers_result = create_movers_scatter(pivot_sorted if 'pivot_sorted' in locals() else pivot, movers_path)
+                                        if movers_result:
+                                            charts_generated.append(("Movers Scatter", movers_result))
+                                        
+                                        # Display results
+                                        if charts_generated:
+                                            st.success(f"✅ Generated {len(charts_generated)} comparison charts!")
+                                            st.markdown("### Generated Comparison Charts:")
+                                            
+                                            for chart_name, chart_path in charts_generated:
+                                                st.write(f"- **{chart_name}**: `{chart_path}`")
+                                            
+                                            # Show chart previews
+                                            st.markdown("### Chart Previews:")
+                                            for chart_name, chart_path in charts_generated:
+                                                st.markdown(f"#### {chart_name}")
+                                                try:
+                                                    with open(chart_path, 'rb') as f:
+                                                        st.image(f.read(), caption=chart_name, use_column_width=True)
+                                                except Exception as e:
+                                                    st.warning(f"Could not display {chart_name}: {e}")
+                                        else:
+                                            st.warning("No comparison charts were generated.")
+                                            
+                            except ImportError as e:
+                                st.error(f"Comparison charting module not available: {e}")
+                                st.info("Comparison charts require the enhanced charting module.")
+                            
+                        else:
+                            st.error("Comparison failed - no result returned")
+                            
+                    except Exception as e:
+                        st.error(f"Comparison analysis failed: {e}")
+                        st.exception(e)
+                        
+        else:
+            st.warning("⚠️ No comparison pairs found. Need at least 2 files with different periods.")
+            
+    elif len(comparison_files) == 1:
+        st.info("📁 Found 1 file. Need at least 2 files for comparison.")
+    else:
+        st.info("📁 No files available for comparison. Please run data ingestion first.")
+        
+except ImportError as e:
+    st.error(f"Comparison module not available: {e}")
+    st.info("Multi-file comparison requires the phase3_comparison module.")
+
+# =============================================================================
+# Required Charts Generation (Phase 1C)
+# =============================================================================
