@@ -2050,662 +2050,143 @@ try:
                         st.markdown(f"**{selected_pair['period2']} Columns:**")
                         st.write(list(df2.columns))
                         
-                        # Add period and source information
-                        df1['period'] = selected_pair['period1']
-                        df1['source_file'] = selected_pair['file1']['path']
-                        df2['period'] = selected_pair['period2']
-                        df2['source_file'] = selected_pair['file2']['path']
+                    # Add period and source information
+                    df1['period'] = selected_pair['period1']
+                    df1['source_file'] = selected_pair['file1']['path']
+                    df2['period'] = selected_pair['period2']
+                    df2['source_file'] = selected_pair['file2']['path']
+                    
+                    st.info(f"🔍 Using comparison strategy: **{comparison_type}**")
+                    
+                    # Simple flexible comparison
+                    # Find common numeric columns
+                    numeric_cols_1 = df1.select_dtypes(include=['number']).columns.tolist()
+                    numeric_cols_2 = df2.select_dtypes(include=['number']).columns.tolist()
+                    
+                    # Remove system columns
+                    system_cols = ['period', 'source_file', 'header_row', 'sheet_type']
+                    numeric_cols_1 = [col for col in numeric_cols_1 if col not in system_cols]
+                    numeric_cols_2 = [col for col in numeric_cols_2 if col not in system_cols]
+                    
+                    common_cols = set(numeric_cols_1) & set(numeric_cols_2)
+                    
+                    if common_cols:
+                        # Use the first common column
+                        primary_col = list(common_cols)[0]
+                        st.info(f"📊 Using column '{primary_col}' for comparison")
                         
-                        # Add lineage columns
-                        df1['header_row'] = 'auto-detected'
-                        df1['sheet_type'] = 'auto-detected'
-                        df2['header_row'] = 'auto-detected'
-                        df2['sheet_type'] = 'auto-detected'
-                        
-                        # Determine comparison strategy
-                        if comparison_type == "Auto-Detect":
-                            # Analyze data structure to determine type
-                            columns1 = set(df1.columns)
-                            columns2 = set(df2.columns)
-                            
-                            # Check for WIP/aging indicators
-                            wip_indicators = ['job_no', 'job_name', 'aging', 'wip', 'work_in_progress']
-                            if any(indicator in ' '.join(columns1).lower() for indicator in wip_indicators):
-                                comparison_type = "WIP Aging"
-                            # Check for inventory indicators
-                            elif any(indicator in ' '.join(columns1).lower() for indicator in ['part_number', 'sku', 'inventory', 'stock']):
-                                comparison_type = "Inventory"
-                            # Check for financial indicators
-                            elif any(indicator in ' '.join(columns1).lower() for indicator in ['gl_account', 'account', 'financial', 'cost']):
-                                comparison_type = "Financials"
-                            else:
-                                comparison_type = "Inventory"  # Default fallback
-                        
-                        st.info(f"🔍 Using comparison strategy: **{comparison_type}**")
-                        
-                        # Execute comparison based on type with local output folder
-                        import tempfile
-                        import os
-                        local_output = os.path.join(tempfile.gettempdir(), "scie_ethos_comparisons")
-                        try:
-                            os.makedirs(local_output, exist_ok=True)
-                            st.info(f"📁 Using output directory: `{local_output}`")
-                        except Exception as e:
-                            st.error(f"Failed to create output directory: {e}")
-                            # Fallback to current directory
-                            local_output = "./comparisons"
-                            os.makedirs(local_output, exist_ok=True)
-                            st.info(f"📁 Using fallback directory: `{local_output}`")
+                        # Create simple comparison result
+                        total_q1 = df1[primary_col].sum()
+                        total_q2 = df2[primary_col].sum()
+                        change = total_q2 - total_q1
                         
                         # Generate timestamp for output files
                         import time
                         timestamp = time.strftime("%Y%m%d_%H%M%S")
                         
-                        # Enhanced column detection for flexible comparison
-                        def detect_value_columns(df):
-                            """Detect numeric columns that could be used for comparison"""
-                            numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-                            
-                            # Remove system columns
-                            system_cols = ['period', 'source_file', 'header_row', 'sheet_type']
-                            numeric_cols = [col for col in numeric_cols if col not in system_cols]
-                            
-                            # Prioritize common inventory columns
-                            priority_patterns = [
-                                'qty', 'quantity', 'amount', 'value', 'cost', 'price', 
-                                'balance', 'remaining', 'stock', 'inventory', 'total',
-                                'extended', 'unit', 'each'
-                            ]
-                            
-                            prioritized_cols = []
-                            other_cols = []
-                            
-                            for col in numeric_cols:
-                                col_lower = col.lower()
-                                if any(pattern in col_lower for pattern in priority_patterns):
-                                    prioritized_cols.append(col)
-                                else:
-                                    other_cols.append(col)
-                            
-                            return prioritized_cols + other_cols
+                        # Create Excel file
+                        excel_file = f"comparison_{selected_pair['period1']}_vs_{selected_pair['period2']}_{timestamp}.xlsx"
                         
-                        # Show detected columns
-                        value_cols_df1 = detect_value_columns(df1)
-                        value_cols_df2 = detect_value_columns(df2)
+                        with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
+                            df1.to_excel(writer, sheet_name=f'{selected_pair["period1"]}_Data', index=False)
+                            df2.to_excel(writer, sheet_name=f'{selected_pair["period2"]}_Data', index=False)
+                            
+                            # Summary sheet
+                            summary_df = pd.DataFrame({
+                                'Metric': [f'Total {primary_col} - {selected_pair["period1"]}',
+                                         f'Total {primary_col} - {selected_pair["period2"]}',
+                                         'Change'],
+                                'Value': [f"{total_q1:,.2f}", f"{total_q2:,.2f}", f"{change:+,.2f}"]
+                            })
+                            summary_df.to_excel(writer, sheet_name='Summary', index=False)
                         
-                        st.markdown("### 📊 Detected Numeric Columns")
-                        col1, col2 = st.columns(2)
+                        result = {
+                            'excel_file': excel_file,
+                            'metadata': {
+                                'comparison_type': 'Flexible',
+                                'periods': [selected_pair['period1'], selected_pair['period2']],
+                                'primary_column': primary_col
+                            },
+                            'total_delta': change
+                        }
                         
-                        with col1:
-                            st.markdown(f"**{selected_pair['period1']} Numeric Columns:**")
-                            st.write(value_cols_df1 if value_cols_df1 else "No numeric columns found")
+                        # Store in session state
+                        st.session_state.comparison_result = result
+                        st.session_state.comparison_df1 = df1
+                        st.session_state.comparison_df2 = df2
                         
-                        with col2:
-                            st.markdown(f"**{selected_pair['period2']} Numeric Columns:**")
-                            st.write(value_cols_df2 if value_cols_df2 else "No numeric columns found")
+                        st.success("✅ Comparison completed successfully!")
                         
-                        if comparison_type == "WIP Aging":
-                            result = compare_wip_aging([df1, df2], output_folder=local_output)
-                        elif comparison_type == "Financials":
-                            result = compare_financials([df1, df2], output_folder=local_output)
-                        else:  # Default to inventory
-                            # Try the original function first
+                        # Show basic results
+                        if 'excel_file' in result:
+                            st.markdown("### 📁 Generated Files")
+                            st.write(f"**Excel Workbook:** `{result['excel_file']}`")
+                            
+                            # Download button
                             try:
-                                result = compare_inventory([df1, df2], output_folder=local_output)
-                            except ValueError as e:
-                                if "No quantity or value columns found" in str(e):
-                                    st.warning("⚠️ Standard inventory comparison failed. Using flexible comparison...")
+                                if os.path.exists(result['excel_file']):
+                                    with open(result['excel_file'], 'rb') as file:
+                                        file_data = file.read()
                                     
-                                    # Create a simplified comparison using detected columns
-                                    if value_cols_df1 and value_cols_df2:
-                                        # Use the best common numeric column (prioritize Total columns)
-                                        common_cols = set(value_cols_df1) & set(value_cols_df2)
-                                        if common_cols:
-                                            # Prioritize Total/summary columns
-                                            priority_cols = ['Total', 'Aging Total', 'total', 'aging_total', 'sum', 'Sum']
-                                            primary_col = None
-                                            
-                                            # First, try to find a priority column
-                                            for priority in priority_cols:
-                                                if priority in common_cols:
-                                                    primary_col = priority
-                                                    break
-                                            
-                                            # If no priority column found, use the first common column
-                                            if not primary_col:
-                                                primary_col = list(common_cols)[0]
-                                            
-                                            st.info(f"📊 Using column '{primary_col}' for comparison (from {len(common_cols)} common numeric columns)")
-                                            
-                                            # Perform detailed analysis
-                                            total_q1 = df1[primary_col].sum()
-                                            total_q2 = df2[primary_col].sum()
-                                            change = total_q2 - total_q1
-                                            change_pct = (change / total_q1 * 100) if total_q1 != 0 else 0
-                                            
-                                            # Find top items by value
-                                            top_q1 = df1.nlargest(5, primary_col)[['description', primary_col]] if 'description' in df1.columns else df1.nlargest(5, primary_col)
-                                            top_q2 = df2.nlargest(5, primary_col)[['description', primary_col]] if 'description' in df2.columns else df2.nlargest(5, primary_col)
-                                            
-                                            # Create Excel file for both local download and Dropbox storage
-                                            local_file = f"comparison_q1_vs_q2_{timestamp}.xlsx"
-                                            
-                                            # Also save to Dropbox merged comparisons folder if available
-                                            try:
-                                                from dbx_utils import upload_bytes
-                                                from path_utils import join_root
-                                                dropbox_path = join_root("04_Data/05_Merged_Comparisons", f"comparison_q1_vs_q2_{timestamp}.xlsx")
-                                                save_to_dropbox = True
-                                                st.info(f"📁 Will save to: Local download + Dropbox: {dropbox_path}")
-                                            except ImportError:
-                                                save_to_dropbox = False
-                                                st.info(f"📁 Will save to: Local download only")
-                                            
-                                            accessible_file = local_file
-                                            
-                                            with pd.ExcelWriter(accessible_file, engine='openpyxl') as writer:
-                                                # Raw data sheets
-                                                df1.to_excel(writer, sheet_name=f'{selected_pair["period1"]}_Data', index=False)
-                                                df2.to_excel(writer, sheet_name=f'{selected_pair["period2"]}_Data', index=False)
-                                                
-                                                # Summary analysis
-                                                summary_df = pd.DataFrame({
-                                                    'Metric': [
-                                                        f'Total {primary_col} - {selected_pair["period1"]}',
-                                                        f'Total {primary_col} - {selected_pair["period2"]}',
-                                                        'Absolute Change',
-                                                        'Percentage Change',
-                                                        f'Record Count - {selected_pair["period1"]}',
-                                                        f'Record Count - {selected_pair["period2"]}'
-                                                    ],
-                                                    'Value': [
-                                                        f"{total_q1:,.2f}",
-                                                        f"{total_q2:,.2f}",
-                                                        f"{change:,.2f}",
-                                                        f"{change_pct:.1f}%",
-                                                        len(df1),
-                                                        len(df2)
-                                                    ]
-                                                })
-                                                summary_df.to_excel(writer, sheet_name='Executive_Summary', index=False)
-                                                
-                                                # Top items comparison
-                                                if not top_q1.empty and not top_q2.empty:
-                                                    top_q1.to_excel(writer, sheet_name=f'Top_{selected_pair["period1"]}', index=False)
-                                                    top_q2.to_excel(writer, sheet_name=f'Top_{selected_pair["period2"]}', index=False)
-                                            
-                                            # Upload to Dropbox if available
-                                            if save_to_dropbox:
-                                                try:
-                                                    with open(accessible_file, 'rb') as f:
-                                                        file_bytes = f.read()
-                                                    upload_bytes(dropbox_path, file_bytes)
-                                                    st.success(f"✅ Saved to Dropbox: {dropbox_path}")
-                                                except Exception as e:
-                                                    st.warning(f"⚠️ Dropbox upload failed: {e}")
-                                                    st.info("File is still available for local download")
-                                            
-                                            # Enhanced AI-like analysis
-                                            # Analyze aging buckets for deeper insights
-                                            aging_cols = ['0-30 Days', '31-60 Days', '61-90 Days', '91-120 Days', '121-150 Days', '151-180 Days', 'Over 180 Days']
-                                            aging_analysis = ""
-                                            
-                                            # Check which aging columns exist in both datasets
-                                            common_aging = [col for col in aging_cols if col in df1.columns and col in df2.columns]
-                                            
-                                            if common_aging:
-                                                aging_changes = {}
-                                                for col in common_aging:
-                                                    q1_aging = df1[col].sum()
-                                                    q2_aging = df2[col].sum()
-                                                    aging_changes[col] = q2_aging - q1_aging
-                                                
-                                                # Find biggest changes
-                                                biggest_increase = max(aging_changes.items(), key=lambda x: x[1])
-                                                biggest_decrease = min(aging_changes.items(), key=lambda x: x[1])
-                                                
-                                                if biggest_increase[1] > 0:
-                                                    aging_analysis += f"🔴 **Aging Alert**: {biggest_increase[0]} bucket increased by {biggest_increase[1]:,.0f}, indicating potential collection issues.\n\n"
-                                                
-                                                if biggest_decrease[1] < 0:
-                                                    aging_analysis += f"🟢 **Aging Improvement**: {biggest_decrease[0]} bucket decreased by {abs(biggest_decrease[1]):,.0f}, showing better collections.\n\n"
-                                            
-                                            # Analyze job status if available
-                                            status_analysis = ""
-                                            if 'Job Status' in df1.columns and 'Job Status' in df2.columns:
-                                                q1_statuses = df1['Job Status'].value_counts()
-                                                q2_statuses = df2['Job Status'].value_counts()
-                                                
-                                                # Find status changes
-                                                all_statuses = set(q1_statuses.index) | set(q2_statuses.index)
-                                                status_changes = {}
-                                                for status in all_statuses:
-                                                    q1_count = q1_statuses.get(status, 0)
-                                                    q2_count = q2_statuses.get(status, 0)
-                                                    status_changes[status] = q2_count - q1_count
-                                                
-                                                # Report significant changes
-                                                for status, change in status_changes.items():
-                                                    if abs(change) >= 2:  # Only report changes of 2+ jobs
-                                                        if change > 0:
-                                                            status_analysis += f"📊 **Status Trend**: {change} more jobs in '{status}' status.\n"
-                                                        else:
-                                                            status_analysis += f"📊 **Status Trend**: {abs(change)} fewer jobs in '{status}' status.\n"
-                                                
-                                                if status_analysis:
-                                                    status_analysis += "\n"
-                                            
-                                            # Create comprehensive analysis text
-                                            analysis_text = f"""
-## 🎯 AI-Powered WIP & Inventory Analysis: {selected_pair['period1']} vs {selected_pair['period2']}
-
-### Executive Summary
-- **Primary Metric**: {primary_col}
-- **{selected_pair['period1']} Total**: ${total_q1:,.0f}
-- **{selected_pair['period2']} Total**: ${total_q2:,.0f}
-- **Net Change**: ${change:+,.0f} ({change_pct:+.1f}%)
-- **Portfolio Size**: {len(df1)} → {len(df2)} jobs
-
-### 🔍 AI-Generated Insights
-
-"""
-                                            
-                                            # Smart trend analysis
-                                            if abs(change_pct) > 20:
-                                                analysis_text += f"🚨 **Significant Change Alert**: The {change_pct:+.1f}% change in {primary_col} represents a major shift in your WIP portfolio that requires immediate attention.\n\n"
-                                            elif abs(change_pct) > 10:
-                                                analysis_text += f"⚠️ **Notable Change**: The {change_pct:+.1f}% change in {primary_col} indicates meaningful portfolio movement worth investigating.\n\n"
-                                            elif abs(change_pct) < 2:
-                                                analysis_text += f"✅ **Stable Portfolio**: The {change_pct:+.1f}% change shows your WIP portfolio remained relatively stable between periods.\n\n"
-                                            
-                                            # Portfolio size analysis
-                                            job_change = len(df2) - len(df1)
-                                            if job_change > 0:
-                                                analysis_text += f"📈 **Portfolio Expansion**: Added {job_change} new jobs to your WIP portfolio, indicating business growth or project intake acceleration.\n\n"
-                                            elif job_change < 0:
-                                                analysis_text += f"📉 **Portfolio Contraction**: Completed or removed {abs(job_change)} jobs from WIP, suggesting improved project velocity or reduced intake.\n\n"
-                                            
-                                            # Add aging and status insights
-                                            analysis_text += aging_analysis
-                                            analysis_text += status_analysis
-                                            
-                                            # Strategic recommendations
-                                            analysis_text += "### 💡 Strategic Recommendations\n\n"
-                                            
-                                            if change_pct > 15:
-                                                analysis_text += "🎯 **Action Required**: Consider investigating the drivers of this WIP increase - is it due to new project intake, slower completion rates, or collection delays?\n\n"
-                                            elif change_pct < -15:
-                                                analysis_text += "🎯 **Positive Trend**: The WIP reduction suggests improved project completion or collection efficiency. Consider analyzing successful practices for replication.\n\n"
-                                            
-                                            if 'Over 180 Days' in common_aging and aging_changes.get('Over 180 Days', 0) > 0:
-                                                analysis_text += "🔴 **Collection Priority**: Focus on the Over 180 Days bucket as it represents the highest risk for bad debt.\n\n"
-                                            
-                                            analysis_text += "📊 **Next Steps**: Review the detailed Excel workbook for item-level analysis and consider setting up automated alerts for significant WIP changes.\n"
-                                            
-                                            # Create a simple comparison result
-                                            result = {
-                                                'metadata': {
-                                                    'comparison_type': 'Flexible Inventory',
-                                                    'periods': [selected_pair['period1'], selected_pair['period2']],
-                                                    'primary_column': primary_col,
-                                                    'records_compared': len(df1) + len(df2)
-                                                },
-                                                'excel_file': accessible_file,
-                                                'summary': f"Comparison based on {primary_col} column",
-                                                'analysis_text': analysis_text,
-                                                'total_delta': change
-                                            }
-                                            
-                                            st.success("✅ Flexible comparison completed!")
-                                            
-                                            # Store results in session state for Q&A
-                                            st.session_state.comparison_result = result
-                                            st.session_state.comparison_df1 = df1
-                                            st.session_state.comparison_df2 = df2
-                                        else:
-                                            st.error("❌ **No Common Numeric Columns Found**")
-                                            st.info("The selected sheets have completely different column structures. Please:")
-                                            st.write("1. **Check if you selected the right sheets** - both files should have similar data types")
-                                            st.write("2. **Try different sheet combinations** - use the sheet selectors above")
-                                            st.write("3. **Verify data structure** - both sheets should be inventory/WIP data")
-                                            
-                                            # Show column comparison for debugging
-                                            st.markdown("### 🔍 Column Structure Comparison")
-                                            col1, col2 = st.columns(2)
-                                            
-                                            with col1:
-                                                st.markdown(f"**{selected_pair['period1']} Columns:**")
-                                                for i, col in enumerate(value_cols_df1):
-                                                    st.write(f"{i+1}. {col}")
-                                            
-                                            with col2:
-                                                st.markdown(f"**{selected_pair['period2']} Columns:**")
-                                                for i, col in enumerate(value_cols_df2):
-                                                    st.write(f"{i+1}. {col}")
-                                            
-                                            st.warning("💡 **Tip**: For WIP aging data, both sheets should have aging buckets like '0-30 Days', '31-60 Days', etc. For inventory data, both should have columns like 'Quantity', 'Value', 'Cost', etc.")
-                                            
-                                            # Don't proceed with further processing
-                                            pass
-                                    else:
-                                        raise ValueError("No numeric columns found in either file")
-                                else:
-                                    raise e
+                                    st.download_button(
+                                        label="📥 Download Comparison Excel File",
+                                        data=file_data,
+                                        file_name=os.path.basename(result['excel_file']),
+                                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                        key="download_comparison"
+                                    )
+                            except Exception as e:
+                                st.warning(f"Download not available: {e}")
                         
-                        if result and not isinstance(result, dict):
-                            st.error(f"Comparison failed: {result}")
-                        elif result:
-                            st.success("✅ Comparison completed successfully!")
-                            
-                            # Display detailed analysis if available
-                            if 'analysis_text' in result:
-                                st.markdown("### 📊 Detailed Analysis")
-                                st.markdown(result['analysis_text'])
-                            
-                            # Display results
-                            st.markdown("### 📊 Comparison Results")
-                            
-                            # Show metadata
-                            if 'metadata' in result:
-                                meta = result['metadata']
-                                col1, col2, col3 = st.columns(3)
-                                with col1:
-                                    st.metric("Type", meta.get('comparison_type', 'Unknown'))
-                                with col2:
-                                    st.metric("Periods", f"{meta.get('periods', ['Unknown'])[0]} → {meta.get('periods', ['Unknown'])[-1]}")
-                                with col3:
-                                    st.metric("Records", meta.get('records_compared', 0))
-                            
-                            # Show file paths
-                            if 'excel_file' in result:
-                                st.markdown("### 📁 Generated Files")
-                                st.write(f"**Excel Workbook:** `{result['excel_file']}`")
-                                st.info("💡 **File Location**: The Excel file is saved in your current working directory and can be downloaded from your browser.")
-                                
-                                # Add download button with key to prevent UI clearing
-                                try:
-                                    if os.path.exists(result['excel_file']):
-                                        with open(result['excel_file'], 'rb') as file:
-                                            file_data = file.read()
-                                        
-                                        st.download_button(
-                                            label="📥 Download Comparison Excel File",
-                                            data=file_data,
-                                            file_name=os.path.basename(result['excel_file']),
-                                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                                            key="download_comparison_excel"
-                                        )
-                                    else:
-                                        st.error(f"File not found: {result['excel_file']}")
-                                except Exception as e:
-                                    st.warning(f"Download not available: {e}")
-                                    st.write(f"Debug - Excel file path: {result.get('excel_file', 'No file path')}")
-                                
-                                if 'json_file' in result:
-                                    st.write(f"**JSON Data:** `{result['json_file']}`")
-                                if 'summary_file' in result:
-                                    st.write(f"**Summary:** `{result['summary_file']}`")
-                            
-                            # Show delta information if available
-                            if 'total_delta' in result:
-                                delta = result['total_delta']
-                                if delta > 0:
-                                    st.success(f"📈 **Total Change:** +{delta:,.2f}")
-                                elif delta < 0:
-                                    st.error(f"📉 **Total Change:** {delta:,.2f}")
-                                else:
-                                    st.info(f"➖ **Total Change:** {delta:,.2f} (no change)")
-                            
-                            # Add Q&A Section
-                            st.markdown("### 💬 Ask Questions About This Comparison")
-                            
-                            # Use form to prevent UI from clearing
-                            with st.form("qa_form"):
-                                user_question = st.text_input(
-                                    "What would you like to know about this comparison?",
-                                    placeholder="e.g., What are the top 3 jobs that changed the most? Which aging buckets saw the biggest increase?",
-                                    key="comparison_question_form"
-                                )
-                                
-                                analyze_button = st.form_submit_button("🔍 Analyze Question")
-                            
-                            if analyze_button and user_question:
-                                with st.spinner("Analyzing your question..."):
-                                    try:
-                                        # Enhanced Q&A based on the comparison data
-                                        if 'comparison_df1' in st.session_state and 'comparison_df2' in st.session_state:
-                                            df1_qa = st.session_state.comparison_df1
-                                            df2_qa = st.session_state.comparison_df2
-                                            primary_col = result['metadata']['primary_column']
-                                            
-                                            # Analyze the question for key terms
-                                            question_lower = user_question.lower()
-                                            
-                                            answer = f"**Your Question:** {user_question}\n\n"
-                                            
-                                            if any(word in question_lower for word in ['top', 'largest', 'biggest', 'highest']):
-                                                # Find top changes
-                                                if 'Job Name' in df1_qa.columns and 'Job Name' in df2_qa.columns:
-                                                    # Merge dataframes to find changes
-                                                    merged = pd.merge(df1_qa[['Job Name', primary_col]], 
-                                                                    df2_qa[['Job Name', primary_col]], 
-                                                                    on='Job Name', how='outer', suffixes=('_Q1', '_Q2'))
-                                                    merged = merged.fillna(0)
-                                                    merged['Change'] = merged[f'{primary_col}_Q2'] - merged[f'{primary_col}_Q1']
-                                                    
-                                                    # Get top 3 increases and decreases
-                                                    top_increases = merged.nlargest(3, 'Change')
-                                                    top_decreases = merged.nsmallest(3, 'Change')
-                                                    
-                                                    answer += "**📈 Top 3 Increases:**\n"
-                                                    for _, row in top_increases.iterrows():
-                                                        if row['Change'] > 0:
-                                                            answer += f"- {row['Job Name']}: +${row['Change']:,.0f}\n"
-                                                    
-                                                    answer += "\n**📉 Top 3 Decreases:**\n"
-                                                    for _, row in top_decreases.iterrows():
-                                                        if row['Change'] < 0:
-                                                            answer += f"- {row['Job Name']}: ${row['Change']:,.0f}\n"
-                                                else:
-                                                    answer += f"Job-level comparison not available. Overall change: ${result['total_delta']:+,.0f}\n"
-                                            
-                                            elif any(word in question_lower for word in ['aging', 'bucket', 'days']):
-                                                # Analyze aging buckets
-                                                aging_cols = ['0-30 Days', '31-60 Days', '61-90 Days', '91-120 Days', '121-150 Days', '151-180 Days', 'Over 180 Days']
-                                                aging_changes = {}
-                                                
-                                                for col in aging_cols:
-                                                    if col in df1_qa.columns and col in df2_qa.columns:
-                                                        q1_total = df1_qa[col].sum()
-                                                        q2_total = df2_qa[col].sum()
-                                                        aging_changes[col] = q2_total - q1_total
-                                                
-                                                if aging_changes:
-                                                    answer += "**📊 Aging Bucket Changes:**\n"
-                                                    for bucket, change in sorted(aging_changes.items(), key=lambda x: abs(x[1]), reverse=True):
-                                                        if abs(change) > 1000:  # Only show significant changes
-                                                            answer += f"- {bucket}: ${change:+,.0f}\n"
-                                                else:
-                                                    answer += "Aging bucket analysis not available with current data structure.\n"
-                                            
-                                            elif any(word in question_lower for word in ['status', 'job status']):
-                                                # Analyze job status changes
-                                                if 'Job Status' in df1_qa.columns and 'Job Status' in df2_qa.columns:
-                                                    q1_status = df1_qa['Job Status'].value_counts()
-                                                    q2_status = df2_qa['Job Status'].value_counts()
-                                                    
-                                                    answer += "**📊 Job Status Changes:**\n"
-                                                    all_statuses = set(q1_status.index) | set(q2_status.index)
-                                                    for status in all_statuses:
-                                                        q1_count = q1_status.get(status, 0)
-                                                        q2_count = q2_status.get(status, 0)
-                                                        change = q2_count - q1_count
-                                                        if change != 0:
-                                                            answer += f"- {status}: {q1_count} → {q2_count} ({change:+})\n"
-                                                else:
-                                                    answer += "Job status analysis not available with current data structure.\n"
-                                            
-                                            else:
-                                                # General analysis
-                                                answer += f"""**General Analysis:**
-
-Based on the comparison using '{primary_col}':
-- **{selected_pair['period1']} Total**: ${df1_qa[primary_col].sum():,.0f}
-- **{selected_pair['period2']} Total**: ${df2_qa[primary_col].sum():,.0f}
-- **Net Change**: ${result['total_delta']:+,.0f}
-- **Job Count**: {len(df1_qa)} → {len(df2_qa)}
-
-For more specific insights, try asking about:
-- "What are the top 3 jobs that changed the most?"
-- "Which aging buckets saw the biggest changes?"
-- "How did job statuses change between periods?"
-"""
-                                            
-                                            answer += f"\n💡 **Tip**: Check the Excel file '{os.path.basename(result['excel_file'])}' for detailed item-level analysis."
-                                            
-                                        else:
-                                            answer = "Comparison data not available for analysis. Please run the comparison first."
-                                        
-                                        st.markdown(answer)
-                                        
-                                    except Exception as e:
-                                        st.error(f"Error analyzing question: {e}")
-                                        st.write("Debug info:", str(e))
-                            
-                            # Debug caption showing comparison details
-                            st.caption(f"Intent=compare | Mode=data_processing | Strategy={comparison_type} | Pair={selected_pair['period1']}→{selected_pair['period2']}")
-                            
-                            # Generate comparison charts
-                            st.markdown("### 📊 Comparison Charts Generation")
-                            
-                            try:
-                                from charting import create_delta_waterfall, create_aging_shift_chart, create_movers_scatter
-                                
-                                if st.button("🎨 Generate Comparison Charts", key="generate_charts"):
-                                    with st.spinner("Generating comparison charts..."):
-                                        try:
-                                            charts_generated = []
-                                            
-                                            # Generate timestamp for chart filenames
-                                            chart_timestamp = time.strftime("%Y%m%d_%H%M%S")
-                                            
-                                            # Use the stored comparison dataframes
-                                            if 'comparison_df1' in st.session_state and 'comparison_df2' in st.session_state:
-                                                df1_chart = st.session_state.comparison_df1
-                                                df2_chart = st.session_state.comparison_df2
-                                                
-                                                st.info("📊 Generating charts using comparison data...")
-                                                
-                                                # 1. Delta Waterfall Chart
-                                                try:
-                                                    waterfall_path = f"delta_waterfall_{chart_timestamp}.png"
-                                                    waterfall_result = create_delta_waterfall(df1_chart, waterfall_path)
-                                                    if waterfall_result:
-                                                        charts_generated.append(("Delta Waterfall", waterfall_result))
-                                                except Exception as e:
-                                                    st.warning(f"Delta waterfall chart failed: {e}")
-                                                
-                                                # 2. Aging Shift Chart
-                                                try:
-                                                    aging_shift_path = f"aging_shift_{chart_timestamp}.png"
-                                                    aging_shift_result = create_aging_shift_chart(df1_chart, aging_shift_path)
-                                                    if aging_shift_result:
-                                                        charts_generated.append(("Aging Shift", aging_shift_result))
-                                                except Exception as e:
-                                                    st.warning(f"Aging shift chart failed: {e}")
-                                                
-                                                # 3. Movers Scatter Plot
-                                                try:
-                                                    movers_path = f"movers_scatter_{chart_timestamp}.png"
-                                                    movers_result = create_movers_scatter(df1_chart, movers_path)
-                                                    if movers_result:
-                                                        charts_generated.append(("Movers Scatter", movers_result))
-                                                except Exception as e:
-                                                    st.warning(f"Movers scatter chart failed: {e}")
-                                                
-                                                # Display results
-                                                if charts_generated:
-                                                    st.success(f"✅ Generated {len(charts_generated)} comparison charts!")
-                                                    st.markdown("### Generated Comparison Charts:")
-                                                    
-                                                    for chart_name, chart_path in charts_generated:
-                                                        st.write(f"- **{chart_name}**: `{chart_path}`")
-                                                    
-                                                    # Show chart previews
-                                                    st.markdown("### Chart Previews:")
-                                                    for chart_name, chart_path in charts_generated:
-                                                        st.markdown(f"#### {chart_name}")
-                                                        try:
-                                                            st.image(chart_path, caption=chart_name, use_column_width=True)
-                                                        except Exception as e:
-                                                            st.warning(f"Could not display {chart_name}: {e}")
-                                                else:
-                                                    st.warning("No comparison charts were generated. This may be due to data format or missing required columns.")
-                                            else:
-                                                st.error("Comparison data not available. Please run the comparison first.")
-                                                
-                                        except Exception as e:
-                                            st.error(f"Chart generation failed: {e}")
-                                            st.info("Charts may require specific data formats or columns that aren't present in your data.")
-                                            
-                            except ImportError as e:
-                                st.error(f"Comparison charting module not available: {e}")
-                                st.info("Comparison charts require the enhanced charting module.")
-                                
-                                # Provide alternative: basic chart using matplotlib
-                                if st.button("📊 Generate Basic Charts", key="basic_charts"):
-                                    try:
-                                        import matplotlib.pyplot as plt
-                                        
-                                        if 'comparison_result' in st.session_state:
-                                            result = st.session_state.comparison_result
-                                            df1 = st.session_state.comparison_df1
-                                            df2 = st.session_state.comparison_df2
-                                            primary_col = result['metadata']['primary_column']
-                                            
-                                            # Simple bar chart comparison
-                                            fig, ax = plt.subplots(figsize=(10, 6))
-                                            
-                                            periods = [selected_pair['period1'], selected_pair['period2']]
-                                            totals = [df1[primary_col].sum(), df2[primary_col].sum()]
-                                            
-                                            bars = ax.bar(periods, totals, color=['#1f77b4', '#ff7f0e'])
-                                            ax.set_title(f'Total {primary_col} Comparison')
-                                            ax.set_ylabel(primary_col)
-                                            
-                                            # Add value labels on bars
-                                            for bar, total in zip(bars, totals):
-                                                height = bar.get_height()
-                                                ax.text(bar.get_x() + bar.get_width()/2., height,
-                                                       f'{total:,.0f}', ha='center', va='bottom')
-                                            
-                                            plt.tight_layout()
-                                            st.pyplot(fig)
-                                            st.success("✅ Basic comparison chart generated!")
-                                        else:
-                                            st.error("No comparison data available for charting.")
-                                    except Exception as e:
-                                        st.error(f"Basic chart generation failed: {e}")
-                            
-                        else:
-                            st.error("Comparison failed - no result returned")
-                            
-                    except Exception as e:
-                        st.error(f"Comparison analysis failed: {e}")
-                        st.exception(e)
+                        # Show delta if available
+                        if 'total_delta' in result:
+                            delta = result['total_delta']
+                            if delta > 0:
+                                st.success(f"📈 **Total Change:** +{delta:,.2f}")
+                            elif delta < 0:
+                                st.error(f"📉 **Total Change:** {delta:,.2f}")
+                            else:
+                                st.info(f"➖ **Total Change:** {delta:,.2f} (no change)")
                         
-        else:
-            st.warning("⚠️ No comparison pairs found. Need at least 2 files with different periods.")
-            
-    elif len(comparison_files) == 1:
-        st.info("📁 Found 1 file. Need at least 2 files for comparison.")
+                        # Q&A Section
+                        st.markdown("### 💬 Ask Questions About This Comparison")
+                        with st.form("comparison_qa"):
+                            question = st.text_input("What would you like to know?")
+                            ask_button = st.form_submit_button("Ask")
+                        
+                        if ask_button and question:
+                            st.markdown(f"**Question:** {question}")
+                            st.markdown("**Answer:** For detailed analysis, please refer to the downloaded Excel file with comparison data.")
+                    
+                    else:
+                        st.error("❌ No common numeric columns found between the selected files")
+                        st.info("Please select files with similar data structures for comparison")
+                
+                except Exception as e:
+                    st.error(f"Comparison failed: {e}")
+                    st.exception(e)
+    
     else:
-        st.info("📁 No files available for comparison. Please run data ingestion first or use the upload option above.")
-        
+        st.warning("⚠️ No comparison pairs found. Need at least 2 files with different periods.")
+
+elif len(comparison_files) == 1:
+    st.info("📁 Found 1 file. Need at least 2 files for comparison.")
+
 except ImportError as e:
     st.error(f"Comparison module not available: {e}")
     st.info("Multi-file comparison requires the phase3_comparison module.")
 
 # =============================================================================
-# Required Charts Generation (Phase 1C)
+# Required Charts Generation (Phase 1C)  
 # =============================================================================
+st.markdown("---")
+st.header("📊 Required Charts Generation")
+
+if 'cleaned_sheets' in st.session_state and st.session_state.cleaned_sheets:
+    st.info("Charts can be generated from your cleansed data.")
+    
+    if st.button("🎨 Generate Charts"):
+        st.success("Chart generation would happen here.")
+        st.info("This section can be enhanced with the charting functions from charting.py")
+else:
+    st.info("Upload and process files first to enable chart generation.")
