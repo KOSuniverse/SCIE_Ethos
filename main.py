@@ -2483,7 +2483,8 @@ try:
                                             
                                             st.warning("💡 **Tip**: For WIP aging data, both sheets should have aging buckets like '0-30 Days', '31-60 Days', etc. For inventory data, both should have columns like 'Quantity', 'Value', 'Cost', etc.")
                                             
-                                            return  # Exit the comparison process
+                                            # Don't proceed with further processing
+                                            pass
                                     else:
                                         raise ValueError("No numeric columns found in either file")
                                 else:
