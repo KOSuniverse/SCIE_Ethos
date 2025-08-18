@@ -2229,11 +2229,99 @@ try:
                                     
                                     # Create a simplified comparison using detected columns
                                     if value_cols_df1 and value_cols_df2:
-                                        # Use the first common numeric column
+                                        # Use the best common numeric column (prioritize Total columns)
                                         common_cols = set(value_cols_df1) & set(value_cols_df2)
                                         if common_cols:
-                                            primary_col = list(common_cols)[0]
-                                            st.info(f"📊 Using column '{primary_col}' for comparison")
+                                            # Prioritize Total/summary columns
+                                            priority_cols = ['Total', 'Aging Total', 'total', 'aging_total', 'sum', 'Sum']
+                                            primary_col = None
+                                            
+                                            # First, try to find a priority column
+                                            for priority in priority_cols:
+                                                if priority in common_cols:
+                                                    primary_col = priority
+                                                    break
+                                            
+                                            # If no priority column found, use the first common column
+                                            if not primary_col:
+                                                primary_col = list(common_cols)[0]
+                                            
+                                            st.info(f"📊 Using column '{primary_col}' for comparison (from {len(common_cols)} common numeric columns)")
+                                            
+                                            # Perform detailed analysis
+                                            total_q1 = df1[primary_col].sum()
+                                            total_q2 = df2[primary_col].sum()
+                                            change = total_q2 - total_q1
+                                            change_pct = (change / total_q1 * 100) if total_q1 != 0 else 0
+                                            
+                                            # Find top items by value
+                                            top_q1 = df1.nlargest(5, primary_col)[['description', primary_col]] if 'description' in df1.columns else df1.nlargest(5, primary_col)
+                                            top_q2 = df2.nlargest(5, primary_col)[['description', primary_col]] if 'description' in df2.columns else df2.nlargest(5, primary_col)
+                                            
+                                            # Create accessible Excel file in current directory (not temp)
+                                            accessible_file = f"comparison_q1_vs_q2_{timestamp}.xlsx"
+                                            st.info(f"📁 Creating Excel file: {accessible_file}")
+                                            
+                                            # Create a comprehensive Excel output (in current directory)
+                                            full_path = os.path.abspath(accessible_file)
+                                            st.info(f"📁 Full file path: {full_path}")
+                                            
+                                            with pd.ExcelWriter(accessible_file, engine='openpyxl') as writer:
+                                                # Raw data sheets
+                                                df1.to_excel(writer, sheet_name=f'{selected_pair["period1"]}_Data', index=False)
+                                                df2.to_excel(writer, sheet_name=f'{selected_pair["period2"]}_Data', index=False)
+                                                
+                                                # Summary analysis
+                                                summary_df = pd.DataFrame({
+                                                    'Metric': [
+                                                        f'Total {primary_col} - {selected_pair["period1"]}',
+                                                        f'Total {primary_col} - {selected_pair["period2"]}',
+                                                        'Absolute Change',
+                                                        'Percentage Change',
+                                                        f'Record Count - {selected_pair["period1"]}',
+                                                        f'Record Count - {selected_pair["period2"]}'
+                                                    ],
+                                                    'Value': [
+                                                        f"{total_q1:,.2f}",
+                                                        f"{total_q2:,.2f}",
+                                                        f"{change:,.2f}",
+                                                        f"{change_pct:.1f}%",
+                                                        len(df1),
+                                                        len(df2)
+                                                    ]
+                                                })
+                                                summary_df.to_excel(writer, sheet_name='Executive_Summary', index=False)
+                                                
+                                                # Top items comparison
+                                                if not top_q1.empty and not top_q2.empty:
+                                                    top_q1.to_excel(writer, sheet_name=f'Top_{selected_pair["period1"]}', index=False)
+                                                    top_q2.to_excel(writer, sheet_name=f'Top_{selected_pair["period2"]}', index=False)
+                                            
+                                            # Create detailed analysis text
+                                            analysis_text = f"""
+## 📊 Inventory Comparison Analysis: {selected_pair['period1']} vs {selected_pair['period2']}
+
+### Executive Summary
+- **Primary Metric**: {primary_col}
+- **{selected_pair['period1']} Total**: {total_q1:,.2f}
+- **{selected_pair['period2']} Total**: {total_q2:,.2f}
+- **Change**: {change:+,.2f} ({change_pct:+.1f}%)
+- **Records**: {len(df1)} → {len(df2)}
+
+### Key Insights
+"""
+                                            
+                                            if change > 0:
+                                                analysis_text += f"📈 **Increase**: The {primary_col} increased by {change:,.2f} ({change_pct:.1f}%) from {selected_pair['period1']} to {selected_pair['period2']}.\n\n"
+                                            elif change < 0:
+                                                analysis_text += f"📉 **Decrease**: The {primary_col} decreased by {abs(change):,.2f} ({abs(change_pct):.1f}%) from {selected_pair['period1']} to {selected_pair['period2']}.\n\n"
+                                            else:
+                                                analysis_text += f"➖ **No Change**: The {primary_col} remained stable between periods.\n\n"
+                                            
+                                            if len(df2) > len(df1):
+                                                analysis_text += f"📋 **Inventory Growth**: {len(df2) - len(df1)} new items added to inventory.\n\n"
+                                            elif len(df2) < len(df1):
+                                                analysis_text += f"📋 **Inventory Reduction**: {len(df1) - len(df2)} items removed from inventory.\n\n"
                                             
                                             # Create a simple comparison result
                                             result = {
@@ -2243,24 +2331,22 @@ try:
                                                     'primary_column': primary_col,
                                                     'records_compared': len(df1) + len(df2)
                                                 },
-                                                'excel_file': f"{local_output}/flexible_comparison_{timestamp}.xlsx",
-                                                'summary': f"Comparison based on {primary_col} column"
+                                                'excel_file': accessible_file,
+                                                'summary': f"Comparison based on {primary_col} column",
+                                                'analysis_text': analysis_text,
+                                                'total_delta': change
                                             }
                                             
-                                            # Create a simple Excel output
-                                            with pd.ExcelWriter(result['excel_file'], engine='openpyxl') as writer:
-                                                df1.to_excel(writer, sheet_name=selected_pair['period1'], index=False)
-                                                df2.to_excel(writer, sheet_name=selected_pair['period2'], index=False)
-                                                
-                                                # Create a simple comparison sheet
-                                                summary_df = pd.DataFrame({
-                                                    'Period': [selected_pair['period1'], selected_pair['period2']],
-                                                    f'Total_{primary_col}': [df1[primary_col].sum(), df2[primary_col].sum()],
-                                                    'Record_Count': [len(df1), len(df2)]
-                                                })
-                                                summary_df.to_excel(writer, sheet_name='Summary', index=False)
-                                            
                                             st.success("✅ Flexible comparison completed!")
+                                            
+                                            # Debug: Show what we created
+                                            st.write("**Debug - Created result keys:**", list(result.keys()))
+                                            st.write("**Debug - Analysis text length:**", len(result.get('analysis_text', '')))
+                                            
+                                            # Store results in session state for Q&A
+                                            st.session_state.comparison_result = result
+                                            st.session_state.comparison_df1 = df1
+                                            st.session_state.comparison_df2 = df2
                                         else:
                                             raise ValueError("No common numeric columns found between files")
                                     else:
@@ -2272,6 +2358,16 @@ try:
                             st.error(f"Comparison failed: {result}")
                         elif result:
                             st.success("✅ Comparison completed successfully!")
+                            
+                            # Debug: Show what's in result
+                            st.write("**Debug - Result keys:**", list(result.keys()) if result else "No result")
+                            
+                            # Display detailed analysis if available
+                            if 'analysis_text' in result:
+                                st.markdown("### 📊 Detailed Analysis")
+                                st.markdown(result['analysis_text'])
+                            else:
+                                st.warning("No detailed analysis available in result")
                             
                             # Display results
                             st.markdown("### 📊 Comparison Results")
@@ -2291,6 +2387,20 @@ try:
                             if 'excel_file' in result:
                                 st.markdown("### 📁 Generated Files")
                                 st.write(f"**Excel Workbook:** `{result['excel_file']}`")
+                                st.info("💡 **File Location**: The Excel file is saved in your current working directory and can be downloaded from your browser.")
+                                
+                                # Add download button
+                                try:
+                                    with open(result['excel_file'], 'rb') as file:
+                                        st.download_button(
+                                            label="📥 Download Comparison Excel File",
+                                            data=file.read(),
+                                            file_name=result['excel_file'],
+                                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                                        )
+                                except Exception as e:
+                                    st.warning(f"Download not available: {e}")
+                                
                                 if 'json_file' in result:
                                     st.write(f"**JSON Data:** `{result['json_file']}`")
                                 if 'summary_file' in result:
@@ -2306,6 +2416,41 @@ try:
                                 else:
                                     st.info(f"➖ **Total Change:** {delta:,.2f} (no change)")
                             
+                            # Add Q&A Section
+                            st.markdown("### 💬 Ask Questions About This Comparison")
+                            
+                            user_question = st.text_input(
+                                "What would you like to know about this comparison?",
+                                placeholder="e.g., What are the top 3 items that changed the most? Which categories saw the biggest increase?",
+                                key="comparison_question"
+                            )
+                            
+                            if st.button("🔍 Analyze Question") and user_question:
+                                with st.spinner("Analyzing your question..."):
+                                    try:
+                                        # Simple Q&A based on the comparison data
+                                        answer = f"""
+**Your Question:** {user_question}
+
+**Analysis based on {selected_pair['period1']} vs {selected_pair['period2']} comparison:**
+
+Based on the comparison data using the '{result['metadata']['primary_column']}' column:
+- **{selected_pair['period1']} Total**: {st.session_state.comparison_df1[result['metadata']['primary_column']].sum():,.2f}
+- **{selected_pair['period2']} Total**: {st.session_state.comparison_df2[result['metadata']['primary_column']].sum():,.2f}
+- **Change**: {result['total_delta']:+,.2f}
+
+For more detailed analysis, please refer to the Excel file which contains:
+- Raw data for both periods
+- Executive summary with key metrics  
+- Top items for each period
+- Detailed breakdowns by category (if available)
+
+*Note: For more sophisticated question answering, the full knowledge base system would need to be integrated.*
+"""
+                                        st.markdown(answer)
+                                    except Exception as e:
+                                        st.error(f"Error analyzing question: {e}")
+                            
                             # Debug caption showing comparison details
                             st.caption(f"Intent=compare | Mode=data_processing | Strategy={comparison_type} | Pair={selected_pair['period1']}→{selected_pair['period2']}")
                             
@@ -2315,58 +2460,111 @@ try:
                             try:
                                 from charting import create_delta_waterfall, create_aging_shift_chart, create_movers_scatter
                                 
-                                if st.button("🎨 Generate Comparison Charts"):
+                                if st.button("🎨 Generate Comparison Charts", key="generate_charts"):
                                     with st.spinner("Generating comparison charts..."):
-                                        charts_generated = []
-                                        
-                                        # Generate timestamp for chart filenames
-                                        import time
-                                        timestamp = time.strftime("%Y%m%d_%H%M%S")
-                                        
-                                        # 1. Delta Waterfall Chart
-                                        waterfall_path = f"delta_waterfall_{timestamp}.png"
-                                        # Use the comparison result dataframes for charting
-                                        df1 = selected_pair['file1']['dataframe']
-                                        df2 = selected_pair['file2']['dataframe']
-                                        waterfall_result = create_delta_waterfall(df1, waterfall_path)
-                                        if waterfall_result:
-                                            charts_generated.append(("Delta Waterfall", waterfall_result))
-                                        
-                                        # 2. Aging Shift Chart
-                                        aging_shift_path = f"aging_shift_{timestamp}.png"
-                                        aging_shift_result = create_aging_shift_chart(df1, aging_shift_path)
-                                        if aging_shift_result:
-                                            charts_generated.append(("Aging Shift", aging_shift_result))
-                                        
-                                        # 3. Movers Scatter Plot
-                                        movers_path = f"movers_scatter_{timestamp}.png"
-                                        movers_result = create_movers_scatter(df1, movers_path)
-                                        if movers_result:
-                                            charts_generated.append(("Movers Scatter", movers_result))
-                                        
-                                        # Display results
-                                        if charts_generated:
-                                            st.success(f"✅ Generated {len(charts_generated)} comparison charts!")
-                                            st.markdown("### Generated Comparison Charts:")
+                                        try:
+                                            charts_generated = []
                                             
-                                            for chart_name, chart_path in charts_generated:
-                                                st.write(f"- **{chart_name}**: `{chart_path}`")
+                                            # Generate timestamp for chart filenames
+                                            chart_timestamp = time.strftime("%Y%m%d_%H%M%S")
                                             
-                                            # Show chart previews
-                                            st.markdown("### Chart Previews:")
-                                            for chart_name, chart_path in charts_generated:
-                                                st.markdown(f"#### {chart_name}")
+                                            # Use the stored comparison dataframes
+                                            if 'comparison_df1' in st.session_state and 'comparison_df2' in st.session_state:
+                                                df1_chart = st.session_state.comparison_df1
+                                                df2_chart = st.session_state.comparison_df2
+                                                
+                                                st.info("📊 Generating charts using comparison data...")
+                                                
+                                                # 1. Delta Waterfall Chart
                                                 try:
-                                                    with open(chart_path, 'rb') as f:
-                                                        st.image(f.read(), caption=chart_name, use_column_width=True)
+                                                    waterfall_path = f"delta_waterfall_{chart_timestamp}.png"
+                                                    waterfall_result = create_delta_waterfall(df1_chart, waterfall_path)
+                                                    if waterfall_result:
+                                                        charts_generated.append(("Delta Waterfall", waterfall_result))
                                                 except Exception as e:
-                                                    st.warning(f"Could not display {chart_name}: {e}")
-                                        else:
-                                            st.warning("No comparison charts were generated.")
+                                                    st.warning(f"Delta waterfall chart failed: {e}")
+                                                
+                                                # 2. Aging Shift Chart
+                                                try:
+                                                    aging_shift_path = f"aging_shift_{chart_timestamp}.png"
+                                                    aging_shift_result = create_aging_shift_chart(df1_chart, aging_shift_path)
+                                                    if aging_shift_result:
+                                                        charts_generated.append(("Aging Shift", aging_shift_result))
+                                                except Exception as e:
+                                                    st.warning(f"Aging shift chart failed: {e}")
+                                                
+                                                # 3. Movers Scatter Plot
+                                                try:
+                                                    movers_path = f"movers_scatter_{chart_timestamp}.png"
+                                                    movers_result = create_movers_scatter(df1_chart, movers_path)
+                                                    if movers_result:
+                                                        charts_generated.append(("Movers Scatter", movers_result))
+                                                except Exception as e:
+                                                    st.warning(f"Movers scatter chart failed: {e}")
+                                                
+                                                # Display results
+                                                if charts_generated:
+                                                    st.success(f"✅ Generated {len(charts_generated)} comparison charts!")
+                                                    st.markdown("### Generated Comparison Charts:")
+                                                    
+                                                    for chart_name, chart_path in charts_generated:
+                                                        st.write(f"- **{chart_name}**: `{chart_path}`")
+                                                    
+                                                    # Show chart previews
+                                                    st.markdown("### Chart Previews:")
+                                                    for chart_name, chart_path in charts_generated:
+                                                        st.markdown(f"#### {chart_name}")
+                                                        try:
+                                                            st.image(chart_path, caption=chart_name, use_column_width=True)
+                                                        except Exception as e:
+                                                            st.warning(f"Could not display {chart_name}: {e}")
+                                                else:
+                                                    st.warning("No comparison charts were generated. This may be due to data format or missing required columns.")
+                                            else:
+                                                st.error("Comparison data not available. Please run the comparison first.")
+                                                
+                                        except Exception as e:
+                                            st.error(f"Chart generation failed: {e}")
+                                            st.info("Charts may require specific data formats or columns that aren't present in your data.")
                                             
                             except ImportError as e:
                                 st.error(f"Comparison charting module not available: {e}")
                                 st.info("Comparison charts require the enhanced charting module.")
+                                
+                                # Provide alternative: basic chart using matplotlib
+                                if st.button("📊 Generate Basic Charts", key="basic_charts"):
+                                    try:
+                                        import matplotlib.pyplot as plt
+                                        
+                                        if 'comparison_result' in st.session_state:
+                                            result = st.session_state.comparison_result
+                                            df1 = st.session_state.comparison_df1
+                                            df2 = st.session_state.comparison_df2
+                                            primary_col = result['metadata']['primary_column']
+                                            
+                                            # Simple bar chart comparison
+                                            fig, ax = plt.subplots(figsize=(10, 6))
+                                            
+                                            periods = [selected_pair['period1'], selected_pair['period2']]
+                                            totals = [df1[primary_col].sum(), df2[primary_col].sum()]
+                                            
+                                            bars = ax.bar(periods, totals, color=['#1f77b4', '#ff7f0e'])
+                                            ax.set_title(f'Total {primary_col} Comparison')
+                                            ax.set_ylabel(primary_col)
+                                            
+                                            # Add value labels on bars
+                                            for bar, total in zip(bars, totals):
+                                                height = bar.get_height()
+                                                ax.text(bar.get_x() + bar.get_width()/2., height,
+                                                       f'{total:,.0f}', ha='center', va='bottom')
+                                            
+                                            plt.tight_layout()
+                                            st.pyplot(fig)
+                                            st.success("✅ Basic comparison chart generated!")
+                                        else:
+                                            st.error("No comparison data available for charting.")
+                                    except Exception as e:
+                                        st.error(f"Basic chart generation failed: {e}")
                             
                         else:
                             st.error("Comparison failed - no result returned")
