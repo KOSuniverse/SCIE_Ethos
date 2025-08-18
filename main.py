@@ -430,6 +430,10 @@ with st.expander("🔧 Ingest pipeline (debug)"):
             # 4) Ingest with 5-step progress bar (calls pipeline reporter internally)
             cleaned_sheets, per_sheet_meta = ingest_streamlit_bytes_5(file_bytes, filename)
 
+            # Save to session state for comparison engine
+            st.session_state.cleaned_sheets = cleaned_sheets
+            st.session_state.per_sheet_meta = per_sheet_meta
+
             # 5) Show per-sheet metadata summary (new pipeline returns a list)
             st.subheader("Per-sheet results")
             if per_sheet_meta:
@@ -616,6 +620,10 @@ if raw_files:
                         "processing_timestamp": time.time(),
                         "pipeline_version": "phase1_ingest"
                     }
+                
+                # Save to session state for comparison engine
+                st.session_state.cleaned_sheets = cleaned_sheets
+                st.session_state.per_sheet_meta = per_sheet_meta
                 
                 # Phase 6: Monitor pipeline completion
                 if PHASE6_AVAILABLE and monitoring:
@@ -1914,9 +1922,17 @@ try:
     # Auto-file pairing detection
     st.subheader("📁 File Pairing & Comparison")
     
-    # Get available files for comparison
+    # Debug: Show session state info
+    st.caption(f"Session state keys: {list(st.session_state.keys())}")
+    if 'cleaned_sheets' in st.session_state:
+        st.caption(f"Cleaned sheets count: {len(st.session_state.cleaned_sheets) if st.session_state.cleaned_sheets else 0}")
+    
+    # Get available files for comparison from session state
     comparison_files = []
-    if 'cleaned_sheets' in locals() and cleaned_sheets:
+    
+    # Check if we have cleaned sheets in session state
+    if 'cleaned_sheets' in st.session_state and st.session_state.cleaned_sheets:
+        cleaned_sheets = st.session_state.cleaned_sheets
         for file_path, df in cleaned_sheets.items():
             # Extract period information from filename or data
             period_info = "Unknown"
@@ -2117,21 +2133,28 @@ try:
                                     with st.spinner("Generating comparison charts..."):
                                         charts_generated = []
                                         
+                                        # Generate timestamp for chart filenames
+                                        import time
+                                        timestamp = time.strftime("%Y%m%d_%H%M%S")
+                                        
                                         # 1. Delta Waterfall Chart
                                         waterfall_path = f"delta_waterfall_{timestamp}.png"
-                                        waterfall_result = create_delta_waterfall(pivot_sorted if 'pivot_sorted' in locals() else pivot, waterfall_path)
+                                        # Use the comparison result dataframes for charting
+                                        df1 = selected_pair['file1']['dataframe']
+                                        df2 = selected_pair['file2']['dataframe']
+                                        waterfall_result = create_delta_waterfall(df1, waterfall_path)
                                         if waterfall_result:
                                             charts_generated.append(("Delta Waterfall", waterfall_result))
                                         
                                         # 2. Aging Shift Chart
                                         aging_shift_path = f"aging_shift_{timestamp}.png"
-                                        aging_shift_result = create_aging_shift_chart(pivot_sorted if 'pivot_sorted' in locals() else pivot, aging_shift_path)
+                                        aging_shift_result = create_aging_shift_chart(df1, aging_shift_path)
                                         if aging_shift_result:
                                             charts_generated.append(("Aging Shift", aging_shift_result))
                                         
                                         # 3. Movers Scatter Plot
                                         movers_path = f"movers_scatter_{timestamp}.png"
-                                        movers_result = create_movers_scatter(pivot_sorted if 'pivot_sorted' in locals() else pivot, movers_path)
+                                        movers_result = create_movers_scatter(df1, movers_path)
                                         if movers_result:
                                             charts_generated.append(("Movers Scatter", movers_result))
                                         
@@ -2173,6 +2196,41 @@ try:
         st.info("📁 Found 1 file. Need at least 2 files for comparison.")
     else:
         st.info("📁 No files available for comparison. Please run data ingestion first.")
+        
+        # Provide alternative: direct file upload for comparison
+        st.markdown("### 📤 Upload Files for Comparison")
+        st.write("You can upload files directly for comparison without running the full ingestion pipeline.")
+        
+        uploaded_files = st.file_uploader(
+            "Choose 2 or more Excel files for comparison",
+            type=['xlsx'],
+            accept_multiple_files=True,
+            help="Select multiple .xlsx files to compare"
+        )
+        
+        if uploaded_files and len(uploaded_files) >= 2:
+            st.success(f"✅ Uploaded {len(uploaded_files)} files for comparison")
+            
+            # Process uploaded files for comparison
+            comparison_files = []
+            for uploaded_file in uploaded_files:
+                try:
+                    df = pd.read_excel(uploaded_file, sheet_name=0)  # Read first sheet
+                    comparison_files.append({
+                        'path': uploaded_file.name,
+                        'period': "Uploaded",  # Default period
+                        'rows': len(df),
+                        'columns': len(df.columns),
+                        'dataframe': df
+                    })
+                except Exception as e:
+                    st.error(f"Error reading {uploaded_file.name}: {e}")
+            
+            if len(comparison_files) >= 2:
+                st.success(f"✅ Ready to compare {len(comparison_files)} files!")
+                # Continue with the comparison logic below
+            else:
+                st.warning("⚠️ Need at least 2 valid files for comparison")
         
 except ImportError as e:
     st.error(f"Comparison module not available: {e}")
