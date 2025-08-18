@@ -2109,6 +2109,18 @@ try:
                         df1 = selected_pair['file1']['dataframe'].copy()
                         df2 = selected_pair['file2']['dataframe'].copy()
                         
+                        # Debug: Show column information
+                        st.markdown("### 🔍 Column Analysis")
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown(f"**{selected_pair['period1']} Columns:**")
+                            st.write(list(df1.columns))
+                        
+                        with col2:
+                            st.markdown(f"**{selected_pair['period2']} Columns:**")
+                            st.write(list(df2.columns))
+                        
                         # Add period and source information
                         df1['period'] = selected_pair['period1']
                         df1['source_file'] = selected_pair['file1']['path']
@@ -2156,12 +2168,105 @@ try:
                             os.makedirs(local_output, exist_ok=True)
                             st.info(f"📁 Using fallback directory: `{local_output}`")
                         
+                        # Generate timestamp for output files
+                        import time
+                        timestamp = time.strftime("%Y%m%d_%H%M%S")
+                        
+                        # Enhanced column detection for flexible comparison
+                        def detect_value_columns(df):
+                            """Detect numeric columns that could be used for comparison"""
+                            numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+                            
+                            # Remove system columns
+                            system_cols = ['period', 'source_file', 'header_row', 'sheet_type']
+                            numeric_cols = [col for col in numeric_cols if col not in system_cols]
+                            
+                            # Prioritize common inventory columns
+                            priority_patterns = [
+                                'qty', 'quantity', 'amount', 'value', 'cost', 'price', 
+                                'balance', 'remaining', 'stock', 'inventory', 'total',
+                                'extended', 'unit', 'each'
+                            ]
+                            
+                            prioritized_cols = []
+                            other_cols = []
+                            
+                            for col in numeric_cols:
+                                col_lower = col.lower()
+                                if any(pattern in col_lower for pattern in priority_patterns):
+                                    prioritized_cols.append(col)
+                                else:
+                                    other_cols.append(col)
+                            
+                            return prioritized_cols + other_cols
+                        
+                        # Show detected columns
+                        value_cols_df1 = detect_value_columns(df1)
+                        value_cols_df2 = detect_value_columns(df2)
+                        
+                        st.markdown("### 📊 Detected Numeric Columns")
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown(f"**{selected_pair['period1']} Numeric Columns:**")
+                            st.write(value_cols_df1 if value_cols_df1 else "No numeric columns found")
+                        
+                        with col2:
+                            st.markdown(f"**{selected_pair['period2']} Numeric Columns:**")
+                            st.write(value_cols_df2 if value_cols_df2 else "No numeric columns found")
+                        
                         if comparison_type == "WIP Aging":
                             result = compare_wip_aging([df1, df2], output_folder=local_output)
                         elif comparison_type == "Financials":
                             result = compare_financials([df1, df2], output_folder=local_output)
                         else:  # Default to inventory
-                            result = compare_inventory([df1, df2], output_folder=local_output)
+                            # Try the original function first
+                            try:
+                                result = compare_inventory([df1, df2], output_folder=local_output)
+                            except ValueError as e:
+                                if "No quantity or value columns found" in str(e):
+                                    st.warning("⚠️ Standard inventory comparison failed. Using flexible comparison...")
+                                    
+                                    # Create a simplified comparison using detected columns
+                                    if value_cols_df1 and value_cols_df2:
+                                        # Use the first common numeric column
+                                        common_cols = set(value_cols_df1) & set(value_cols_df2)
+                                        if common_cols:
+                                            primary_col = list(common_cols)[0]
+                                            st.info(f"📊 Using column '{primary_col}' for comparison")
+                                            
+                                            # Create a simple comparison result
+                                            result = {
+                                                'metadata': {
+                                                    'comparison_type': 'Flexible Inventory',
+                                                    'periods': [selected_pair['period1'], selected_pair['period2']],
+                                                    'primary_column': primary_col,
+                                                    'records_compared': len(df1) + len(df2)
+                                                },
+                                                'excel_file': f"{local_output}/flexible_comparison_{timestamp}.xlsx",
+                                                'summary': f"Comparison based on {primary_col} column"
+                                            }
+                                            
+                                            # Create a simple Excel output
+                                            with pd.ExcelWriter(result['excel_file'], engine='openpyxl') as writer:
+                                                df1.to_excel(writer, sheet_name=selected_pair['period1'], index=False)
+                                                df2.to_excel(writer, sheet_name=selected_pair['period2'], index=False)
+                                                
+                                                # Create a simple comparison sheet
+                                                summary_df = pd.DataFrame({
+                                                    'Period': [selected_pair['period1'], selected_pair['period2']],
+                                                    f'Total_{primary_col}': [df1[primary_col].sum(), df2[primary_col].sum()],
+                                                    'Record_Count': [len(df1), len(df2)]
+                                                })
+                                                summary_df.to_excel(writer, sheet_name='Summary', index=False)
+                                            
+                                            st.success("✅ Flexible comparison completed!")
+                                        else:
+                                            raise ValueError("No common numeric columns found between files")
+                                    else:
+                                        raise ValueError("No numeric columns found in either file")
+                                else:
+                                    raise e
                         
                         if result and not isinstance(result, dict):
                             st.error(f"Comparison failed: {result}")
