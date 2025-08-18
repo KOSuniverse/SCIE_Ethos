@@ -2165,12 +2165,12 @@ try:
                 except Exception as e:
                     st.error(f"Comparison failed: {e}")
                     st.exception(e)
+        
+    elif len(comparison_files) == 1:
+        st.info("📁 Found 1 file. Need at least 2 files for comparison.")
     
     else:
-        st.warning("⚠️ No comparison pairs found. Need at least 2 files with different periods.")
-
-elif len(comparison_files) == 1:
-    st.info("📁 Found 1 file. Need at least 2 files for comparison.")
+        st.info("📁 No files available for comparison. Please run data ingestion first.")
 
 except ImportError as e:
     st.error(f"Comparison module not available: {e}")
