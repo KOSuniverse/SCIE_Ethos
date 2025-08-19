@@ -1576,52 +1576,78 @@ else:
             key="qa_question",
         )
 
-        run_btn = st.button("Run Q&A", type="primary", disabled=(not user_q.strip()))
+        run_btn = st.button("Run Analysis", type="primary", disabled=(not user_q.strip()))
         if run_btn:
-            with st.spinner("Thinking with GPT and running tools…"):
-                # Phase 6: Monitor Q&A execution
+            with st.spinner("Processing with Enterprise Data Orchestrator…"):
+                # Phase 6: Monitor DP execution
                 qa_start_time = time.time()
                 if PHASE6_AVAILABLE and monitoring:
-                    monitoring.increment("qa.queries", 1, has_files=bool(cleansed_paths))
-                    monitoring.gauge("qa.question_length", len(user_q), question_type="user_query")
+                    monitoring.increment("dp.queries", 1, has_files=bool(cleansed_paths))
+                    monitoring.gauge("dp.question_length", len(user_q), question_type="dp_query")
                 
                 try:
-                    # Import assistant functions only when needed
-                    try:
-                        from assistant_bridge import run_query_with_files, run_query
-                        assistant_available = True
-                    except ImportError as e:
-                        st.warning(f"Assistant API not available: {e}")
-                        assistant_available = False
+                    # ENHANCED: Use DP Orchestrator with full enterprise parity
+                    from dp_orchestrator import dp_orchestrator
                     
-                    if assistant_available:
-                        # Prefer Assistants API with File Search when paths are provided
-                        if cleansed_paths:
-                            ar = run_query_with_files(user_q, cleansed_paths)
-                        else:
-                            ar = run_query(user_q)
+                    # Process query through enhanced orchestrator
+                    dp_result = dp_orchestrator.process_dp_query(user_q, st.session_state)
+                    
+                    # Phase 6: Monitor DP completion
+                    if PHASE6_AVAILABLE and monitoring:
+                        qa_execution_time = time.time() - qa_start_time
+                        monitoring.timing("dp.execution_time", qa_execution_time, has_files=bool(cleansed_paths))
+                        monitoring.gauge("dp.answer_length", len(str(dp_result)), question_type="dp_query")
+
+                    # Handle clarification requests
+                    if dp_result.get("needs_clarification"):
+                        st.warning("🤔 **Clarification Needed**")
+                        st.write(dp_result.get("clarification_message", "Multiple options found."))
                         
-                        # Phase 6: Monitor Q&A completion
-                        if PHASE6_AVAILABLE and monitoring:
-                            qa_execution_time = time.time() - qa_start_time
-                            monitoring.timing("qa.execution_time", qa_execution_time, has_files=bool(cleansed_paths))
-                            monitoring.gauge("qa.answer_length", len(ar.get("answer", "")), question_type="user_query")
-
-                        # Normalize for existing UI
-                        answer = ar.get("answer") or ""
-                        confidence_obj = ar.get("confidence") or {}
-                        confidence_score = confidence_obj.get("score")
-
-                        result = {
-                            "final_text": answer,
-                            "intent_info": {"intent": "assistant", "confidence": confidence_score},
-                            "tool_calls": [],
-                            "artifacts": [],
-                            "kb_citations": [],
-                            "debug": {"thread_id": ar.get("thread_id"), "file_sync_debug": ar.get("debug_file_sync", {})},
+                        clarification_options = dp_result.get("clarification_options", [])
+                        if clarification_options:
+                            st.write("**Available options:**")
+                            for i, option in enumerate(clarification_options):
+                                st.write(f"{i+1}. {option['name']} (Score: {option.get('ranking_score', 0)})")
+                        
+                        # Store clarification context for follow-up
+                        st.session_state["pending_clarification"] = {
+                            "original_query": user_q,
+                            "options": clarification_options,
+                            "clarification_type": dp_result.get("clarification_type", "unknown")
                         }
+                        
+                        result = None  # Don't show full results yet
+                    
+                    elif dp_result.get("error"):
+                        st.error(f"❌ Analysis failed: {dp_result['error']}")
+                        if "suggestions" in dp_result:
+                            st.info(f"💡 Suggestion: {dp_result['suggestions']}")
+                        result = None
+                    
                     else:
-                        # Fallback to orchestrator if Assistant not available
+                        # ENHANCED: Format using standard_report schema
+                        result = {
+                            "final_text": dp_result.get("title", "Analysis Complete"),
+                            "intent_info": {
+                                "intent": dp_result.get("intent", "eda"),
+                                "confidence": dp_result.get("confidence", {}).get("score", 0.7)
+                            },
+                            "dp_result": dp_result,  # Full DP result for enhanced display
+                            "tool_calls": [],
+                            "artifacts": dp_result.get("artifacts", []),
+                            "kb_citations": dp_result.get("citations", []),
+                            "debug": {"intent": dp_result.get("intent"), "confidence": dp_result.get("confidence")},
+                        }
+                        
+                        # Clear any pending clarification since we got a result
+                        if "pending_clarification" in st.session_state:
+                            del st.session_state["pending_clarification"]
+                
+                except Exception as e:
+                    st.error(f"❌ Enhanced DP processing error: {e}")
+                    # Fallback to basic orchestrator
+                    try:
+                        from orchestrator import answer_question
                         result = answer_question(
                             user_question=user_q,
                             app_paths=app_paths,
@@ -1633,51 +1659,141 @@ else:
                     result = None
 
             if result:
-                st.markdown("### Answer")
-                st.write(result.get("final_text", ""))
+                # ENHANCED: Display using standard_report schema
+                dp_result = result.get("dp_result")
+                if dp_result:
+                    # Title
+                    st.markdown(f"## {dp_result.get('title', 'Analysis Results')}")
+                    
+                    # Executive Insight
+                    executive_insight = dp_result.get('executive_insight', '')
+                    if executive_insight:
+                        st.markdown("### 🎯 Executive Insight")
+                        st.info(executive_insight)
+                    
+                    # Method & Scope
+                    method_scope = dp_result.get('method_and_scope', {})
+                    if method_scope:
+                        st.markdown("### 🔍 Method & Scope")
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Files Analyzed", method_scope.get('files_analyzed', 0))
+                        with col2:
+                            st.metric("Analysis Type", method_scope.get('analysis_type', 'N/A'))
+                        with col3:
+                            st.metric("Data Sources", len(method_scope.get('data_sources', [])))
+                        
+                        # Show file summaries
+                        data_sources = method_scope.get('data_sources', [])
+                        if data_sources:
+                            st.markdown("**Data Sources:**")
+                            for i, source in enumerate(data_sources[:3], 1):
+                                st.write(f"{i}. {source}")
+                    
+                    # Evidence & Calculations (Tables + Charts)
+                    evidence = dp_result.get('evidence_and_calculations', {})
+                    if evidence:
+                        st.markdown("### 📊 Evidence & Calculations")
+                        
+                        # Display tables
+                        tables = evidence.get('tables', [])
+                        for i, table in enumerate(tables):
+                            if isinstance(table, dict):
+                                st.markdown(f"**Table {i+1}:** {table.get('title', 'Analysis Table')}")
+                                if 'data' in table:
+                                    st.dataframe(table['data'])
+                            else:
+                                st.write(f"Table {i+1}: {table}")
+                        
+                        # Display charts
+                        charts = evidence.get('charts', [])
+                        if charts:
+                            st.markdown("**Charts Generated:**")
+                            for chart in charts:
+                                if isinstance(chart, str):
+                                    st.write(f"📈 {chart}")
+                                else:
+                                    st.write(f"📈 Chart: {chart}")
+                        
+                        # Display calculations
+                        calculations = evidence.get('calculations', [])
+                        if calculations:
+                            st.markdown("**Key Calculations:**")
+                            for calc in calculations:
+                                st.write(f"🔢 {calc}")
+                    
+                    # Root Causes / Drivers
+                    drivers = dp_result.get('root_causes_drivers', [])
+                    if drivers:
+                        st.markdown("### 🔍 Root Causes & Drivers")
+                        for i, driver in enumerate(drivers, 1):
+                            st.write(f"{i}. {driver}")
+                    
+                    # Recommendations
+                    recommendations = dp_result.get('recommendations', [])
+                    if recommendations:
+                        st.markdown("### 💡 Recommendations")
+                        for i, rec in enumerate(recommendations, 1):
+                            st.write(f"{i}. {rec}")
+                    
+                    # Confidence & Sources
+                    st.markdown("---")
+                    st.markdown("### 📊 Analysis Confidence & Sources")
+                    
+                    confidence = dp_result.get('confidence', {})
+                    confidence_score = confidence.get('score', 0.5)
+                    confidence_level = confidence.get('level', 'Medium')
+                    
+                    # Enhanced Confidence Badge with R/A/V/C breakdown
+                    confidence_badge = get_confidence_badge(confidence_score, confidence.get('ravc_breakdown'))
+                    st.markdown(f"**Confidence:** {confidence_badge}", unsafe_allow_html=True)
+                    
+                    # R/A/V/C Breakdown
+                    ravc = confidence.get('ravc_breakdown', {})
+                    if ravc:
+                        with st.expander("🔍 Confidence Breakdown (R/A/V/C)"):
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("Retrieval (R)", f"{ravc.get('retrieval_strength_R', 0):.2f}")
+                            with col2:
+                                st.metric("Agreement (A)", f"{ravc.get('agreement_A', 0):.2f}")
+                            with col3:
+                                st.metric("Validation (V)", f"{ravc.get('validations_V', 0):.2f}")
+                            with col4:
+                                st.metric("Citations (C)", f"{ravc.get('citation_density_C', 0):.2f}")
+                    
+                    # Citations & Sources
+                    citations = dp_result.get('citations', [])
+                    if citations:
+                        sources_drawer = SourcesDrawer()
+                        sources_drawer.render_inline_sources(citations, confidence_score)
+                    else:
+                        st.info("No knowledge base sources available for this analysis")
+                    
+                    # Limitations & Data Needed
+                    limitations = dp_result.get('limits_data_needed', [])
+                    if limitations:
+                        st.markdown("### ⚠️ Limitations & Data Needed")
+                        for limitation in limitations:
+                            st.warning(limitation)
+                    
+                    # Artifacts
+                    artifacts = dp_result.get('artifacts', [])
+                    if artifacts:
+                        st.markdown("### 📁 Generated Artifacts")
+                        for artifact in artifacts:
+                            st.write(f"📄 {artifact}")
+                
+                else:
+                    # Fallback to basic display
+                    st.markdown("### Analysis Results")
+                    st.write(result.get("final_text", ""))
 
                 # Hidden debug caption (Intent=<auto_routed_intent> | Mode=<resolved_mode>)
                 ii = result.get("intent_info", {})
                 intent = ii.get('intent', 'unknown')
-                mode = 'data_processing'  # This is data processing mode
+                mode = 'data_processing_enhanced'  # Enhanced DP mode
                 st.caption(f"Intent={intent} | Mode={mode}")
-
-                st.markdown("### What I did")
-                ii = result.get("intent_info", {})
-                st.write(f"- Intent: **{ii.get('intent')}** (confidence {ii.get('confidence')})")
-                for call in result.get("tool_calls", []):
-                    tool = call.get("tool")
-                    meta = call.get("result_meta", {})
-                    st.write(f"- Tool: `{tool}` → {json.dumps(meta, ensure_ascii=False)}")
-
-                arts = result.get("artifacts") or []
-                if arts:
-                    st.markdown("### Artifacts (Dropbox)")
-                    for p in arts:
-                        st.write(p)
-
-                kb = result.get("kb_citations") or []
-                if kb:
-                    st.markdown("### KB Sources")
-                    for c in kb:
-                        st.write(c)
-
-                # Add Sources Drawer and Confidence Badge for Data Processing mode
-                st.markdown("---")
-                st.markdown("### 📊 Analysis Confidence & Sources")
-                
-                # Confidence Badge
-                confidence_score = ii.get('confidence', 0.5)
-                confidence_badge = get_confidence_badge(confidence_score)
-                st.markdown(f"**Confidence:** {confidence_badge}", unsafe_allow_html=True)
-                
-                # Sources Drawer
-                sources = result.get("kb_citations", []) or []
-                if sources:
-                    sources_drawer = SourcesDrawer()
-                    sources_drawer.render_inline_sources(sources, confidence_score)
-                else:
-                    st.info("No sources available for this analysis")
 
                 # Optional: show debug for troubleshooting
                 with st.expander("Debug"):
