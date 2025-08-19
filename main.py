@@ -2199,7 +2199,9 @@ st.header("📊 Usage Dashboard")
 st.markdown("**Phase 5A**: Query logs and usage analytics")
 
 try:
-    from PY_Files.phase5_governance.usage_dashboard import UsageDashboard
+    import sys
+    sys.path.append('PY Files')
+    from phase5_governance.usage_dashboard import UsageDashboard
     
     dashboard = UsageDashboard()
     
@@ -2217,7 +2219,7 @@ try:
         st.subheader("🔍 Data Quality Summary")
         
         try:
-            from PY_Files.phase5_governance.data_gap_analyzer import DataGapAnalyzer
+            from phase5_governance.data_gap_analyzer import DataGapAnalyzer
             
             gap_analyzer = DataGapAnalyzer()
             
