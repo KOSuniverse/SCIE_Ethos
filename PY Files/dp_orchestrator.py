@@ -31,7 +31,7 @@ except Exception as e:
 try:
     from orchestrator import classify_user_intent, _execute_plan
     from tools_runtime import tool_specs
-    from dbx_utils import list_files_in_folder, read_file_bytes
+    from dbx_utils import list_data_files, read_file_bytes
     from file_utils import list_cleaned_files
     from confidence import calculate_ravc_confidence
     from phase5_governance.query_logger import QueryLogger
@@ -95,8 +95,8 @@ class DataProcessingOrchestrator:
             
             # Try to get files from Dropbox first
             try:
-                from dbx_utils import list_files_in_folder
-                dropbox_files = list_files_in_folder(self.cleansed_files_path)
+                from dbx_utils import list_data_files
+                dropbox_files = list_data_files(self.cleansed_files_path)
                 for file_info in dropbox_files:
                     if file_info.get('name', '').endswith('.xlsx'):
                         files.append({
@@ -439,12 +439,103 @@ class DataProcessingOrchestrator:
                 }
             })
             
-        elif intent in ["root_cause", "eda", "movement_analysis", "anomaly_detection"]:
+        elif intent == "root_cause":
             plan.append({
                 "tool": "dataframe_query",
                 "args": {
                     "files": file_paths,
-                    "query_type": intent,
+                    "query_type": "root_cause_analysis",
+                    "analysis_focus": self._extract_analysis_focus(query)
+                }
+            })
+            
+        elif intent == "movement_analysis":
+            plan.append({
+                "tool": "dataframe_query",
+                "args": {
+                    "files": file_paths,
+                    "query_type": "movement_analysis",
+                    "analysis_focus": "timing_and_flow"
+                }
+            })
+            
+        elif intent == "optimization":
+            plan.append({
+                "tool": "dataframe_query",
+                "args": {
+                    "files": file_paths,
+                    "query_type": "optimization",
+                    "analysis_focus": "efficiency_improvement"
+                }
+            })
+            
+        elif intent == "anomaly_detection":
+            plan.append({
+                "tool": "dataframe_query",
+                "args": {
+                    "files": file_paths,
+                    "query_type": "anomaly_detection",
+                    "analysis_focus": "outlier_identification"
+                }
+            })
+            
+        elif intent == "scenario_analysis":
+            plan.append({
+                "tool": "dataframe_query",
+                "args": {
+                    "files": file_paths,
+                    "query_type": "scenario_analysis",
+                    "analysis_focus": "what_if_modeling"
+                }
+            })
+            
+        elif intent == "exec_summary":
+            plan.append({
+                "tool": "dataframe_query",
+                "args": {
+                    "files": file_paths,
+                    "query_type": "executive_summary",
+                    "analysis_focus": "high_level_insights"
+                }
+            })
+            
+        elif intent == "gap_check":
+            plan.append({
+                "tool": "dataframe_query",
+                "args": {
+                    "files": file_paths,
+                    "query_type": "data_gap_analysis",
+                    "analysis_focus": "missing_data_identification"
+                }
+            })
+            
+        elif intent in ["par_policy", "safety_stock", "demand_projection", "seasonal_analysis", "eo_future_risk"]:
+            # Specialized forecasting intents
+            plan.append({
+                "tool": "forecast_demand",
+                "args": {
+                    "files": file_paths,
+                    "forecast_type": intent,
+                    "forecast_periods": 12,
+                    "method": "auto"
+                }
+            })
+            if intent in ["par_policy", "safety_stock"]:
+                plan.append({
+                    "tool": "calculate_inventory_policy",
+                    "args": {
+                        "files": file_paths,
+                        "policy_type": intent,
+                        "service_level": 0.95
+                    }
+                })
+                
+        elif intent in ["eda"]:
+            plan.append({
+                "tool": "dataframe_query",
+                "args": {
+                    "files": file_paths,
+                    "query_type": "exploratory_data_analysis",
                     "analysis_focus": self._extract_analysis_focus(query)
                 }
             })
@@ -495,6 +586,15 @@ class DataProcessingOrchestrator:
             "root_cause": ["pareto", "variance_breakdown", "driver_analysis"],
             "movement_analysis": ["flow_diagram", "time_series", "movement_heatmap"],
             "anomaly_detection": ["control_chart", "outlier_scatter", "anomaly_timeline"],
+            "optimization": ["efficiency_chart", "optimization_pareto", "improvement_timeline"],
+            "scenario_analysis": ["scenario_comparison", "sensitivity_analysis", "what_if_chart"],
+            "exec_summary": ["executive_dashboard", "kpi_scorecard", "trend_summary"],
+            "gap_check": ["data_completeness", "gap_analysis", "missing_data_heatmap"],
+            "par_policy": ["par_level_chart", "policy_comparison", "service_level_analysis"],
+            "safety_stock": ["safety_stock_chart", "risk_analysis", "stockout_probability"],
+            "demand_projection": ["demand_forecast", "seasonality_chart", "accuracy_metrics"],
+            "seasonal_analysis": ["seasonal_decomposition", "cyclical_patterns", "seasonal_forecast"],
+            "eo_future_risk": ["risk_assessment", "future_exposure", "risk_mitigation"],
             "eda": ["distribution", "correlation_matrix", "summary_stats"]
         }
         
