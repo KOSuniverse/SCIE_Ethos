@@ -43,7 +43,25 @@ class DataProcessingOrchestrator:
     
     def __init__(self):
         self.query_logger = QueryLogger() if 'QueryLogger' in globals() else None
-        self.cleansed_files_path = "/Project_Root/04_Data/01_Cleansed_Files/"
+        
+        # Import constants to get the correct Dropbox paths
+        try:
+            from constants import CLEANSED, PROJECT_ROOT
+            self.cleansed_files_path = CLEANSED
+            print(f"DEBUG DP: Using constants - PROJECT_ROOT: {PROJECT_ROOT}, CLEANSED: {CLEANSED}")
+        except ImportError:
+            # Fallback paths if constants not available
+            self.cleansed_files_path = "/Apps/Ethos LLM/Project_Root/04_Data/01_Cleansed_Files"
+            print(f"DEBUG DP: Using fallback path: {self.cleansed_files_path}")
+        
+        # Additional path variations to try (based on your screenshot showing /project_root/04_data/01_cleansed_files/)
+        self.cleansed_files_path_variations = [
+            self.cleansed_files_path,
+            "/Apps/Ethos LLM/Project_Root/04_Data/01_Cleansed_Files",
+            "/Project_Root/04_Data/01_Cleansed_Files", 
+            "/project_root/04_data/01_cleansed_files",  # This matches your screenshot
+            "/Apps/Ethos LLM/project_root/04_data/01_cleansed_files"
+        ]
         
     def resolve_files_metadata_first(self, query: str, intent: str) -> Dict[str, Any]:
         """
@@ -93,38 +111,47 @@ class DataProcessingOrchestrator:
         try:
             files = []
             
-            # Try to get files from Dropbox first
-            try:
-                from dbx_utils import list_data_files
-                dropbox_files = list_data_files(self.cleansed_files_path)
-                for file_info in dropbox_files:
-                    if file_info.get('name', '').endswith('.xlsx'):
-                        files.append({
-                            "path": file_info['path'],
-                            "name": file_info['name'],
-                            "size": file_info.get('size', 0),
-                            "modified": file_info.get('modified', ''),
-                            "metadata": self._extract_metadata_from_filename(file_info['name'])
-                        })
-            except Exception:
-                # Fallback to session state or local files
-                pass
+            # Try to get files from Dropbox with multiple path variations
+            for path_to_try in self.cleansed_files_path_variations:
+                try:
+                    from dbx_utils import list_data_files
+                    print(f"DEBUG: Trying Dropbox path: {path_to_try}")
+                    dropbox_files = list_data_files(path_to_try)
+                    print(f"DEBUG: Found {len(dropbox_files)} files in {path_to_try}")
+                    
+                    for file_info in dropbox_files:
+                        if file_info.get('name', '').endswith('.xlsx'):
+                            files.append({
+                                "path": file_info.get('path_lower', file_info.get('path', path_to_try + '/' + file_info['name'])),
+                                "name": file_info['name'],
+                                "size": file_info.get('size', 0),
+                                "modified": file_info.get('modified', ''),
+                                "metadata": self._extract_metadata_from_filename(file_info['name'])
+                            })
+                    if files:  # If we found files, stop trying other paths
+                        print(f"SUCCESS: Found {len(files)} files in {path_to_try}")
+                        break
+                except Exception as e:
+                    print(f"Warning: Could not access {path_to_try}: {e}")
+                    continue
             
             # Add files from session state if available
             try:
                 import streamlit as st
                 if hasattr(st, 'session_state') and hasattr(st.session_state, 'cleaned_sheets'):
                     for sheet_name, sheet_data in st.session_state.cleaned_sheets.items():
-                        files.append({
-                            "path": f"session:{sheet_name}",
-                            "name": sheet_name,
-                            "size": len(str(sheet_data)) if sheet_data is not None else 0,
-                            "modified": datetime.now().isoformat(),
-                            "metadata": self._extract_metadata_from_filename(sheet_name),
-                            "data": sheet_data
-                        })
-            except Exception:
-                pass
+                        # Avoid duplicates
+                        if not any(f["name"] == sheet_name for f in files):
+                            files.append({
+                                "path": f"session:{sheet_name}",
+                                "name": sheet_name,
+                                "size": len(str(sheet_data)) if sheet_data is not None else 0,
+                                "modified": datetime.now().isoformat(),
+                                "metadata": self._extract_metadata_from_filename(sheet_name),
+                                "data": sheet_data
+                            })
+            except Exception as e:
+                print(f"Warning: Could not access session state: {e}")
             
             return files
             
@@ -355,10 +382,23 @@ class DataProcessingOrchestrator:
             
             selected_files = file_resolution.get("selected_files", [])
             if not selected_files:
-                return {
-                    "error": "No suitable files found for analysis",
-                    "suggestions": "Please upload and process files first, or be more specific about which files to analyze."
-                }
+                # Get all available files for debugging
+                all_files = self._get_all_cleansed_files()
+                print(f"DEBUG DP: No files selected, but {len(all_files)} total files available")
+                for f in all_files[:3]:
+                    print(f"DEBUG DP: Available file: {f['name']}")
+                
+                if all_files:
+                    # If we have files but didn't select any, use the first available file
+                    selected_files = all_files[:1]
+                    print(f"DEBUG DP: Using fallback file: {selected_files[0]['name']}")
+                else:
+                    return {
+                        "error": "No matching files found. Please upload and process files first, or check your file references.",
+                        "suggestions": "Available paths checked: " + ", ".join(self.cleansed_files_path_variations[:3]),
+                        "needs_clarification": True,
+                        "clarification_type": "no_files"
+                    }
             
             # Step 4: Build execution plan using master instructions
             plan = self._build_execution_plan(intent, selected_files, query)
