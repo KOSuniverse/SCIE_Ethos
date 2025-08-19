@@ -980,6 +980,49 @@ def _execute_plan(plan: List[Dict[str, Any]], app_paths: Any) -> Dict[str, Any]:
             context["kb_citations"] = res.get("citations", [])
             context["kb_coverage_warning"] = res.get("coverage_warning")
 
+        # Phase 4A: Forecasting Tools
+        elif tool == "forecast_demand":
+            try:
+                from tools_runtime import forecast_demand
+                res = forecast_demand(**args)
+                calls.append({"tool": tool, "args": args, "result_meta": res})
+                if res.get("forecast_result"):
+                    artifacts.append(f"forecast_model_{res.get('part_number', 'unknown')}")
+            except Exception as e:
+                calls.append({"tool": tool, "args": args, "error": f"Forecast failed: {e}"})
+
+        elif tool == "calculate_inventory_policy":
+            try:
+                from tools_runtime import calculate_inventory_policy
+                res = calculate_inventory_policy(**args)
+                calls.append({"tool": tool, "args": args, "result_meta": res})
+                if res.get("policy_analysis"):
+                    artifacts.append(f"policy_model_{res.get('policy_analysis', {}).get('part_number', 'unknown')}")
+            except Exception as e:
+                calls.append({"tool": tool, "args": args, "error": f"Policy calculation failed: {e}"})
+
+        # Phase 4B: Model Management
+        elif tool == "save_model_artifacts":
+            try:
+                from tools_runtime import save_model_artifacts
+                res = save_model_artifacts(**args)
+                calls.append({"tool": tool, "args": args, "result_meta": res})
+                if res.get("model_id"):
+                    artifacts.append(f"model_registry_{res['model_id']}")
+            except Exception as e:
+                calls.append({"tool": tool, "args": args, "error": f"Model save failed: {e}"})
+
+        # Phase 4C: Export Tools
+        elif tool == "export_buy_list":
+            try:
+                from tools_runtime import export_buy_list
+                res = export_buy_list(**args)
+                calls.append({"tool": tool, "args": args, "result_meta": res})
+                if res.get("export_path"):
+                    artifacts.append(res["export_path"])
+            except Exception as e:
+                calls.append({"tool": tool, "args": args, "error": f"Export failed: {e}"})
+
         else:
             calls.append({"tool": tool, "args": args, "error": "Unsupported tool"})
 

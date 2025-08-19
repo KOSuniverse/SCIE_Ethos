@@ -527,3 +527,196 @@ def kb_search(query: str, k: int = 5) -> Dict[str, Any]:
             "hits_found": k,
             "mock_data": True
         }
+
+# Phase 4A: Forecasting and Policy Tools
+def forecast_demand(
+    *,
+    historical_data: List[Dict[str, Any]],
+    part_number: str,
+    forecast_periods: int = 12,
+    method: str = "exponential_smoothing"
+) -> Dict[str, Any]:
+    """
+    Phase 4A: Demand forecasting tool for orchestrator.
+    """
+    try:
+        from phase4_modeling.forecasting_engine import ForecastingEngine
+        
+        # Convert list of dicts to DataFrame
+        import pandas as pd
+        df = pd.DataFrame(historical_data)
+        
+        engine = ForecastingEngine()
+        result = engine.demand_projection(df, forecast_periods, method)
+        
+        return {
+            "forecast_result": result,
+            "part_number": part_number,
+            "method": method,
+            "periods": forecast_periods,
+            "tool": "forecast_demand"
+        }
+        
+    except Exception as e:
+        return {
+            "error": f"Forecast demand failed: {e}",
+            "part_number": part_number,
+            "tool": "forecast_demand"
+        }
+
+def calculate_inventory_policy(
+    *,
+    part_data: Dict[str, Any],
+    service_level: float = 0.95
+) -> Dict[str, Any]:
+    """
+    Phase 4A: Calculate comprehensive inventory policy (SS, ROP, Par).
+    """
+    try:
+        from phase4_modeling.forecasting_engine import ForecastingEngine
+        
+        engine = ForecastingEngine(service_level=service_level)
+        result = engine.comprehensive_policy_analysis(part_data)
+        
+        return {
+            "policy_analysis": result,
+            "service_level": service_level,
+            "tool": "calculate_inventory_policy"
+        }
+        
+    except Exception as e:
+        return {
+            "error": f"Policy calculation failed: {e}",
+            "tool": "calculate_inventory_policy"
+        }
+
+def save_model_artifacts(
+    *,
+    model_results: Dict[str, Any],
+    part_number: str,
+    model_type: str = "comprehensive"
+) -> Dict[str, Any]:
+    """
+    Phase 4B: Save model artifacts and metadata.
+    """
+    try:
+        from phase4_modeling.model_registry import ModelRegistry
+        
+        registry = ModelRegistry()
+        
+        if model_type == "forecasting":
+            model_id = registry.save_forecast_model(model_results, part_number)
+        else:
+            model_id = registry.save_policy_model(model_results, part_number, model_type)
+        
+        return {
+            "model_id": model_id,
+            "saved_successfully": True,
+            "registry_path": str(registry.base_path),
+            "tool": "save_model_artifacts"
+        }
+        
+    except Exception as e:
+        return {
+            "error": f"Model save failed: {e}",
+            "tool": "save_model_artifacts"
+        }
+
+def export_buy_list(
+    *,
+    policy_analyses: List[Dict[str, Any]],
+    export_name: str = None
+) -> Dict[str, Any]:
+    """
+    Phase 4C: Export buy list and policy changes to Excel.
+    """
+    try:
+        from phase4_modeling.policy_export import PolicyExportManager
+        
+        exporter = PolicyExportManager()
+        export_path = exporter.create_buy_list_export(policy_analyses, export_name)
+        
+        return {
+            "export_path": export_path,
+            "parts_analyzed": len(policy_analyses),
+            "export_successful": True,
+            "tool": "export_buy_list"
+        }
+        
+    except Exception as e:
+        return {
+            "error": f"Export failed: {e}",
+            "tool": "export_buy_list"
+        }
+
+def tool_specs() -> Dict[str, Dict[str, Any]]:
+    """
+    Return the tool specifications for orchestrator planning.
+    Updated for Phase 4 with forecasting, modeling, and export capabilities.
+    """
+    return {
+        "dataframe_query": {
+            "description": "Query structured data with filters, grouping, and aggregations",
+            "parameters": {
+                "files": {"type": "array", "description": "List of file paths to query"},
+                "sheet": {"type": "string", "description": "Specific sheet name (optional)"},
+                "filters": {"type": "array", "description": "List of filter conditions"},
+                "groupby": {"type": "array", "description": "Columns to group by"},
+                "metrics": {"type": "array", "description": "Aggregation metrics"},
+                "limit": {"type": "integer", "description": "Max rows to return"}
+            }
+        },
+        "chart": {
+            "description": "Generate charts and visualizations",
+            "parameters": {
+                "kind": {"type": "string", "description": "Chart type (bar, line, scatter, etc.)"},
+                "rows": {"type": "array", "description": "Data rows for charting"},
+                "x": {"type": "string", "description": "X-axis column"},
+                "y": {"type": "array", "description": "Y-axis columns"},
+                "title": {"type": "string", "description": "Chart title"},
+                "artifact_folder": {"type": "string", "description": "Output folder path"},
+                "base_name": {"type": "string", "description": "Base filename"}
+            }
+        },
+        "kb_search": {
+            "description": "Search knowledge base for relevant information",
+            "parameters": {
+                "query": {"type": "string", "description": "Search query"},
+                "k": {"type": "integer", "description": "Number of results to return"}
+            }
+        },
+        # Phase 4A: Forecasting Tools
+        "forecast_demand": {
+            "description": "Generate demand forecasts using historical data with exponential smoothing, moving average, or linear trend methods",
+            "parameters": {
+                "historical_data": {"type": "array", "description": "Historical demand data as list of dicts with demand/quantity columns"},
+                "part_number": {"type": "string", "description": "Part number to forecast"},
+                "forecast_periods": {"type": "integer", "description": "Number of periods to forecast (default 12)"},
+                "method": {"type": "string", "description": "Forecasting method: exponential_smoothing, moving_average, linear_trend"}
+            }
+        },
+        "calculate_inventory_policy": {
+            "description": "Calculate comprehensive inventory policy including safety stock, ROP, par levels with backtests",
+            "parameters": {
+                "part_data": {"type": "object", "description": "Dict with historical_demand, lead_time_days, current_stock, part_number"},
+                "service_level": {"type": "number", "description": "Target service level (0.90, 0.95, 0.975, 0.99)"}
+            }
+        },
+        # Phase 4B: Model Management
+        "save_model_artifacts": {
+            "description": "Save forecasting model artifacts and metadata to /04_Data/Models/ registry",
+            "parameters": {
+                "model_results": {"type": "object", "description": "Model results from forecast_demand or calculate_inventory_policy"},
+                "part_number": {"type": "string", "description": "Part number for the model"},
+                "model_type": {"type": "string", "description": "Model type: forecasting, comprehensive, policy"}
+            }
+        },
+        # Phase 4C: Export Tools
+        "export_buy_list": {
+            "description": "Export buy list and policy changes to formatted Excel file with multiple sheets",
+            "parameters": {
+                "policy_analyses": {"type": "array", "description": "List of policy analysis results from calculate_inventory_policy"},
+                "export_name": {"type": "string", "description": "Optional custom export filename"}
+            }
+        }
+    }
