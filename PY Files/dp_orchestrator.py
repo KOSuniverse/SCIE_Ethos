@@ -8,7 +8,7 @@ import os
 import re
 import json
 import yaml
-import datetime
+from datetime import datetime
 import io
 import pandas as pd
 import numpy as np
@@ -1057,7 +1057,7 @@ class DataProcessingOrchestrator:
             for chart_type in chart_types[:2]:  # Limit to 2 charts
                 chart_descriptions.append(f"Generated {chart_type} chart for data analysis")
                 # Note: Actual chart generation would require matplotlib/plotly implementation
-                chart_paths.append(f"/charts/{chart_type}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+                chart_paths.append(f"/charts/{chart_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
             
             return {
                 "chart_paths": chart_paths,
@@ -1105,6 +1105,79 @@ class DataProcessingOrchestrator:
             return recommendations if recommendations else [f"Act on insights from {intent} analysis.", "Monitor key metrics and trends identified."]
         
         return [f"Act on insights from {intent} analysis.", "Monitor key metrics and trends identified."]
+
+    def _create_analysis_tables(self, loaded_data_info: Dict[str, str], calculations: List[str]) -> List[Dict]:
+        """Create proper DataFrame tables for display"""
+        tables = []
+        
+        # Create a summary table from calculations
+        if calculations:
+            # Convert calculations to a structured table
+            calc_data = []
+            for calc in calculations[:10]:  # Limit to 10 calculations
+                if ":" in calc:
+                    metric, value = calc.split(":", 1)
+                    calc_data.append({"Metric": metric.strip(), "Value": value.strip()})
+                else:
+                    calc_data.append({"Metric": "Analysis", "Value": calc})
+            
+            if calc_data:
+                calc_df = pd.DataFrame(calc_data)
+                tables.append({
+                    "title": "Analysis Results",
+                    "data": calc_df
+                })
+        
+        # Create file summary table from loaded data info
+        if loaded_data_info:
+            file_data = []
+            for name, info in loaded_data_info.items():
+                # Parse info like "150 rows x 25 cols"
+                try:
+                    if " rows x " in info and " cols" in info:
+                        rows_part, cols_part = info.split(" rows x ")
+                        rows = int(rows_part)
+                        cols = int(cols_part.replace(" cols", ""))
+                        file_data.append({
+                            "File": name,
+                            "Rows": rows,
+                            "Columns": cols,
+                            "Status": "Loaded Successfully"
+                        })
+                    else:
+                        file_data.append({
+                            "File": name,
+                            "Rows": "Unknown",
+                            "Columns": "Unknown", 
+                            "Status": info
+                        })
+                except:
+                    file_data.append({
+                        "File": name,
+                        "Rows": "Unknown",
+                        "Columns": "Unknown",
+                        "Status": "Loaded"
+                    })
+            
+            if file_data:
+                file_df = pd.DataFrame(file_data)
+                tables.append({
+                    "title": "File Analysis Summary",
+                    "data": file_df
+                })
+        
+        # Fallback if no tables created
+        if not tables:
+            fallback_df = pd.DataFrame({
+                "Status": ["Analysis Completed"],
+                "Details": ["Data processing completed successfully"]
+            })
+            tables.append({
+                "title": "Analysis Status",
+                "data": fallback_df
+            })
+        
+        return tables
 
     def _apply_quality_protocol(self, execution_result: Dict[str, Any], intent: str, query: str) -> Dict[str, Any]:
         """Apply quality protocol and confidence scoring"""
@@ -1173,7 +1246,7 @@ class DataProcessingOrchestrator:
                     "data_sources": file_summaries[:3]  # First 3 file summaries
                 },
                 "evidence_and_calculations": {
-                    "tables": [{"title": "Analysis Summary", "data": "Detailed analysis completed"}],
+                    "tables": self._create_analysis_tables(execution_result.get("loaded_data", {}), calculations_from_analysis),
                     "charts": [call.get("result_meta", {}).get("chart_paths", []) for call in calls if call.get("tool") == "chart"],
                     "calculations": calculations_from_analysis if calculations_from_analysis else ["Analysis completed with available data"],
                     "insights": insights_from_analysis if insights_from_analysis else ["Data processing completed"]
