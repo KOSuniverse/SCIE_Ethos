@@ -15,6 +15,7 @@ st.caption(f"Pipeline: {PIPELINE_VERSION}")
 # Orchestrator & session
 from orchestrator import ingest_streamlit_bytes_5  # add at top of file or above this block
 from session import SessionState
+from confidence import get_confidence_badge
 
 # Optional import check for dev sanity
 try:
