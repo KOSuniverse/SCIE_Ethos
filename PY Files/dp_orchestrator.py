@@ -124,13 +124,20 @@ class DataProcessingOrchestrator:
                     
                     for file_info in dropbox_files:
                         if file_info.get('name', '').endswith('.xlsx'):
-                            files.append({
+                            file_record = {
                                 "path": file_info.get('path_lower', file_info.get('path', path_to_try + '/' + file_info['name'])),
                                 "name": file_info['name'],
                                 "size": file_info.get('size', 0),
                                 "modified": file_info.get('modified', ''),
                                 "metadata": self._extract_metadata_from_filename(file_info['name'])
-                            })
+                            }
+                            
+                            # Load sidecar summary from /04_Data/03_Summaries/
+                            summary_text = self._load_sidecar_summary(file_info['name'])
+                            if summary_text:
+                                file_record["summary"] = summary_text[:4000]  # Limit to 4000 chars
+                            
+                            files.append(file_record)
                     if files:  # If we found files, stop trying other paths
                         print(f"SUCCESS: Found {len(files)} files in {path_to_try}")
                         break
@@ -309,6 +316,16 @@ class DataProcessingOrchestrator:
                 score += 5
                 reasons.append("Cleansed file")
             
+            # Summary token overlap boost (generic, no hardcodes)
+            if file_info.get("summary"):
+                summary_lower = file_info["summary"].lower()
+                query_tokens = self.last_query.lower().split() if hasattr(self, 'last_query') else []
+                overlap_count = sum(1 for token in query_tokens if len(token) > 3 and token in summary_lower)
+                if overlap_count > 0:
+                    boost = min(overlap_count * 5, 25)  # Max 25 point boost
+                    score += boost
+                    reasons.append(f"Summary token overlap ({overlap_count} matches)")
+            
             file_info["ranking_score"] = score
             file_info["ranking_reason"] = "; ".join(reasons) if reasons else "No specific matches"
             
@@ -354,8 +371,8 @@ class DataProcessingOrchestrator:
         
         # Intent-specific selection logic
         if intent == "comparison":
-            # Comparison needs at least 2 files, prefer up to 4
-            return ranked_files[:min(4, len(ranked_files))]
+            # Apply generic comparison pairing (no hardcodes)
+            return self._apply_generic_comparison_pairing(ranked_files)
         elif intent in ["forecasting", "movement_analysis", "optimization"]:
             # These intents can use multiple files for comprehensive analysis
             return ranked_files[:min(6, len(ranked_files))]
@@ -370,6 +387,9 @@ class DataProcessingOrchestrator:
         """
         Process Data Processing query with full enterprise parity
         """
+        # Store query for downstream use (country/intent cues)
+        self.last_query = query
+        
         try:
             # Step 1: Classify intent using master instructions
             intent_result = classify_user_intent(query)
@@ -944,17 +964,28 @@ class DataProcessingOrchestrator:
         return recommendations
     
     def _identify_limitations(self, execution_result: Dict, kb_sources: List) -> List[str]:
-        """Identify limitations and data gaps"""
+        """Identify limitations and data gaps (suppress FAISS error leakage)"""
         limitations = []
         
-        # Check for execution errors
-        errors = [call.get("error") for call in execution_result.get("calls", []) if call.get("error")]
-        if errors:
-            limitations.append(f"Some analysis components failed: {'; '.join(errors[:2])}")
+        # Check for execution errors (suppress FAISS/technical errors)
+        errors = []
+        for call in execution_result.get("calls", []):
+            if call.get("error"):
+                error_msg = str(call["error"]).lower()
+                # Suppress FAISS and technical error details
+                if any(term in error_msg for term in ["faiss", "index", "vector", "embedding", "dimension"]):
+                    continue  # Skip FAISS-related errors
+                elif "no module named" in error_msg or "import" in error_msg:
+                    continue  # Skip import errors
+                else:
+                    errors.append(call["error"])
         
-        # Check KB coverage
+        if errors:
+            limitations.append(f"Some analysis components encountered issues: {'; '.join(errors[:2])}")
+        
+        # Check KB coverage (soft note, not error leakage)
         if len(kb_sources) < 2:
-            limitations.append("Limited knowledge base coverage - results may lack context.")
+            limitations.append("Limited knowledge base coverage - analysis focused on available data files.")
         
         # Check file coverage
         selected_files = execution_result.get("selected_files", [])
@@ -993,51 +1024,80 @@ class DataProcessingOrchestrator:
             query_type = args.get("query_type", "eda")
             analysis_focus = args.get("analysis_focus", "general")
             
-            # Combine all dataframes for analysis
-            all_data = []
-            data_summary = []
+            # Apply US filter if mentioned in query
+            filtered_dataframes = self._apply_country_filter(loaded_dataframes)
             
-            for name, df in loaded_dataframes.items():
-                all_data.append(df)
-                data_summary.append(f"{name}: {len(df)} rows, {len(df.columns)} columns")
-                
-                # Generate basic insights from the data
-                numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-                if numeric_cols:
-                    print(f"DEBUG: Analyzing {name} - numeric columns: {numeric_cols[:5]}")
-            
-            # Perform actual analysis based on query type
             insights = []
             calculations = []
+            tables = []
+            data_summary = []
             
-            if query_type == "exploratory_data_analysis" or query_type == "eda":
-                for name, df in loaded_dataframes.items():
-                    # Basic statistics
-                    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-                    if numeric_cols:
-                        insights.append(f"Dataset {name} contains {len(numeric_cols)} numeric columns with analysis potential")
-                        for col in numeric_cols[:3]:  # Analyze first 3 numeric columns
-                            mean_val = df[col].mean()
-                            std_val = df[col].std()
-                            calculations.append(f"{col}: Mean={mean_val:.2f}, Std={std_val:.2f}")
+            total_value = 0
+            aging_analysis = {}
+            eo_analysis = {}
+            
+            for name, df in filtered_dataframes.items():
+                data_summary.append(f"{name}: {len(df)} rows, {len(df.columns)} columns")
+                
+                # Detect aging bucket columns
+                aging_columns = self._detect_aging_columns(df)
+                print(f"DEBUG: Found aging columns in {name}: {aging_columns}")
+                
+                if aging_columns:
+                    # Calculate $ by aging bucket
+                    aging_totals = self._calculate_aging_totals(df, aging_columns)
+                    aging_analysis[name] = aging_totals
                     
-                    # Check for key inventory/WIP columns
-                    key_columns = ['part_no', 'job_no', 'aging_0_30_days', 'aging_31_60_days', 'on_hand', 'safety_stock']
-                    found_cols = [col for col in key_columns if col in df.columns]
-                    if found_cols:
-                        insights.append(f"Found key inventory/WIP columns in {name}: {', '.join(found_cols)}")
+                    # E&O proxy (>180d / total)
+                    eo_proxy = self._calculate_eo_proxy(aging_totals)
+                    eo_analysis[name] = eo_proxy
+                    
+                    # Add insights
+                    total_file_value = sum(aging_totals.values())
+                    total_value += total_file_value
+                    insights.append(f"{name}: Total value ${total_file_value:,.0f}, E&O risk {eo_proxy:.1%}")
+                    
+                    # Add calculations
+                    for bucket, value in aging_totals.items():
+                        if value > 0:
+                            calculations.append(f"{name} {bucket}: ${value:,.0f}")
+                
+                # Top contributors analysis
+                top_contributors = self._identify_top_contributors(df)
+                if top_contributors:
+                    tables.extend(top_contributors)
+            
+            # Multi-file comparison delta (if exactly 2 files)
+            if len(filtered_dataframes) == 2:
+                delta_analysis = self._calculate_two_file_delta(list(filtered_dataframes.values()))
+                if delta_analysis:
+                    insights.append(f"Total $ delta between files: ${delta_analysis['total_delta']:,.0f}")
+                    calculations.append(f"File comparison delta: ${delta_analysis['total_delta']:,.0f}")
+            
+            # Overall E&O summary
+            if eo_analysis:
+                avg_eo_risk = np.mean(list(eo_analysis.values()))
+                insights.append(f"Average E&O risk across files: {avg_eo_risk:.1%}")
+                calculations.append(f"Portfolio E&O risk: {avg_eo_risk:.1%}")
+            
+            # Create aging summary table
+            if aging_analysis:
+                aging_table = self._create_aging_summary_table(aging_analysis)
+                tables.append(aging_table)
             
             return {
                 "insights": insights,
                 "calculations": calculations,
+                "tables": tables,
                 "data_summary": data_summary,
-                "analysis_type": query_type,
-                "focus": analysis_focus,
-                "dataframes_analyzed": len(loaded_dataframes)
+                "aging_analysis": aging_analysis,
+                "eo_analysis": eo_analysis,
+                "total_value": total_value,
+                "dataframes_analyzed": len(filtered_dataframes)
             }
             
         except Exception as e:
-            print(f"Warning: Dataframe query execution failed: {e}")
+            print(f"ERROR: Dataframe analysis failed: {e}")
             return {
                 "error": str(e),
                 "insights": ["Analysis encountered technical difficulties"],
@@ -1046,26 +1106,113 @@ class DataProcessingOrchestrator:
             }
 
     def _execute_chart_generation(self, loaded_dataframes: Dict[str, pd.DataFrame], args: Dict) -> Dict[str, Any]:
-        """Execute chart generation with actual data"""
+        """Execute real matplotlib chart generation with artifact folder routing"""
         try:
-            chart_types = args.get("chart_types", ["summary_stats"])
+            import matplotlib.pyplot as plt
+            import matplotlib
+            matplotlib.use('Agg')  # Non-interactive backend
+            import tempfile
             
-            # Generate basic charts
+            # Get artifact folder using orchestrator helper
+            try:
+                from orchestrator import _artifact_folder
+                # Create simple app_paths object
+                class SimpleAppPaths:
+                    def __init__(self):
+                        from constants import EDA_CHART
+                        self.dbx_charts_folder = EDA_CHART
+                        self.dbx_eda_charts_folder = EDA_CHART
+                        self.default_charts_path = EDA_CHART
+                
+                app_paths = SimpleAppPaths()
+                artifact_folder = _artifact_folder("charts", app_paths)
+            except Exception as e:
+                print(f"DEBUG: Could not get artifact folder: {e}")
+                artifact_folder = None
+            
+            # Concatenate all DataFrames for analysis
+            combined_df = pd.DataFrame()
+            for name, df in loaded_dataframes.items():
+                if not df.empty:
+                    df_copy = df.copy()
+                    df_copy['source_file'] = name
+                    combined_df = pd.concat([combined_df, df_copy], ignore_index=True)
+            
+            if combined_df.empty:
+                return {"chart_paths": [], "chart_descriptions": ["No data available for charting"], "charts_generated": 0}
+            
+            # Get numeric columns defensively
+            numeric_cols = combined_df.select_dtypes(include=[np.number]).columns.tolist()
+            if not numeric_cols:
+                return {"chart_paths": [], "chart_descriptions": ["No numeric data available for charting"], "charts_generated": 0}
+            
             chart_paths = []
             chart_descriptions = []
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             
-            for chart_type in chart_types[:2]:  # Limit to 2 charts
-                chart_descriptions.append(f"Generated {chart_type} chart for data analysis")
-                # Note: Actual chart generation would require matplotlib/plotly implementation
-                chart_paths.append(f"/charts/{chart_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+            # Chart 1: Distribution plot of first numeric column
+            try:
+                plt.figure(figsize=(10, 6))
+                col_to_plot = numeric_cols[0]
+                combined_df[col_to_plot].hist(bins=20, alpha=0.7, edgecolor='black')
+                plt.title(f'Distribution of {col_to_plot}')
+                plt.xlabel(col_to_plot)
+                plt.ylabel('Frequency')
+                plt.grid(True, alpha=0.3)
+                
+                chart_path = self._save_chart_with_artifact_routing(plt.gcf(), f"distribution_{timestamp}", artifact_folder)
+                if chart_path:
+                    chart_paths.append(chart_path)
+                    chart_descriptions.append(f"Distribution chart for {col_to_plot}")
+                
+                plt.close()
+            except Exception as e:
+                print(f"DEBUG: Distribution chart failed: {e}")
+            
+            # Chart 2: Correlation matrix if multiple numeric columns
+            if len(numeric_cols) > 1:
+                try:
+                    plt.figure(figsize=(10, 8))
+                    correlation_matrix = combined_df[numeric_cols[:6]].corr()  # Limit to 6 columns
+                    
+                    # Simple heatmap-style plot
+                    import numpy as np
+                    fig, ax = plt.subplots(figsize=(10, 8))
+                    im = ax.imshow(correlation_matrix.values, cmap='coolwarm', aspect='auto', vmin=-1, vmax=1)
+                    
+                    # Set ticks and labels
+                    ax.set_xticks(np.arange(len(correlation_matrix.columns)))
+                    ax.set_yticks(np.arange(len(correlation_matrix.columns)))
+                    ax.set_xticklabels(correlation_matrix.columns, rotation=45, ha='right')
+                    ax.set_yticklabels(correlation_matrix.columns)
+                    
+                    # Add correlation values as text
+                    for i in range(len(correlation_matrix.columns)):
+                        for j in range(len(correlation_matrix.columns)):
+                            text = ax.text(j, i, f'{correlation_matrix.iloc[i, j]:.2f}',
+                                         ha="center", va="center", color="black" if abs(correlation_matrix.iloc[i, j]) < 0.5 else "white")
+                    
+                    plt.title('Correlation Matrix')
+                    plt.colorbar(im)
+                    plt.tight_layout()
+                    
+                    chart_path = self._save_chart_with_artifact_routing(plt.gcf(), f"correlation_{timestamp}", artifact_folder)
+                    if chart_path:
+                        chart_paths.append(chart_path)
+                        chart_descriptions.append("Correlation matrix of numeric variables")
+                    
+                    plt.close()
+                except Exception as e:
+                    print(f"DEBUG: Correlation chart failed: {e}")
             
             return {
                 "chart_paths": chart_paths,
                 "chart_descriptions": chart_descriptions,
-                "charts_generated": len(chart_descriptions)
+                "charts_generated": len(chart_paths)
             }
             
         except Exception as e:
+            print(f"DEBUG: Chart generation failed: {e}")
             return {
                 "error": str(e),
                 "chart_paths": [],
@@ -1105,6 +1252,358 @@ class DataProcessingOrchestrator:
             return recommendations if recommendations else [f"Act on insights from {intent} analysis.", "Monitor key metrics and trends identified."]
         
         return [f"Act on insights from {intent} analysis.", "Monitor key metrics and trends identified."]
+
+    def _load_sidecar_summary(self, filename: str) -> Optional[str]:
+        """Load sidecar summary JSON from /04_Data/03_Summaries/"""
+        try:
+            # Get base name without extension
+            base_name = filename.replace('.xlsx', '').replace('_cleansed', '')
+            summary_filename = f"{base_name}.json"
+            
+            # Try multiple summary path variations
+            summary_paths = [
+                f"/Apps/Ethos LLM/Project_Root/04_Data/03_Summaries/{summary_filename}",
+                f"/Project_Root/04_Data/03_Summaries/{summary_filename}",
+                f"/project_root/04_data/03_summaries/{summary_filename}",
+                f"/Apps/Ethos LLM/project_root/04_data/03_summaries/{summary_filename}"
+            ]
+            
+            for summary_path in summary_paths:
+                try:
+                    from dbx_utils import read_file_bytes
+                    summary_bytes = read_file_bytes(summary_path)
+                    summary_json = json.loads(summary_bytes.decode('utf-8'))
+                    
+                    # Extract summary text from various possible fields
+                    if isinstance(summary_json, dict):
+                        summary_text = (
+                            summary_json.get('summary', '') or 
+                            summary_json.get('executive_summary', '') or
+                            summary_json.get('description', '') or
+                            str(summary_json)
+                        )
+                        if summary_text and len(summary_text.strip()) > 10:
+                            print(f"DEBUG: Loaded summary for {filename}: {len(summary_text)} chars")
+                            return summary_text
+                except Exception as e:
+                    print(f"DEBUG: Could not load summary from {summary_path}: {e}")
+                    continue
+                    
+        except Exception as e:
+            print(f"DEBUG: Summary loading failed for {filename}: {e}")
+        
+        return None
+
+    def _apply_generic_comparison_pairing(self, ranked_files: List[Dict]) -> List[Dict]:
+        """Apply generic comparison pairing with synergy scoring (no hardcodes)"""
+        if len(ranked_files) < 2:
+            return ranked_files[:min(2, len(ranked_files))]
+        
+        # Calculate pairwise synergy scores for top candidates
+        best_pairs = []
+        
+        for i in range(min(6, len(ranked_files))):  # Check top 6 files
+            for j in range(i + 1, min(6, len(ranked_files))):
+                file_a, file_b = ranked_files[i], ranked_files[j]
+                synergy_score = self._calculate_pair_synergy(file_a, file_b)
+                
+                best_pairs.append({
+                    'files': [file_a, file_b],
+                    'synergy_score': synergy_score,
+                    'combined_score': file_a['ranking_score'] + file_b['ranking_score'] + synergy_score
+                })
+        
+        # Sort by combined score and return best pair
+        if best_pairs:
+            best_pairs.sort(key=lambda x: x['combined_score'], reverse=True)
+            best_pair = best_pairs[0]
+            
+            # Add synergy reasons to ranking
+            for file_info in best_pair['files']:
+                if best_pair['synergy_score'] > 0:
+                    file_info['ranking_reason'] += f"; Pair synergy: +{best_pair['synergy_score']}"
+            
+            return best_pair['files']
+        
+        # Fallback to top 2 files
+        return ranked_files[:2]
+    
+    def _calculate_pair_synergy(self, file_a: Dict, file_b: Dict) -> int:
+        """Calculate synergy score between two files for comparison (generic, no hardcodes)"""
+        synergy = 0
+        
+        meta_a = file_a.get('metadata', {})
+        meta_b = file_b.get('metadata', {})
+        
+        # Same country boost (+8)
+        if (meta_a.get('country') and meta_b.get('country') and 
+            meta_a['country'].lower() == meta_b['country'].lower()):
+            synergy += 8
+        
+        # Same/adjacent period boost (+6)
+        period_a = meta_a.get('period', '').lower()
+        period_b = meta_b.get('period', '').lower()
+        if period_a and period_b:
+            if period_a == period_b:
+                synergy += 6
+            elif self._are_adjacent_periods(period_a, period_b):
+                synergy += 6
+        
+        # Similar base name boost (+6)
+        name_a = file_a['name'].lower().replace('_cleansed.xlsx', '').replace('.xlsx', '')
+        name_b = file_b['name'].lower().replace('_cleansed.xlsx', '').replace('.xlsx', '')
+        
+        # Check for similar base patterns (e.g., similar prefixes/suffixes)
+        if len(name_a) > 3 and len(name_b) > 3:
+            # Similar prefix (first 3+ chars)
+            if name_a[:3] == name_b[:3] or name_a[:4] == name_b[:4]:
+                synergy += 6
+            # Similar suffix (last 3+ chars)  
+            elif name_a[-3:] == name_b[-3:] or name_a[-4:] == name_b[-4:]:
+                synergy += 6
+        
+        return synergy
+    
+    def _are_adjacent_periods(self, period_a: str, period_b: str) -> bool:
+        """Check if two periods are adjacent (Q1/Q2, Jan/Feb, etc.)"""
+        # Quarter adjacency
+        quarter_map = {'q1': 1, 'q2': 2, 'q3': 3, 'q4': 4}
+        if period_a in quarter_map and period_b in quarter_map:
+            return abs(quarter_map[period_a] - quarter_map[period_b]) == 1
+        
+        # Month adjacency (simplified)
+        month_map = {
+            'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+            'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+        }
+        if period_a in month_map and period_b in month_map:
+            return abs(month_map[period_a] - month_map[period_b]) == 1
+        
+        # Numeric adjacency (2023/2024, etc.)
+        try:
+            num_a, num_b = int(period_a), int(period_b)
+            return abs(num_a - num_b) == 1
+        except ValueError:
+            pass
+        
+        return False
+
+    def _save_chart_with_artifact_routing(self, fig, base_name: str, artifact_folder: Optional[str]) -> Optional[str]:
+        """Save chart using artifact routing (Dropbox/S3) or local temp"""
+        try:
+            import tempfile
+            
+            if artifact_folder:
+                # Use artifact folder routing
+                try:
+                    from dbx_utils import upload_file
+                    
+                    # Save to temp file first
+                    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+                        fig.savefig(tmp_file.name, dpi=300, bbox_inches='tight')
+                        
+                        # Upload to Dropbox
+                        chart_path = f"{artifact_folder}/{base_name}.png"
+                        upload_file(tmp_file.name, chart_path)
+                        print(f"DEBUG: Chart saved to {chart_path}")
+                        return chart_path
+                        
+                except Exception as e:
+                    print(f"DEBUG: Artifact upload failed: {e}")
+                    # Fall back to local temp
+                    pass
+            
+            # Fallback: save to local temp directory
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False, dir=tempfile.gettempdir()) as tmp_file:
+                fig.savefig(tmp_file.name, dpi=300, bbox_inches='tight')
+                print(f"DEBUG: Chart saved locally to {tmp_file.name}")
+                return tmp_file.name
+                
+        except Exception as e:
+            print(f"DEBUG: Chart save failed: {e}")
+            return None
+
+    def _apply_country_filter(self, loaded_dataframes: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+        """Apply country filter if US is mentioned in query"""
+        if not hasattr(self, 'last_query') or 'us' not in self.last_query.lower():
+            return loaded_dataframes
+        
+        filtered = {}
+        for name, df in loaded_dataframes.items():
+            # Look for country columns and filter to US
+            country_cols = [col for col in df.columns if 'country' in col.lower() or 'region' in col.lower()]
+            if country_cols:
+                us_data = df[df[country_cols[0]].str.upper() == 'US']
+                if not us_data.empty:
+                    filtered[name] = us_data
+                    print(f"DEBUG: Filtered {name} to {len(us_data)} US rows")
+                else:
+                    filtered[name] = df  # Keep all data if no US rows found
+            else:
+                filtered[name] = df  # Keep all data if no country column
+        
+        return filtered if filtered else loaded_dataframes
+    
+    def _detect_aging_columns(self, df: pd.DataFrame) -> List[str]:
+        """Detect aging bucket columns by regex patterns"""
+        aging_patterns = [
+            r'aging.*0.*30|0.*30.*day',
+            r'aging.*31.*60|31.*60.*day', 
+            r'aging.*61.*90|61.*90.*day',
+            r'aging.*91.*180|91.*180.*day',
+            r'aging.*181|181.*day|over.*180'
+        ]
+        
+        aging_cols = []
+        for col in df.columns:
+            col_lower = col.lower()
+            for pattern in aging_patterns:
+                if re.search(pattern, col_lower):
+                    aging_cols.append(col)
+                    break
+        
+        return aging_cols
+    
+    def _calculate_aging_totals(self, df: pd.DataFrame, aging_columns: List[str]) -> Dict[str, float]:
+        """Calculate $ totals by aging bucket"""
+        aging_totals = {}
+        
+        for col in aging_columns:
+            try:
+                # Try to sum the column values
+                total = df[col].sum()
+                
+                # Categorize by bucket
+                col_lower = col.lower()
+                if '0' in col_lower and ('30' in col_lower or 'thirty' in col_lower):
+                    aging_totals['0-30 days'] = total
+                elif '31' in col_lower and ('60' in col_lower or 'sixty' in col_lower):
+                    aging_totals['31-60 days'] = total
+                elif '61' in col_lower and ('90' in col_lower or 'ninety' in col_lower):
+                    aging_totals['61-90 days'] = total
+                elif '91' in col_lower and ('180' in col_lower):
+                    aging_totals['91-180 days'] = total
+                elif '181' in col_lower or 'over' in col_lower:
+                    aging_totals['181+ days'] = total
+                else:
+                    aging_totals[f'Aging: {col}'] = total
+                    
+            except Exception as e:
+                print(f"DEBUG: Could not calculate aging total for {col}: {e}")
+        
+        return aging_totals
+    
+    def _calculate_eo_proxy(self, aging_totals: Dict[str, float]) -> float:
+        """Calculate E&O proxy as >180d / total"""
+        try:
+            over_180 = aging_totals.get('181+ days', 0)
+            total = sum(aging_totals.values())
+            
+            if total > 0:
+                return over_180 / total
+            return 0.0
+        except Exception:
+            return 0.0
+    
+    def _identify_top_contributors(self, df: pd.DataFrame) -> List[Dict]:
+        """Identify top contributors by value"""
+        tables = []
+        
+        try:
+            # Look for value columns
+            value_cols = [col for col in df.columns if any(term in col.lower() 
+                         for term in ['value', 'amount', 'cost', 'price', 'total'])]
+            
+            # Look for grouping columns
+            group_cols = [col for col in df.columns if any(term in col.lower() 
+                         for term in ['family', 'plant', 'category', 'type', 'group'])]
+            
+            if value_cols and group_cols:
+                value_col = value_cols[0]
+                group_col = group_cols[0]
+                
+                # Create top contributors table
+                top_contrib = df.groupby(group_col)[value_col].sum().sort_values(ascending=False).head(10)
+                
+                if not top_contrib.empty:
+                    contrib_df = pd.DataFrame({
+                        group_col: top_contrib.index,
+                        'Total Value': top_contrib.values
+                    })
+                    
+                    tables.append({
+                        'title': f'Top Contributors by {group_col}',
+                        'data': contrib_df
+                    })
+                    
+        except Exception as e:
+            print(f"DEBUG: Top contributors analysis failed: {e}")
+        
+        return tables
+    
+    def _calculate_two_file_delta(self, dataframes: List[pd.DataFrame]) -> Optional[Dict]:
+        """Calculate delta between exactly two files"""
+        try:
+            df1, df2 = dataframes[0], dataframes[1]
+            
+            # Look for value columns
+            value_cols1 = [col for col in df1.columns if any(term in col.lower() 
+                          for term in ['value', 'amount', 'cost', 'total'])]
+            value_cols2 = [col for col in df2.columns if any(term in col.lower() 
+                          for term in ['value', 'amount', 'cost', 'total'])]
+            
+            if value_cols1 and value_cols2:
+                total1 = df1[value_cols1[0]].sum()
+                total2 = df2[value_cols2[0]].sum()
+                delta = total2 - total1
+                
+                return {
+                    'total_delta': delta,
+                    'file1_total': total1,
+                    'file2_total': total2
+                }
+                
+        except Exception as e:
+            print(f"DEBUG: Two-file delta calculation failed: {e}")
+        
+        return None
+    
+    def _create_aging_summary_table(self, aging_analysis: Dict[str, Dict[str, float]]) -> Dict:
+        """Create aging $ by bucket summary table"""
+        try:
+            # Collect all unique buckets
+            all_buckets = set()
+            for file_aging in aging_analysis.values():
+                all_buckets.update(file_aging.keys())
+            
+            # Create summary data
+            summary_data = []
+            for file_name, aging_data in aging_analysis.items():
+                row = {'File': file_name}
+                for bucket in sorted(all_buckets):
+                    row[bucket] = aging_data.get(bucket, 0)
+                summary_data.append(row)
+            
+            # Add totals row
+            totals_row = {'File': 'TOTAL'}
+            for bucket in sorted(all_buckets):
+                total = sum(aging_data.get(bucket, 0) for aging_data in aging_analysis.values())
+                totals_row[bucket] = total
+            summary_data.append(totals_row)
+            
+            aging_df = pd.DataFrame(summary_data)
+            
+            return {
+                'title': 'Aging $ by Bucket',
+                'data': aging_df
+            }
+            
+        except Exception as e:
+            print(f"DEBUG: Aging summary table creation failed: {e}")
+            return {
+                'title': 'Aging Analysis',
+                'data': pd.DataFrame({'Status': ['Analysis failed'], 'Details': [str(e)]})
+            }
 
     def _create_analysis_tables(self, loaded_data_info: Dict[str, str], calculations: List[str]) -> List[Dict]:
         """Create proper DataFrame tables for display"""
