@@ -1,0 +1,106 @@
+# deployment/kubernetes/service.yaml
+# Phase 6: Kubernetes Service Configuration
+# Load balancer and service discovery for SCIE Ethos application
+
+---
+# Main application service
+apiVersion: v1
+kind: Service
+metadata:
+  name: scie-ethos-service
+  namespace: production
+  labels:
+    app: scie-ethos
+    service: main
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "http"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "${SSL_CERT_ARN}"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: "/_stcore/health"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-interval: "10"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-timeout: "5"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-healthy-threshold: "2"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-unhealthy-threshold: "3"
+spec:
+  type: LoadBalancer
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8501
+    protocol: TCP
+  - name: https
+    port: 443
+    targetPort: 8501
+    protocol: TCP
+  selector:
+    app: scie-ethos
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800  # 3 hours
+
+---
+# Internal service for inter-service communication
+apiVersion: v1
+kind: Service
+metadata:
+  name: scie-ethos-internal
+  namespace: production
+  labels:
+    app: scie-ethos
+    service: internal
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 8501
+    targetPort: 8501
+    protocol: TCP
+  selector:
+    app: scie-ethos
+
+---
+# Headless service for StatefulSet (if needed)
+apiVersion: v1
+kind: Service
+metadata:
+  name: scie-ethos-headless
+  namespace: production
+  labels:
+    app: scie-ethos
+    service: headless
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+  - name: http
+    port: 8501
+    targetPort: 8501
+    protocol: TCP
+  selector:
+    app: scie-ethos
+
+---
+# Service for metrics collection
+apiVersion: v1
+kind: Service
+metadata:
+  name: scie-ethos-metrics
+  namespace: production
+  labels:
+    app: scie-ethos
+    service: metrics
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8501"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  ports:
+  - name: metrics
+    port: 8501
+    targetPort: 8501
+    protocol: TCP
+  selector:
+    app: scie-ethos

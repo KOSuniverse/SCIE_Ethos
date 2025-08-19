@@ -1,0 +1,359 @@
+# deployment/kubernetes/configmap.yaml
+# Phase 6: Kubernetes ConfigMap Configuration
+# Application configuration and environment-specific settings
+
+---
+# Main application configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scie-ethos-config
+  namespace: production
+  labels:
+    app: scie-ethos
+    config: main
+data:
+  # Application configuration
+  production.yaml: |
+    # Production environment configuration
+    environment: production
+    debug: false
+    log_level: INFO
+    
+    # Database configuration
+    database:
+      host: "${DB_HOST}"
+      port: 5432
+      name: "${DB_NAME}"
+      user: "${DB_USER}"
+      password: "${DB_PASSWORD}"
+      pool_size: 20
+      max_overflow: 30
+      pool_timeout: 30
+      pool_recycle: 3600
+      echo: false
+    
+    # Redis configuration
+    redis:
+      host: "${REDIS_HOST}"
+      port: 6379
+      password: "${REDIS_PASSWORD}"
+      db: 0
+      max_connections: 100
+      retry_on_timeout: true
+      socket_timeout: 30
+      socket_connect_timeout: 30
+    
+    # Cache configuration
+    cache:
+      default_timeout: 3600
+      key_prefix: "scie_ethos:"
+      version: 1
+    
+    # Session configuration
+    session:
+      lifetime: 86400  # 24 hours
+      cookie_secure: true
+      cookie_httponly: true
+      cookie_samesite: "Strict"
+    
+    # Security configuration
+    security:
+      secret_key: "${SECRET_KEY}"
+      jwt_secret: "${JWT_SECRET}"
+      jwt_expiry: 3600
+      password_hash_rounds: 12
+      max_login_attempts: 5
+      lockout_duration: 300
+    
+    # Monitoring configuration
+    monitoring:
+      enabled: true
+      metrics_endpoint: "/metrics"
+      health_endpoint: "/_stcore/health"
+      prometheus_enabled: true
+      new_relic_enabled: true
+      datadog_enabled: true
+    
+    # Logging configuration
+    logging:
+      level: INFO
+      format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+      handlers:
+        - console
+        - file
+        - elasticsearch
+      file_handler:
+        filename: "/app/logs/scie-ethos.log"
+        max_bytes: 104857600  # 100MB
+        backup_count: 5
+      elasticsearch_handler:
+        host: "${ELASTICSEARCH_HOST}"
+        port: 9200
+        index: "scie-ethos-logs"
+    
+    # API configuration
+    api:
+      rate_limit: 1000
+      rate_limit_window: 3600
+      max_request_size: 104857600  # 100MB
+      timeout: 120
+    
+    # OpenAI configuration
+    openai:
+      api_key: "${OPENAI_API_KEY}"
+      model: "gpt-4o-mini"
+      max_tokens: 4000
+      temperature: 0.1
+      timeout: 60
+    
+    # AWS configuration
+    aws:
+      access_key_id: "${AWS_ACCESS_KEY_ID}"
+      secret_access_key: "${AWS_SECRET_ACCESS_KEY}"
+      region: "${AWS_DEFAULT_REGION}"
+      s3_bucket: "${S3_BUCKET}"
+    
+    # Dropbox configuration
+    dropbox:
+      access_token: "${DROPBOX_ACCESS_TOKEN}"
+      app_key: "${DROPBOX_APP_KEY}"
+      app_secret: "${DROPBOX_APP_SECRET}"
+    
+    # Feature flags
+    features:
+      phase1_enabled: true
+      phase2_enabled: true
+      phase3_enabled: true
+      phase4_enabled: true
+      phase5_enabled: true
+      phase6_enabled: true
+      experimental_features: false
+      beta_features: false
+    
+    # Performance tuning
+    performance:
+      max_workers: 4
+      worker_timeout: 120
+      request_timeout: 60
+      connection_timeout: 30
+      read_timeout: 60
+      write_timeout: 60
+    
+    # Data processing configuration
+    data_processing:
+      max_file_size: 104857600  # 100MB
+      max_files: 100
+      chunk_size: 8192
+      temp_dir: "/tmp"
+      cleanup_interval: 3600
+    
+    # Knowledge base configuration
+    knowledge_base:
+      vector_store: "faiss"
+      embedding_model: "text-embedding-3-small"
+      chunk_size: 1000
+      chunk_overlap: 200
+      max_chunks: 10000
+    
+    # Backup configuration
+    backup:
+      enabled: true
+      schedule: "0 2 * * *"  # Daily at 2 AM
+      retention_days: 30
+      s3_backup: true
+      local_backup: false
+
+  # Nginx configuration for reverse proxy
+  nginx.conf: |
+    upstream scie_ethos {
+        server scie-ethos-internal:8501;
+    }
+    
+    server {
+        listen 80;
+        server_name _;
+        
+        # Security headers
+        add_header X-Frame-Options DENY;
+        add_header X-Content-Type-Options nosniff;
+        add_header X-XSS-Protection "1; mode=block";
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains";
+        add_header Content-Security-Policy "default-src 'self'";
+        
+        # Rate limiting
+        limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+        limit_req zone=api burst=20 nodelay;
+        
+        # Health check endpoint
+        location /_stcore/health {
+            proxy_pass http://scie_ethos;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+        
+        # Main application
+        location / {
+            proxy_pass http://scie_ethos;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            
+            # WebSocket support
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            
+            # Timeouts
+            proxy_connect_timeout 60s;
+            proxy_send_timeout 60s;
+            proxy_read_timeout 60s;
+            
+            # Buffer settings
+            proxy_buffer_size 4k;
+            proxy_buffers 8 4k;
+            proxy_busy_buffers_size 8k;
+        }
+        
+        # Static files
+        location /static/ {
+            alias /app/static/;
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
+        
+        # Metrics endpoint (restricted)
+        location /metrics {
+            allow 10.0.0.0/8;
+            allow 172.16.0.0/12;
+            allow 192.168.0.0/16;
+            deny all;
+            
+            proxy_pass http://scie_ethos;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+    }
+
+---
+# Logging configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scie-ethos-logging-config
+  namespace: production
+  labels:
+    app: scie-ethos
+    config: logging
+data:
+  logging.yaml: |
+    version: 1
+    disable_existing_loggers: false
+    
+    formatters:
+      standard:
+        format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+      detailed:
+        format: '%(asctime)s - %(name)s - %(levelname)s - %(module)s - %(funcName)s - %(lineno)d - %(message)s'
+      json:
+        class: pythonjsonlogger.jsonlogger.JsonFormatter
+        format: '%(asctime)s %(name)s %(levelname)s %(module)s %(funcName)s %(lineno)d %(message)s'
+    
+    handlers:
+      console:
+        class: logging.StreamHandler
+        level: INFO
+        formatter: standard
+        stream: ext://sys.stdout
+      
+      file:
+        class: logging.handlers.RotatingFileHandler
+        level: INFO
+        formatter: detailed
+        filename: /app/logs/scie-ethos.log
+        maxBytes: 104857600  # 100MB
+        backupCount: 5
+      
+      elasticsearch:
+        class: cmreslogging.handlers.CMRESHandler
+        level: INFO
+        formatter: json
+        hosts:
+          - host: elasticsearch-service
+            port: 9200
+        es_index_name: scie-ethos-logs
+        es_doc_type: log
+    
+    loggers:
+      scie_ethos:
+        level: INFO
+        handlers: [console, file, elasticsearch]
+        propagate: false
+      
+      orchestrator:
+        level: INFO
+        handlers: [console, file, elasticsearch]
+        propagate: false
+      
+      phase5_governance:
+        level: INFO
+        handlers: [console, file, elasticsearch]
+        propagate: false
+    
+    root:
+      level: WARNING
+      handlers: [console]
+
+---
+# Monitoring configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scie-ethos-monitoring-config
+  namespace: production
+  labels:
+    app: scie-ethos
+    config: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    
+    scrape_configs:
+    - job_name: 'scie-ethos'
+      static_configs:
+      - targets: ['scie-ethos-metrics:8501']
+      scrape_interval: 15s
+      metrics_path: /metrics
+      scheme: http
+    
+    - job_name: 'kubernetes-pods'
+      kubernetes_sd_configs:
+      - role: pod
+      relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: true
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      - action: labelmap
+        regex: __meta_kubernetes_pod_label_(.+)
+      - source_labels: [__meta_kubernetes_namespace]
+        action: replace
+        target_label: kubernetes_namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        action: replace
+        target_label: kubernetes_pod_name
