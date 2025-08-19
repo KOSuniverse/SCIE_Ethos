@@ -1654,9 +1654,9 @@ else:
                             cleansed_paths=cleansed_paths,
                             answer_style="concise",
                         )
-                except Exception as e:
-                    st.error(f"Query processing error: {e}")
-                    result = None
+                    except Exception as fallback_error:
+                        st.error(f"❌ Fallback orchestrator error: {fallback_error}")
+                        result = None
 
             if result:
                 # ENHANCED: Display using standard_report schema
