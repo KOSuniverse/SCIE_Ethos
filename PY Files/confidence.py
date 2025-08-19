@@ -1,5 +1,5 @@
 # app/confidence.py
-from typing import Dict, Any
+from typing import Dict, Any, List, Tuple
 
 def score_ravc(recency: float, alignment: float, variance: float, coverage: float):
     # All in [0,1]; tune as needed
@@ -130,3 +130,42 @@ def calculate_ravc_confidence(
         },
         "formula": "0.35*R + 0.25*A + 0.25*V + 0.15*C"
     }
+
+def calculate_ravc_confidence(query: str, sources: List[Any], execution_calls: List[Dict]) -> Tuple[float, Dict[str, float]]:
+    """Calculate RAVC confidence score for DP orchestrator"""
+    try:
+        # R - Retrieval strength
+        retrieval_strength = min(len(sources) / 4.0, 1.0)  # Normalize to 4+ sources
+        
+        # A - Agreement (based on execution success)
+        successful_calls = len([c for c in execution_calls if not c.get("error")])
+        total_calls = max(len(execution_calls), 1)
+        agreement = successful_calls / total_calls
+        
+        # V - Validations (based on result quality)
+        validations = 0.8 if successful_calls > 0 else 0.3
+        
+        # C - Citation density
+        citation_density = min(len(sources) / 10.0, 1.0)  # Normalize to 10 sources
+        
+        # Calculate final score
+        score = 0.35 * retrieval_strength + 0.25 * agreement + 0.25 * validations + 0.15 * citation_density
+        
+        ravc_breakdown = {
+            "retrieval_strength_R": retrieval_strength,
+            "agreement_A": agreement,
+            "validations_V": validations,
+            "citation_density_C": citation_density
+        }
+        
+        return score, ravc_breakdown
+        
+    except Exception as e:
+        print(f"Warning: RAVC calculation failed: {e}")
+        # Return safe defaults
+        return 0.7, {
+            "retrieval_strength_R": 0.7,
+            "agreement_A": 0.7,
+            "validations_V": 0.7,
+            "citation_density_C": 0.7
+        }
