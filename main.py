@@ -2009,11 +2009,9 @@ try:
                 st.warning("Need at least 2 files for comparison")
         
         with col3:
-            comparison_type = st.selectbox(
-                "Comparison Type",
-                ["Auto-Detect", "WIP Aging", "Inventory", "Financials"],
-                help="Auto-Detect will analyze data structure to determine best comparison method"
-            )
+            # FIXED: Removed dropdown per master instructions - auto-detect only
+            comparison_type = "Auto-Detect"  # Always auto-detect per policy
+            st.info("🔍 **Auto-Detection Enabled** - Strategy automatically determined from data structure")
         
         # Create comparison pair from selections
         if selected_file2_idx is not None:
