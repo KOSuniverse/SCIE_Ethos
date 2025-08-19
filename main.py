@@ -2190,3 +2190,64 @@ if 'cleaned_sheets' in st.session_state and st.session_state.cleaned_sheets:
         st.info("This section can be enhanced with the charting functions from charting.py")
 else:
     st.info("Upload and process files first to enable chart generation.")
+
+# =============================================================================
+# Phase 5A: Usage Dashboard
+# =============================================================================
+st.markdown("---")
+st.header("📊 Usage Dashboard")
+st.markdown("**Phase 5A**: Query logs and usage analytics")
+
+try:
+    from PY_Files.phase5_governance.usage_dashboard import UsageDashboard
+    
+    dashboard = UsageDashboard()
+    
+    # Create tabs for different views
+    tab1, tab2 = st.tabs(["📈 Full Dashboard", "📋 Summary Widget"])
+    
+    with tab1:
+        dashboard.render_usage_page()
+    
+    with tab2:
+        dashboard.render_usage_summary_widget()
+        
+        # Show missing data report summary
+        st.markdown("---")
+        st.subheader("🔍 Data Quality Summary")
+        
+        try:
+            from PY_Files.phase5_governance.data_gap_analyzer import DataGapAnalyzer
+            
+            gap_analyzer = DataGapAnalyzer()
+            
+            # Check if missing data report exists
+            if gap_analyzer.report_path.exists():
+                with open(gap_analyzer.report_path, 'r') as f:
+                    import json
+                    report = json.load(f)
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("Analyses", report.get("total_analyses", 0))
+                
+                with col2:
+                    avg_impact = report.get("summary", {}).get("avg_impact_score", 0)
+                    st.metric("Avg Impact", f"{avg_impact:.1f}/10")
+                
+                with col3:
+                    top_missing = report.get("top_missing_fields", {}).get("critical", [])
+                    st.metric("Top Missing", len(top_missing))
+                
+                if st.button("📋 View Full Missing Data Report"):
+                    st.json(report)
+            else:
+                st.info("Missing data report will be generated after several queries.")
+                
+        except ImportError:
+            st.warning("⚠️ Phase 5B Data Gap Analyzer not available")
+            
+except ImportError:
+    st.warning("⚠️ Phase 5A Usage Dashboard not available")
+    st.info("Usage analytics will be available once the phase5_governance module is properly installed.")
