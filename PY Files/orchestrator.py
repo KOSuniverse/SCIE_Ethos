@@ -4,13 +4,30 @@ from __future__ import annotations
 import os
 import re
 import json
+import yaml
 from typing import Any, Dict, List, Optional, Tuple, Callable
+from pathlib import Path
 
 import pandas as pd
 
 # Enterprise foundation imports
 from constants import PROJECT_ROOT, DATA_ROOT, EDA_CHART, COMPARES
 from path_utils import join_root, canon_path
+
+# Load master instructions for unified routing
+try:
+    instructions_path = Path(__file__).parent.parent / "prompts" / "instructions_master.yaml"
+    with open(instructions_path, 'r') as f:
+        MASTER_INSTRUCTIONS = yaml.safe_load(f)
+    INTENT_ROUTING = MASTER_INSTRUCTIONS.get('intent_routing', {})
+    TOOL_REGISTRY = MASTER_INSTRUCTIONS.get('tool_registry', {})
+    QUALITY_PROTOCOL = MASTER_INSTRUCTIONS.get('quality_protocol', {})
+except Exception as e:
+    print(f"Warning: Could not load master instructions: {e}")
+    MASTER_INSTRUCTIONS = {}
+    INTENT_ROUTING = {}
+    TOOL_REGISTRY = {}
+    QUALITY_PROTOCOL = {}
 
 # ChatGPT's simplified approach with enterprise foundations
 try:
@@ -1084,6 +1101,29 @@ def _execute_plan(plan: List[Dict[str, Any]], app_paths: Any) -> Dict[str, Any]:
             except Exception as e:
                 calls.append({"tool": tool, "args": args, "error": f"Export failed: {e}"})
 
+        # CRITICAL: Phase 2.5 Comparison Tools
+        elif tool == "compare_files":
+            try:
+                from tools_runtime import compare_files
+                res = compare_files(**args)
+                calls.append({"tool": tool, "args": args, "result_meta": res})
+                if res.get("comparison_workbook_path"):
+                    artifacts.append(res["comparison_workbook_path"])
+                if res.get("charts"):
+                    artifacts.extend(res["charts"])
+            except Exception as e:
+                calls.append({"tool": tool, "args": args, "error": f"Comparison failed: {e}"})
+
+        elif tool == "generate_comparison_charts":
+            try:
+                from tools_runtime import generate_comparison_charts
+                res = generate_comparison_charts(**args)
+                calls.append({"tool": tool, "args": args, "result_meta": res})
+                if res.get("chart_paths"):
+                    artifacts.extend(res["chart_paths"])
+            except Exception as e:
+                calls.append({"tool": tool, "args": args, "error": f"Chart generation failed: {e}"})
+
         else:
             calls.append({"tool": tool, "args": args, "error": "Unsupported tool"})
 
@@ -1203,26 +1243,51 @@ Return JSON only.
 
 
 def _fallback_intent(user_question: str) -> Tuple[str, float]:
+    """Enhanced intent detection using master instructions routing."""
     q = user_question.lower()
-    if any(k in q for k in WIP_EO_BIAS_KEYWORDS["wip"]) or any(k in q for k in WIP_EO_BIAS_KEYWORDS["eo"]):
-        if any(w in q for w in ["why", "cause", "driver", "increase", "rise", "spike", "root"]):
-            return "root_cause", 0.62
-    if any(w in q for w in ["compare", "difference", "delta", "vs", "change", "trend vs"]):
-        return "compare", 0.58
+    
+    # CRITICAL: Phase 2.5 comparison detection (highest priority from master instructions)
+    comparison_patterns = ["compare", "vs", "versus", "difference", "delta", "change", "trend vs"]
+    if any(pattern in q for pattern in comparison_patterns):
+        return "comparison", 0.85  # High confidence for comparison routing
+    
+    # Enhanced pattern matching for file comparisons
+    if re.search(r'(file\s+\w+\s+vs\s+file\s+\w+|q[1-4]\s+vs\s+q[1-4]|\w+\s+vs\s+\w+)', q):
+        return "comparison", 0.90
+    
+    # Root cause analysis (from master instructions) - enhanced detection
+    root_cause_keywords = ["why", "cause", "driver", "increase", "rise", "spike", "root", "reason", "explain"]
+    if any(w in q for w in root_cause_keywords):
+        # Higher confidence if WIP/EO context
+        if any(k in q for k in WIP_EO_BIAS_KEYWORDS.get("wip", [])) or any(k in q for k in WIP_EO_BIAS_KEYWORDS.get("eo", [])):
+            return "root_cause", 0.85
+        # Still root cause even without WIP/EO context
+        return "root_cause", 0.75
+    
+    # Forecasting and modeling (from master instructions)
     if any(w in q for w in ["forecast", "predict", "par", "reorder point", "rop", "safety stock", "seasonal"]):
-        return "forecast", 0.58
-    if any(w in q for w in ["profile", "distribution", "eda", "summary stats", "outlier"]):
-        return "eda", 0.55
-    if any(w in q for w in ["rank", "top", "prioritize", "score", "highest"]):
-        return "rank", 0.55
-    if any(w in q for w in ["anomaly", "unexpected", "spike", "drop", "weird"]):
-        return "anomaly", 0.55
-    if any(w in q for w in ["optimize", "policy", "procedure", "parameter", "improve"]):
-        return "optimize", 0.55
-    if any(w in q for w in ["filter", "only show", "just", "subset", "limit to"]):
-        return "filter", 0.55
+        return "forecasting", 0.75
+        
+    # Knowledge base lookup (from master instructions)
+    if any(w in q for w in ["policy", "procedure", "guideline", "standard", "best practice"]):
+        return "kb_lookup", 0.70
+    
+    # EDA and analysis patterns
+    if any(w in q for w in ["profile", "distribution", "eda", "summary stats", "outlier", "analyze", "statistics"]):
+        return "eda", 0.65
     if any(w in q for w in ["summarize", "tl;dr", "brief", "overview"]):
-        return "summarize", 0.55
+        return "eda", 0.65
+        
+    # Other patterns (lower priority)
+    if any(w in q for w in ["rank", "top", "prioritize", "score", "highest"]):
+        return "eda", 0.55  # Ranking is part of EDA
+    if any(w in q for w in ["anomaly", "unexpected", "spike", "drop", "weird"]):
+        return "root_cause", 0.55  # Anomalies need root cause analysis
+    if any(w in q for w in ["optimize", "parameter", "improve"]):
+        return "forecasting", 0.55  # Optimization often involves forecasting
+    if any(w in q for w in ["filter", "only show", "just", "subset", "limit to"]):
+        return "eda", 0.55
+        
     return "eda", 0.45
 
 
