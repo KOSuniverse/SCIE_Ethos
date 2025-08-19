@@ -133,20 +133,36 @@ def _render_stepwise_plan(intent: str) -> str:
 
 def _render_answer_format(style: str) -> str:
     return textwrap.dedent(f"""\
-    Answer Format ({style}):
-    1) TL;DR — one paragraph with the direct answer.
-    2) What I did — list of tools called and key filters/assumptions.
-    3) Findings — concise bullets with numbers and units.
-    4) Recommendations — concrete next actions (who/what/when).
-    5) Citations — data artifacts and KB sources used (paths/IDs).
-    6) Confidence — show confidence badge (High/Medium/Low) and abstention status if applicable.
-    If low confidence: include a brief clarifying question.
+    Answer Format ({style}) - PHASE 3 TEMPLATE:
+    ## Title
+    [Descriptive title with specific scope and metrics]
+    
+    ## Executive Insight
+    [One paragraph executive summary with key finding and $$ impact]
+    
+    ## Detailed Analysis
+    [Tables and charts with specific identifiers - MUST include ≥2 identifiers per claim]
+    
+    ### Driver Table with $$ Impacts
+    | Driver | Impact ($) | Specific Identifier | Location/Vendor |
+    |--------|-----------|---------------------|------------------|
+    [Each row must have specific SKUs/vendors/locations with dollar deltas]
+    
+    ## Recommendations
+    [Concrete next actions with who/what/when and priority]
+    
+    ## Citations
+    [≥4 KB sources with document titles and sections]
+    
+    ## Limits/Missing Data
+    [List gaps that prevent higher confidence analysis]
 
-    ALWAYS:
-    - Use concrete dates and units.
-    - State uncertainty and data gaps when relevant.
-    - Provide Dropbox paths for any saved outputs you reference.
-    - If abstaining, clearly state why and what data is missing.
+    CRITICAL REQUIREMENTS:
+    - Each claim MUST have ≥2 specific identifiers (SKU, vendor, location, job#, part#)
+    - Show actual $$ deltas, not vague statements like "costs are high"
+    - Include specific locations, vendors, part numbers in every finding
+    - Confidence badge must show numeric score and High/Med/Low label
+    - If confidence < 0.55, escalate to stronger model
     """)
 
 

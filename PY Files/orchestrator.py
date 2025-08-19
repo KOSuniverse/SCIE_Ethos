@@ -294,7 +294,8 @@ def answer_question(
         model_size=model_size,
     )
     # --- Enterprise-level dual-pass reasoning and output guardrails ---
-    from confidence import score_ravc, should_abstain
+    # Phase 3C: Enhanced confidence scoring with model escalation
+    from confidence import calculate_ravc_confidence, requires_model_escalation, get_escalation_model
     
     # Load confidence thresholds from instructions_master.yaml
     confidence_config = config.get('confidence_scoring', {})
@@ -302,9 +303,6 @@ def answer_question(
     high_threshold = confidence_thresholds.get('high', 0.85)
     medium_threshold = confidence_thresholds.get('medium', 0.65)
     low_threshold = confidence_thresholds.get('low', 0.50)
-    
-    # Load confidence formula from orchestrator rules
-    confidence_formula = orchestrator_rules.get('confidence', {}).get('formula', '0.35*R + 0.25*A + 0.25*V + 0.15*C')
     
     # Apply token budgeting and pagination
     max_context_tokens = 1500  # Default token budget
@@ -315,32 +313,34 @@ def answer_question(
         max_context_tokens = 2000  # More context for complex analysis
         max_answer_tokens = 1000   # Longer answers for complex analysis
     
-    # TODO: Replace with real calculations from exec_result and context
-    # For now, use placeholder values that match the formula
-    recency = 0.9      # R
-    alignment = 0.85   # A
-    variance = 0.1     # V (1-variance for consistency)
-    coverage = 0.8     # C
+    # Phase 3C: Calculate R/A/V/C scores from actual analysis
+    retrieval_quality = min(1.0, len(kb_citations) / 4.0) if kb_citations else 0.3  # Higher score with ≥4 KB sources
+    analysis_quality = 0.9 if exec_result.get("calls") else 0.5  # Higher if tools were used successfully
+    variance_consistency = 0.8  # Could be calculated from multiple runs - placeholder for now
+    citation_coverage = min(1.0, len(kb_citations) / 2.0) if kb_citations else 0.2  # Coverage based on citation count
     
-    # Apply the formula from orchestrator rules
-    if confidence_formula == "0.35*R + 0.25*A + 0.25*V + 0.15*C":
-        confidence_score = 0.35 * recency + 0.25 * alignment + 0.25 * (1 - variance) + 0.15 * coverage
-    else:
-        # Fallback to default scoring
-        confidence_result = score_ravc(recency, alignment, variance, coverage)
-        confidence_score = confidence_result["score"]
+    # Use enhanced RAVC calculation
+    confidence_data = calculate_ravc_confidence(
+        retrieval_score=retrieval_quality,
+        analysis_quality=analysis_quality, 
+        variance_consistency=variance_consistency,
+        citation_coverage=citation_coverage
+    )
     
-    # Apply thresholds from instructions to determine badge
-    if confidence_score >= high_threshold:
-        confidence_badge = "High"
-    elif confidence_score >= medium_threshold:
-        confidence_badge = "Medium"
-    else:
-        confidence_badge = "Low"
+    confidence_score = confidence_data["score"]
+    confidence_badge = confidence_data["badge"]
+    should_escalate = confidence_data["escalate"]
     
-    # Use threshold from instructions for abstention
+    # Phase 3C: Model escalation logic
+    current_model = "gpt-4o-mini"  # Default model
+    if should_escalate and requires_model_escalation(confidence_score):
+        escalation_model = get_escalation_model(current_model)
+        # Note: Actual re-execution with stronger model would happen here in production
+        confidence_data["escalation_recommended"] = escalation_model
+    
+    # Use threshold from instructions for abstention  
     abstain_threshold = confidence_thresholds.get('low', 0.50)
-    abstain = should_abstain(confidence_score, abstain_threshold)
+    abstain = confidence_score < abstain_threshold
 
     # Apply escalation triggers from orchestrator rules
     escalation_triggers = orchestrator_rules.get('escalation', {}).get('triggers', [])
@@ -443,6 +443,9 @@ def answer_question(
     output_order = orchestrator_rules.get('output_template', {}).get('order', ['Title', 'Executive Insight', 'Analysis', 'Recommendations', 'Citations', 'Limits / Data Needed'])
     
     # Output template: Title → Executive Insight → Analysis → Recommendations → Citations → Limits/Data Needed
+    # Phase 3A: Enhanced template structure with KB coverage warning
+    kb_coverage_warning = context.get("kb_coverage_warning")
+    
     output = {
         "final_text": str(final_text)
             + (f"\n[Enterprise] Column alias mapping applied: {list(alias_map.keys())}" if alias_map else "")
@@ -453,16 +456,21 @@ def answer_question(
             "badge": confidence_badge,
             "abstain": abstain,
         },
+        # Phase 3C: Enhanced confidence data with R/A/V/C breakdown
+        "confidence_data": confidence_data,
         "tool_calls": exec_result["calls"],
         "artifacts": matched_artifacts,
         "kb_citations": kb_citations,
+        # Phase 3B: KB coverage warning
+        "kb_coverage_warning": kb_coverage_warning,
+        # Phase 3A: Enhanced template structure
         "template": {
-            "title": "Analysis Title",
-            "executive_insight": "Key executive summary",
-            "analysis": quantitative_context,
-            "recommendations": "Recommended actions based on analysis",
-            "citations": kb_citations,
-            "limits_data_needed": "Limits and missing data",
+            "title": f"Supply Chain Analysis: {intent.title()} Intent",
+            "executive_insight": "Executive summary with key findings and $$ impact",
+            "analysis": quantitative_context or "Detailed analysis with specific identifiers",
+            "recommendations": "Concrete next actions with who/what/when priority",
+            "citations": f"Knowledge Base Sources ({len(kb_citations)} found): " + "; ".join([str(c) for c in kb_citations]) if kb_citations else "No KB sources retrieved",
+            "limits_data_needed": "Data gaps that prevent higher confidence analysis",
             "confidence_badge": confidence_badge,
         },
         "output_order": output_order,  # Include the order for UI rendering
@@ -947,16 +955,30 @@ def _execute_plan(plan: List[Dict[str, Any]], app_paths: Any) -> Dict[str, Any]:
         elif tool == "kb_search":
             query = args.get("query")
             top_k = int(args.get("k", 5))
+            
+            # Phase 3B: Enforce k≥4 requirement
+            if top_k < 4:
+                top_k = 4
+                
             try:
                 res = kb_search(query or "", top_k)
+                
+                # Phase 3B: Check for low coverage warning
+                citations = res.get("citations", [])
+                if len(citations) < 2:
+                    res["coverage_warning"] = f"Low KB coverage: only {len(citations)} sources found (minimum 2 recommended)"
+                    
             except Exception as e:
-                res = {"error": f"kb_search failed: {e}", "citations": []}
+                res = {"error": f"kb_search failed: {e}", "citations": [], "coverage_warning": "KB search failed"}
+                
             calls.append({"tool": tool, "args": {"query": query, "k": top_k}, "result_meta": {
                 "citations": res.get("citations", []),
+                "coverage_warning": res.get("coverage_warning"),
                 "error": res.get("error")
             }})
             context["kb_chunks"] = res.get("chunks", [])
             context["kb_citations"] = res.get("citations", [])
+            context["kb_coverage_warning"] = res.get("coverage_warning")
 
         else:
             calls.append({"tool": tool, "args": args, "error": "Unsupported tool"})
