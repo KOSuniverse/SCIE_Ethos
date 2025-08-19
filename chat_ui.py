@@ -220,16 +220,64 @@ if prompt := st.chat_input("Ask about inventory, WIP, E&O, forecasting, or root 
             # Store last sources for export
             st.session_state.last_sources = sources
             
-            # Display response
-            message_placeholder.markdown(answer)
+            # Phase 3A: Display response with enhanced template structure
+            # Check if response follows Phase 3 template format
+            template_sections = response.get("template", {})
+            if template_sections and len(template_sections) > 2:
+                # Render structured template
+                st.markdown("## " + template_sections.get("title", "Analysis Results"))
+                
+                if template_sections.get("executive_insight"):
+                    st.markdown("### Executive Insight")
+                    st.markdown(template_sections["executive_insight"])
+                
+                if template_sections.get("analysis"):
+                    st.markdown("### Detailed Analysis")  
+                    st.markdown(template_sections["analysis"])
+                
+                if template_sections.get("recommendations"):
+                    st.markdown("### Recommendations")
+                    st.markdown(template_sections["recommendations"])
+                
+                if template_sections.get("citations"):
+                    st.markdown("### Citations")
+                    st.markdown(template_sections["citations"])
+                
+                if template_sections.get("limits_data_needed"):
+                    st.markdown("### Limits/Missing Data")
+                    st.markdown(template_sections["limits_data_needed"])
+            else:
+                # Fallback to regular markdown display
+                message_placeholder.markdown(answer)
+            
+            # Phase 3C: Enhanced confidence badge display
+            confidence_data = response.get("confidence_data", {})
+            if confidence_data:
+                col1, col2, col3 = st.columns([2, 1, 1])
+                with col1:
+                    st.markdown(f"**Confidence:** {confidence_data.get('badge', 'Medium')} ({confidence_data.get('score', 0.5):.3f})")
+                with col2:
+                    if confidence_data.get("escalation_recommended"):
+                        st.warning(f"🔄 Escalated to {confidence_data['escalation_recommended']}")
+                with col3:
+                    if confidence_data.get("breakdown"):
+                        with st.expander("📊 R/A/V/C Breakdown"):
+                            breakdown = confidence_data["breakdown"]
+                            st.write(f"**R**etrieval: {breakdown.get('retrieval', 0):.2f}")
+                            st.write(f"**A**nalysis: {breakdown.get('analysis', 0):.2f}")
+                            st.write(f"**V**ariance: {breakdown.get('variance', 0):.2f}")
+                            st.write(f"**C**overage: {breakdown.get('coverage', 0):.2f}")
             
             # Hidden debug caption (Intent=<auto_routed_intent> | Mode=<resolved_mode>)
             intent = response.get("intent", "unknown")
             mode = "chat"  # This is chat mode
             st.caption(f"Intent={intent} | Mode={mode}")
             
-            # Show enhanced sources inline
+            # Phase 3B: Enhanced sources display with coverage warnings
             sources_drawer = SourcesDrawer()
+            coverage_warning = response.get("kb_coverage_warning")
+            if coverage_warning:
+                st.warning(f"⚠️ {coverage_warning}")
             sources_drawer.render_inline_sources(sources, confidence_score)
             
             # Add assistant message to chat history
