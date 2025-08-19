@@ -169,3 +169,65 @@ def calculate_ravc_confidence(query: str, sources: List[Any], execution_calls: L
             "validations_V": 0.7,
             "citation_density_C": 0.7
         }
+
+def get_confidence_badge(confidence_score: float, ravc_breakdown: Dict[str, float] = None) -> str:
+    """Generate confidence badge HTML for display"""
+    try:
+        # Determine confidence level
+        if confidence_score >= 0.75:
+            level = "High"
+            css_class = "confidence-high"
+            color = "#28a745"  # Green
+        elif confidence_score >= 0.55:
+            level = "Medium"
+            css_class = "confidence-medium" 
+            color = "#ffc107"  # Yellow
+        else:
+            level = "Low"
+            css_class = "confidence-low"
+            color = "#dc3545"  # Red
+        
+        # Build badge HTML
+        badge_html = f"""
+        <div class="confidence-badge {css_class}" style="
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            background-color: {color};
+            color: white;
+            font-weight: bold;
+            font-size: 0.9em;
+            margin: 4px;
+        ">
+            {level}: {confidence_score:.2f}
+        </div>
+        """
+        
+        # Add RAVC breakdown if available
+        if ravc_breakdown:
+            breakdown_html = "<div style='font-size: 0.8em; margin-top: 4px;'>"
+            breakdown_html += f"R: {ravc_breakdown.get('retrieval_strength_R', 0):.2f} | "
+            breakdown_html += f"A: {ravc_breakdown.get('agreement_A', 0):.2f} | "
+            breakdown_html += f"V: {ravc_breakdown.get('validations_V', 0):.2f} | "
+            breakdown_html += f"C: {ravc_breakdown.get('citation_density_C', 0):.2f}"
+            breakdown_html += "</div>"
+            badge_html += breakdown_html
+        
+        return badge_html
+        
+    except Exception as e:
+        # Fallback badge
+        return f"""
+        <div class="confidence-badge confidence-medium" style="
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            background-color: #6c757d;
+            color: white;
+            font-weight: bold;
+            font-size: 0.9em;
+            margin: 4px;
+        ">
+            Confidence: {confidence_score:.2f}
+        </div>
+        """
