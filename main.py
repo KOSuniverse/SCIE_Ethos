@@ -1706,15 +1706,31 @@ else:
                             else:
                                 st.write(f"Table {i+1}: {table}")
                         
-                        # Display charts
+                        # Display charts inline
                         charts = evidence.get('charts', [])
                         if charts:
                             st.markdown("**Charts Generated:**")
-                            for chart in charts:
-                                if isinstance(chart, str):
-                                    st.write(f"📈 {chart}")
+                            for chart_group in charts:
+                                if isinstance(chart_group, list):
+                                    # Handle list of chart paths
+                                    for chart_path in chart_group:
+                                        if isinstance(chart_path, str) and (chart_path.endswith('.png') or chart_path.endswith('.jpg')):
+                                            try:
+                                                st.image(chart_path, use_container_width=True)
+                                            except Exception as e:
+                                                st.write(f"📈 Chart: {chart_path} (display failed: {e})")
+                                        else:
+                                            st.write(f"📈 {chart_path}")
+                                elif isinstance(chart_group, str):
+                                    if chart_group.endswith('.png') or chart_group.endswith('.jpg'):
+                                        try:
+                                            st.image(chart_group, use_container_width=True)
+                                        except Exception as e:
+                                            st.write(f"📈 Chart: {chart_group} (display failed: {e})")
+                                    else:
+                                        st.write(f"📈 {chart_group}")
                                 else:
-                                    st.write(f"📈 Chart: {chart}")
+                                    st.write(f"📈 Chart: {chart_group}")
                         
                         # Display calculations
                         calculations = evidence.get('calculations', [])
