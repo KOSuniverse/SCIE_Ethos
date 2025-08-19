@@ -446,6 +446,60 @@ def answer_question(
     # Phase 3A: Enhanced template structure with KB coverage warning
     kb_coverage_warning = context.get("kb_coverage_warning")
     
+    # Phase 5A: Query Logging Integration
+    try:
+        from phase5_governance.query_logger import QueryLogger
+        from phase5_governance.data_gap_analyzer import DataGapAnalyzer
+        
+        logger = QueryLogger()
+        gap_analyzer = DataGapAnalyzer()
+        
+        # Extract data sources for gap analysis
+        data_sources = []
+        if cleansed_paths:
+            for path in cleansed_paths:
+                data_sources.append({
+                    "path": path,
+                    "type": "cleansed_data",
+                    "columns": [],  # Would be populated from actual data inspection
+                    "rows": 0  # Would be populated from actual data inspection
+                })
+        
+        # Analyze data gaps
+        gap_analysis = gap_analyzer.analyze_data_gaps(
+            data_sources=data_sources,
+            query_intent=intent,
+            user_query=user_question,
+            analysis_results=exec_result
+        )
+        
+        # Log the query (with mock values for now - would be enhanced with actual metrics)
+        log_id = logger.log_query(
+            user_id="user_001",  # Would come from session/auth
+            query=user_question,
+            intent=intent,
+            sources=data_sources,
+            confidence_score=confidence_score,
+            confidence_badge=confidence_badge,
+            model_used="gpt-4o-mini",  # Would come from actual model selection
+            input_tokens=len(user_question) // 4,  # Rough estimate
+            output_tokens=len(str(final_text)) // 4,  # Rough estimate
+            response_time_ms=0,  # Would be measured
+            artifacts_created=matched_artifacts,
+            kb_sources_used=[str(c) for c in kb_citations]
+        )
+        
+        # Save missing data report periodically
+        try:
+            missing_data_report = gap_analyzer.aggregate_missing_data_report()
+            gap_analyzer.save_missing_data_report(missing_data_report)
+        except Exception:
+            pass  # Silent fail for missing data report
+        
+    except ImportError:
+        log_id = None
+        gap_analysis = None
+    
     output = {
         "final_text": str(final_text)
             + (f"\n[Enterprise] Column alias mapping applied: {list(alias_map.keys())}" if alias_map else "")
@@ -463,6 +517,10 @@ def answer_question(
         "kb_citations": kb_citations,
         # Phase 3B: KB coverage warning
         "kb_coverage_warning": kb_coverage_warning,
+        # Phase 5A: Query logging integration
+        "log_id": log_id,
+        # Phase 5B: Data gap analysis
+        "data_gaps": gap_analysis,
         # Phase 3A: Enhanced template structure
         "template": {
             "title": f"Supply Chain Analysis: {intent.title()} Intent",
@@ -470,7 +528,7 @@ def answer_question(
             "analysis": quantitative_context or "Detailed analysis with specific identifiers",
             "recommendations": "Concrete next actions with who/what/when priority",
             "citations": f"Knowledge Base Sources ({len(kb_citations)} found): " + "; ".join([str(c) for c in kb_citations]) if kb_citations else "No KB sources retrieved",
-            "limits_data_needed": "Data gaps that prevent higher confidence analysis",
+            "limits_data_needed": gap_analysis.get("recommendations", [])[:3] if gap_analysis else ["Data gaps analysis not available"],
             "confidence_badge": confidence_badge,
         },
         "output_order": output_order,  # Include the order for UI rendering
