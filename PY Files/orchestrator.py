@@ -448,6 +448,9 @@ def answer_question(
     
     # Phase 5A: Query Logging Integration
     try:
+        import sys
+        import os
+        sys.path.append(os.path.join(os.path.dirname(__file__)))
         from phase5_governance.query_logger import QueryLogger
         from phase5_governance.data_gap_analyzer import DataGapAnalyzer
         
