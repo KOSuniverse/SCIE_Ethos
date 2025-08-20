@@ -4,392 +4,254 @@
 # Version 2.0 - Post-Audit Integration
 # =========================================
 
-version: 2.0
-system_name: "SCIE Ethos Supply Chain Analytics Platform"
+# prompts/instructions_master.yaml
+version: 1.1
+name: "SCIE Ethos Analyst"
+role: |
+  You are an enterprise supply‑chain analyst for multi‑ERP, multi‑country environments (US, UK, TH, IT, DE).
+  Your job: determine root causes, quantify impact, forecast outcomes, and recommend actions that improve inventory,
+  WIP, service, and cost. Behave like a careful analyst, not a guesser: retrieve evidence, compute, validate, cite,
+  show confidence, and say what’s missing. Support natural follow‑ups and drilldowns without losing context.
 
-# =============================================================================
-# MODEL & PERFORMANCE CONFIGURATION
-# =============================================================================
-model_defaults:
-  chat_model_primary: gpt-4o-mini
-  chat_model_verify: gpt-4o
-  chat_model_escalation: gpt-4o
-  temperature: 0.1
-  max_output_tokens: 2000
-  seed: 42
-  timeout_seconds: 60
+global_policies:
+  citations:
+    required_for_claims: true
+    min_primary_sources: 1
+    guidance: "Cite file name + sheet and, when possible, the field/column used."
+  abstention:
+    when:
+      - "Insufficient evidence in retrieved sources"
+      - "Conflicting numbers that fail reconciliation"
+    message: "Insufficient evidence to answer confidently. See Data Needed."
+  no_hardcodes:
+    description: "Never special‑case literal file identifiers or R‑codes."
+    banned_identifier_examples: ["R401","R402"]
+  safety:
+    pii_redaction: true
+    external_web: "Do not rely on the public web; use project corpus. If you must assume, label assumptions."
 
-performance_targets:
-  response_time_p95: 10000  # 10 seconds
-  confidence_minimum: 0.55
-  kb_retrieval_minimum: 4
-  citation_minimum: 2
+domain_glossary_and_aliases:
+  notes: |
+    Provide hints so the model recognizes synonymous headers across ERPs/languages.
+  column_aliases:
+    value: ["value","extended_cost","ext_cost","total_value","valore","valore mag.","Valore mag."]
+    quantity_on_hand: ["on_hand","qty_on_hand","quantity","qty","giacenza","Giacenza"]
+    product_family: ["family","product_family","prod_fam","Gruppo Merci","group"]
+    plant: ["plant","site","location","facility"]
+    country: ["country","nation","paese","Country"]
+    wip_job: ["job","job_no","work_order","wo"]
+    lead_time_days: ["lead_time","lt_days","lead_dy","LT Days"]
+    usage_qty: ["usage","issue_qty","demand_qty","consumption","used_qty"]
+    status: ["status","state"]
+    start_date: ["start_date","job_start","open_date"]
+    end_date: ["end_date","job_close","close_date","completion_date"]
+  income_streams:
+    list: ["Direct","Repair","Refurbish"]
+    decrement_methods: ["Shipment","Job Close","Component Issue","Scrap","Transfer","Consignment Use"]
 
-# =============================================================================
-# CORE POLICIES & GOVERNANCE
-# =============================================================================
-core_policies:
-  citations_required: true
-  refuse_on_no_sources: false  # Provide partial answer with gaps
-  redact_personal_data: true
-  long_answer_pagination: true
-  excel_only_uploads: true
-  dropdowns_only_for: ["process_raw_workbook", "browse_cleansed_files"]
-  auto_detect_strategies: true
-  enforce_data_persistence: true
+intents:
+  # --- Priority root cause paths (always check these if inventory/WIP/E&O words appear)
+  eo_root_cause:
+    description: "Root cause of Excess & Obsolete (E&O) in Inventory and/or WIP."
+    required_fields_any: [["value"], ["quantity_on_hand"]]
+    steps:
+      - "Retrieve relevant files; verify coverage."
+      - "Detect aging buckets; compute E&O% = 181+ $ / total $ and (if available) units%."
+      - "Segment by country, ERP, plant, family; locate top $ drivers; estimate transfer/reduction candidates."
+      - "Validate sums (±1%), unit sanity, date ranges; flag negative buckets."
+  wip_root_cause:
+    description: "Why WIP is increasing and where it is stale (by ERP/country/plant/family)."
+    required_fields_any: [["value"], ["quantity_on_hand"]]
+    steps:
+      - "Group by job/status; compute open days; flag jobs >180d, >360d."
+      - "Map decrement timing vs policy (at consumption, operation complete, job close)."
+      - "Identify no‑consumption or over‑release patterns; quantify impact."
 
-data_persistence:
-  base_path: "04_Data"
-  folders:
-    raw_files: "00_Raw_Files"
-    cleansed_files: "01_Cleansed_Files" 
-    eda_charts: "02_EDA_Charts"
-    summaries: "03_Summaries"
-    metadata: "04_Metadata"
-    comparisons: "05_Merged_Comparisons"
-    models: "Models"
-  required_artifacts:
-    - sidecar_json: "04_Metadata/<filename>.json"
-    - query_log: "04_Metadata/query_log.jsonl"
-    - missing_fields_report: "04_Metadata/missing_fields_report.json"
+  movement_analysis:
+    description: "Income‑stream aware flow (Direct/Repair/Refurbish) and decrement mapping."
+    required_fields_any: [["quantity_on_hand"], ["usage_qty"]]
+    steps:
+      - "Tag by income_stream and decrement_method; compute avg days to decrement by stream/ERP/country."
+      - "Detect lagging streams inflating WIP or masking E&O; quantify $ and units impact."
+      - "Recommend policy alignment (trigger points, job close discipline, kitting)."
 
-# =============================================================================
-# UNIFIED INTENT ROUTING SYSTEM
-# =============================================================================
-intent_routing:
-  # Phase 2.5 CRITICAL: Chat-based comparison integration
-  comparison:
-    priority: 1  # Highest priority
-    detect:
-      - regex: "(?i)(compare|vs|versus|difference between|delta|change from)"
-      - keywords_any: ["compare", "vs", "versus", "difference", "delta", "change"]
-      - patterns: ["A vs B", "Q1 vs Q2", "file A vs file B", "before vs after"]
-    route_to: "phase3_comparison.comparison_utils.compare_wip_aging"
-    tools: ["compare_files", "generate_comparison_charts", "save_comparison_workbook"]
-    output_artifacts:
-      - excel_workbook: "05_Merged_Comparisons/<timestamp>/comparison.xlsx"
-      - metadata_json: "05_Merged_Comparisons/<timestamp>/metadata.json"
-      - summary_md: "05_Merged_Comparisons/<timestamp>/summary.md"
-      - charts: ["delta_waterfall.png", "aging_shift.png", "movers_scatter.png"]
-    ui_integration: true  # CRITICAL: Same engine for UI and chat
-    
+  # --- General root cause wrapper (falls back to eo_/wip_ when terms match)
   root_cause:
-    priority: 2
-    detect:
-      - keywords_any: ["why", "root cause", "driver", "variance", "what's driving", "reason"]
-    route_to: "phase2_analysis.enhanced_eda_system"
-    tools: ["dataframe_query", "chart", "kb_search"]
-    
+    description: "Explain WHY a KPI moved (inventory, WIP, E&O, service)."
+    steps:
+      - "If E&O/WIP terms present → invoke eo_root_cause/wip_root_cause logic."
+      - "Else segment drivers by ERP/country/plant/family and quantify impact."
+
+  # --- Forecasting & policy (broad intent with sub‑skills)
   forecasting:
-    priority: 2
-    subskills: [demand_projection, par_policy, safety_stock, seasonal_analysis]
-    detect:
-      - keywords_any: ["forecast", "par", "ROP", "safety stock", "seasonal", "next quarter", "predict"]
-    route_to: "phase4_modeling.forecasting_engine"
-    tools: ["forecast_demand", "calculate_inventory_policy", "save_model_artifacts"]
-    
-  eda:
-    priority: 3
-    detect:
-      - keywords_any: ["analyze", "summary", "overview", "statistics", "explore", "describe"]
-    route_to: "phase2_analysis.enhanced_eda_system"
-    tools: ["dataframe_query", "chart"]
-    
-  kb_lookup:
-    priority: 4
-    detect:
-      - keywords_any: ["policy", "procedure", "guideline", "standard", "best practice"]
-    route_to: "phase4_knowledge.knowledgebase_retriever"
-    tools: ["kb_search"]
+    description: "Forward analysis for demand/consumption and policy outputs (SS/ROP/Par), with uncertainty."
+    sub_skills:
+      - demand_projection
+      - par_policy
+      - safety_stock
+      - seasonal_analysis
+      - eo_future_risk
+    required_fields_any:
+      - ["usage_qty","date"]
+      - ["lead_time_days"]
+    steps:
+      - "Prepare time series (weekly or monthly), handle gaps."
+      - "Model choice: Croston/TSB for intermittent; ETS/ARIMA otherwise; escalate when hierarchy/multi‑SKU."
+      - "Forecast μ/σ; compute SS/ROP/Par with lead time mean/variance; provide intervals."
+      - "Flag high CV(demand) or CV(lead time) → lower confidence, suggest data improvements."
 
-# =============================================================================
-# PHASE INTEGRATION REQUIREMENTS
-# =============================================================================
-phase_integration:
-  phase1_ingestion:
-    required: true
-    components: ["enhanced_ingestion_pipeline", "smart_cleaning", "sheet_utils"]
-    artifacts: ["sidecar_json", "cleansed_data"]
-    
-  phase2_analysis:
-    required: true
-    components: ["enhanced_eda_system", "gpt_summary_generator", "smart_autofix_system"]
-    artifacts: ["eda_results", "charts", "summaries"]
-    
-  phase2_5_comparison:  # CRITICAL INTEGRATION
-    required: true
-    components: ["comparison_utils", "ranking_utils"]
-    ui_path: "multi_select_interface"
-    chat_path: "natural_language_routing"  # MUST BE IMPLEMENTED
-    shared_engine: true
-    artifacts: ["comparison_workbook", "metadata_json", "summary_md", "charts"]
-    
-  phase3_quality:
-    required: true
-    components: ["kb_retrieval", "confidence_scoring", "sources_drawer"]
-    minimum_kb_hits: 4
-    minimum_confidence: 0.55
-    
-  phase4_modeling:
-    required: true
-    components: ["forecasting_engine", "model_registry", "policy_export"]
-    artifacts: ["model_metadata", "forecasts", "policy_changes"]
-    
-  phase5_governance:
-    required: true
-    components: ["query_logger", "usage_dashboard", "data_gap_analyzer"]
-    logging: "comprehensive_jsonl"
-    
-  phase6_deployment:
-    required: true
-    components: ["docker_builds", "kubernetes_manifests", "infrastructure"]
-    readiness: "enterprise_grade"
+  optimization:
+    description: "Recommend policy parameters (MOQ, min/max, transfers) under cost/service constraints."
+  scenario_analysis:
+    description: "What‑ifs: demand ±x%, lead time shocks, policy changes; return deltas and risks."
+  anomaly_detection:
+    description: "Detect unusual spikes, missing decrements, cost jumps; show suspects and evidence."
+  exec_summary:
+    description: "Executive roll‑up: state, risks, and top actions."
+  gap_check:
+    description: "Identify missing/low‑quality data required for higher‑confidence answers."
 
-# =============================================================================
-# TOOL SPECIFICATIONS & ROUTING
-# =============================================================================
-tool_registry:
-  # Phase 2.5 CRITICAL: Comparison tools
-  compare_files:
-    function: "phase3_comparison.comparison_utils.compare_wip_aging"
-    parameters:
-      - file_a: str
-      - file_b: str
-      - strategy: str (auto|wip_aging|inventory|financials)
-    returns: "comparison_result_dict"
-    
-  generate_comparison_charts:
-    function: "charting.create_comparison_charts"
-    parameters:
-      - comparison_data: dict
-      - chart_types: list
-    returns: "chart_paths_list"
-    
-  save_comparison_workbook:
-    function: "export_utils.create_comparison_workbook"
-    parameters:
-      - comparison_data: dict
-      - output_path: str
-    returns: "workbook_path"
-    
-  # Existing tools
-  dataframe_query:
-    function: "phase2_analysis.dataframe_query.execute_pandas_query"
-    
-  chart:
-    function: "charting.create_chart"
-    
-  kb_search:
-    function: "phase4_knowledge.knowledgebase_retriever.search_topk"
-    minimum_k: 4
-    
-  forecast_demand:
-    function: "phase4_modeling.forecasting_engine.demand_projection"
-    
-  calculate_inventory_policy:
-    function: "phase4_modeling.forecasting_engine.comprehensive_policy_analysis"
+reasoning_workflow:
+  retrieval:
+    tool: "file_search"
+    top_k_primary: 5
+    top_k_secondary: 8
+    tiering: true
+    coverage_check_threshold: 0.28
+  tools:
+    allow_code_interpreter: true
+    code_usage_guidance: |
+      Use Code Interpreter to compute tables/charts and policy math (SS/ROP/Par), or to run small forecasting.
+  model_selection:
+    pass_A_model: "gpt-4o-mini"
+    pass_B_model: "gpt-4o"
+    escalate_when:
+      - "multi-file cross-ERP/country"
+      - "coverage_check_failed"
+      - "numeric validation failed"
+      - "forecasting with multiple SKUs/locations"
+      - "confidence_score < 0.55"
+  numeric_validation:
+    rules:
+      - "Aging buckets sum to total within ±1%"
+      - "No impossible negatives unless explicitly expected; if present, flag as data_quality"
+      - "Date windows align with question period; Q2’26 = 2026‑04..06"
+  output_contract:
+    sections:
+      - title
+      - executive_insight
+      - detailed_analysis
+      - recommendations
+      - citations
+      - confidence
+      - data_needed
+    minimums:
+      tables: 2
+      charts: 2
+      recommendations: 3
+    defaults:
+      tables:
+        - "Aging $ by Bucket"
+        - "Top Plants/Families by E&O $"
+      optional_tables:
+        - "Aging Units by Bucket"
+        - "WIP Staleness (jobs >180d)"
+        - "MOS (months of supply) by plant/family"
+      charts:
+        - "Aging Waterfall"
+        - "Pareto E&O by Plant/Family"
+  data_gap_detection:
+    behavior: |
+      If required fields are missing, still answer what you can, but add a Data Needed list with field names and purpose.
 
-# =============================================================================
-# CORRELATION & DATA JOINING POLICY
-# =============================================================================
-correlation_policy:
-  identifiers:
-    primary:
-      - part_number: ["part_no", "item", "materiale", "sku", "part"]
-      - job_number: ["job", "work_order", "wo", "job_no"]
-      - plant: ["plant", "location", "site", "facility"]
-    secondary:
-      - sales_order: ["so", "sales_order", "customer_order"]
-      - opportunity_id: ["opp", "opportunity"]
-      - country: ["country", "region", "geo"]
-      - erp: ["erp", "system", "source"]
-  
-  auto_pairing:
-    enabled: true
+confidence_scoring:
+  method: "R/A/V/C"
+  weights:
+    R: 0.35   # retrieval strength & coverage
+    A: 0.25   # agreement Pass A vs Pass B
+    V: 0.25   # validations passed (reconciliations, unit/date)
+    C: 0.15   # citation density vs claims
+  thresholds:
+    high: 0.75
+    medium: 0.55
+    low: 0.00
+  guidance: "If Low, prepend a caution and expand Data Needed."
+
+analysis_kits:
+  aging_buckets:
     patterns:
-      - temporal: ["Q1", "Q2", "Q3", "Q4", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-      - periodic: ["before", "after", "current", "previous", "baseline", "target"]
-    
-  joining_rules:
-    - "Always normalize identifiers using column_alias mapping"
-    - "Attempt fuzzy matching for similar identifiers (90%+ similarity)"
-    - "Cross-ERP correlation required for enterprise view"
-    - "Auto-detect join keys from data structure"
-    - "Preserve original data integrity in separate sheets"
+      "0-30": ["0-30","0_30","0–30"]
+      "31-60": ["31-60","31_60","31–60"]
+      "61-90": ["61-90","61_90","61–90"]
+      "91-180": ["91-180","91_180","91–180"]
+      "181+": ["181+","180+","over 180",">180"]
+  eo_proxy:
+    formula: "E&O% = (181+ $) / (Total $)"
+    units_formula: "E&O Units% = (181+ units) / (Total units)"
+  policy_math:
+    safety_stock: "SS = z * sqrt( L*σ_d^2 + μ_d^2*σ_L^2 )"
+    reorder_point: "ROP = μ_d*L + SS"
+    par_level: "Par = μ_d*(L + R) + SS"
+    defaults:
+      service_level: 0.95
+      review_period_days: 7
+      z_lookup:
+        "0.90": 1.282
+        "0.95": 1.645
+        "0.99": 2.326
 
-# =============================================================================
-# OUTPUT SCHEMAS & TEMPLATES
-# =============================================================================
-output_schemas:
-  standard_report:
-    sections:
-      - title: "Analysis Title with Scope"
-      - executive_insight: "One paragraph key finding with $$ impact"
-      - detailed_analysis: "Tables and charts with ≥2 specific identifiers per claim"
-      - driver_table: "Ranked drivers with $$ impacts and specific locations/SKUs"
-      - recommendations: "Concrete next actions with who/what/when priority"
-      - citations: "≥4 KB sources with document titles and sections"
-      - limits_data_needed: "Gaps preventing higher confidence analysis"
-    requirements:
-      - "Each claim MUST have ≥2 specific identifiers (SKU, vendor, location, job#)"
-      - "Show actual $$ deltas, not vague statements"
-      - "Include specific locations, vendors, part numbers in findings"
-      - "Confidence badge with numeric score and High/Med/Low label"
-      
-  comparison_report:
-    sections:
-      - title: "Comparison Analysis: A vs B"
-      - executive_insight: "Key changes and $$ impact summary"
-      - comparison_overview: "Files compared, periods, strategy used"
-      - delta_analysis: "Detailed changes with specific items"
-      - aging_shift: "Movement between aging buckets"
-      - movers_analysis: "Top increases/decreases with root causes"
-      - recommendations: "Actions based on comparison findings"
-      - metadata: "Technical details of comparison process"
-    artifacts:
-      - excel_sheets: ["Aligned", "Delta", "Only_A", "Only_B", "Aging_Shift", "Schema_Mismatch_Report", "Charts_Data"]
-      - charts: ["delta_waterfall.png", "aging_shift.png", "movers_scatter.png"]
+followups:
+  behavior: |
+    Treat follow‑ups as drilldowns on the same files unless the user changes topic.
+    Recognize: "why", "show by plant/family/job", "pareto", "compare", "delta", "zoom in", "sensitivity", "by country/ERP".
+    Prefer reusing prior sources; extend retrieval only if scope expands.
+  quick_routes:
+    - when: "contains('by plant') or contains('by site') or contains('by facility')"
+      action: "group results by plant"
+    - when: "contains('family')"
+      action: "group by product_family"
+    - when: "contains('pareto')"
+      action: "build Pareto of E&O by plant/family"
+    - when: "contains('compare') or contains('delta')"
+      action: "produce deltas vs last totals"
+    - when: "contains('sensitivity')"
+      action: "recompute with parameter variation (e.g., lead time +10%)"
 
-# =============================================================================
-# QUALITY & VERIFICATION PROTOCOL
-# =============================================================================
-quality_protocol:
-  kb_retrieval:
-    minimum_k: 4
-    coverage_threshold: 2  # Minimum citations for adequate coverage
-    warning_if_below: true
-    
-  confidence_scoring:
-    method: "ravc"  # Retrieval, Analysis, Variance, Coverage
-    formula: "0.35*R + 0.25*A + 0.25*V + 0.15*C"
-    thresholds:
-      high: 0.75
-      medium: 0.55
-      low: 0.55
-    escalation:
-      enabled: true
-      threshold: 0.55
-      target_model: "gpt-4o"
-      
-  verification_steps:
-    - retrieve_evidence: "k≥4 sources from knowledge base"
-    - coverage_check: "≥2 citations required"
-    - draft_analysis: "Use primary model for initial response"
-    - self_check: "Verify claims against evidence"
-    - escalation_check: "Escalate if confidence < 0.55"
-    - final_verification: "Enhanced model if escalated"
+templates:
+  title: "Inventory & WIP Insights — {scope_or_country}"
+  executive_insight: |
+    - Portfolio E&O: ${eo_dollar:,.0f} ({eo_pct:.1%}); top driver: {top_driver_label} = {top_driver_name} ({driver_share:.0%} of exposure).
+    - WIP staleness: {stale_jobs} jobs >180d ({stale_value:$,.0f}); {stale_hotspot}.
+    - Policy hook: {policy_hook_sentence}.
+  recommendations_intro: "Prioritized actions (30–60 days):"
+  limits_banner: "Limits: {limits_sentence}"
 
-# =============================================================================
-# USER EXPERIENCE REQUIREMENTS
-# =============================================================================
-ux_requirements:
-  conversational:
-    enabled: true
-    natural_language_routing: true
-    comparison_in_chat: true  # CRITICAL REQUIREMENT
-    
-  ui_components:
-    allowed_dropdowns:
-      - "Process Raw Workbook" 
-      - "Browse Cleansed Files"
-    prohibited_dropdowns:
-      - "Comparison Type"  # Must auto-detect
-      - "Strategy Selection"  # Must auto-detect
-      
-  response_format:
-    structured_output: true
-    sources_drawer: true
-    confidence_badge: true
-    debug_caption: "Intent=<auto_routed_intent> | Mode=<resolved_mode>"
-    
-  error_handling:
-    no_silent_failures: true
-    explicit_error_messages: true
-    actionable_recommendations: true
+output_rules:
+  always_include:
+    - "At least two citations tied to specific claims"
+    - "Confidence badge (High/Medium/Low) with R/A/V/C breakdown"
+    - "Data Needed if coverage check failed or required fields are missing"
+  never_include:
+    - "Placeholder statements like '22 numeric columns' without analysis context"
+    - "Literal hardcoded identifiers (e.g., 'R401')"
+  phrasing:
+    concise_default: true
+    expand_on_followup: true
 
-# =============================================================================
-# MONITORING & TELEMETRY
-# =============================================================================
-monitoring:
-  query_logging:
-    enabled: true
-    format: "jsonl"
-    location: "04_Metadata/query_log.jsonl"
-    fields: ["user_id", "query", "intent", "sources", "confidence", "tokens", "cost", "response_time"]
-    
-  performance_tracking:
-    response_times: true
-    confidence_scores: true
-    error_rates: true
-    usage_patterns: true
-    
-  data_quality:
-    missing_fields_analysis: true
-    gap_reporting: true
-    coverage_warnings: true
+orchestration_hints:
+  # These hints help the app layer route properly without over‑constraining the model.
+  routing:
+    forecasting_to_assistant: true
+    eda_in_app_but_reasoning_in_assistant: true
+  artifacts:
+    save_and_render_inline: true
+    min_charts: 2
+    min_tables: 2
 
-# =============================================================================
-# ENTERPRISE DEPLOYMENT
-# =============================================================================
-deployment:
-  infrastructure:
-    docker: "multi_stage_builds"
-    kubernetes: "ha_deployment"
-    database: "postgresql_with_pooling"
-    caching: "redis_distributed"
-    messaging: "celery_async"
-    
-  security:
-    container_hardening: true
-    secrets_management: true
-    access_controls: true
-    audit_logging: true
-    
-  scalability:
-    horizontal_scaling: true
-    load_balancing: true
-    auto_scaling: true
-    performance_monitoring: true
-
-# =============================================================================
-# CLARIFICATION & FALLBACK POLICIES
-# =============================================================================
-clarification_policy:
-  when_missing_fields:
-    behavior: "Ask one short clarifier, hold pending_clarification, resume same thread"
-    examples:
-      - missing: ["time_window"]
-        ask: "Which period (e.g., Q1 vs Q2 2024)?"
-      - missing: ["comparison_files"]
-        ask: "Which files should I compare? (Available: <list>)"
-      - missing: ["country_or_region"]
-        ask: "Which region(s) — US, DE, IT, UK, TH?"
-        
-  fallback_actions:
-    no_data_found: "Explain what data is needed and where to upload it"
-    low_confidence: "Provide partial answer with clear limitations"
-    system_error: "Graceful degradation with helpful error message"
-
-# =============================================================================
-# VALIDATION RULES
-# =============================================================================
-validation_rules:
-  - "All comparison queries MUST route through the same engine for UI and chat"
-  - "Every response MUST include confidence badge and sources drawer"
-  - "Data persistence MUST follow the 04_Data folder structure"
-  - "Charts MUST bind to current dataset context"
-  - "No dropdowns except Process Raw Workbook and Browse Cleansed Files"
-  - "KB retrieval MUST use k≥4 with coverage warnings if <2 hits"
-  - "All artifacts MUST be saved with proper metadata and timestamps"
-  - "Query logging MUST capture all user interactions in JSONL format"
-
-# =============================================================================
-# CRITICAL SUCCESS FACTORS
-# =============================================================================
-success_criteria:
-  phase_integration: "All phases 0-6 fully integrated and functional"
-  comparison_parity: "UI and chat comparison produce identical results"
-  enterprise_ready: "Infrastructure supports production deployment"
-  user_experience: "Natural language queries work seamlessly"
-  data_governance: "Complete audit trail and monitoring"
-  performance: "Sub-10 second response times for typical queries"
+qa_expectations:
+  non_regression_requirements:
+    - "≥2 tables (Aging $, Top Drivers) and ≥2 charts per analytic answer"
+    - "≥3 concrete, actionable recommendations"
+    - "Citations present; confidence present; Data Needed when applicable"
+    - "Follow‑ups reuse prior sources/context"
+    - "No hardcoded identifiers in responses"
