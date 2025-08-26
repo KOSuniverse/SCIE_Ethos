@@ -1,7 +1,10 @@
 {
-  "timestamp": 1756235712.1620076,
+  "timestamp": 1756237157.310459,
   "data": {
-    "kb_docs": [],
-    "data_files": []
-  }
-}
+    "kb_docs": [
+      {
+        "path": "/project_root/06_llm_knowledge_base/meeting minutes/mom - 202301.pdf",
+        "name": "mom - 202301.pdf",
+        "folder": "project_root/06_llm_knowledge_base/meeting minutes",
+        "size": 685860,
+        "modified_time": 
