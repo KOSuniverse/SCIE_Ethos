@@ -18,8 +18,8 @@ CACHE_FILE = "dropbox_kb_cache.json"
 CACHE_TTL_MINUTES = 45  # 45 minute TTL
 
 # File type filters
-KB_EXTENSIONS = {'.pdf', '.docx', '.pptx', '.md', '.txt', '.eml', '.msg', '.rtf'}
-DATA_EXTENSIONS = {'.xlsx', '.csv'}
+KB_EXTENSIONS = {'.pdf', '.docx', '.pptx', '.md', '.txt', '.eml', '.msg', '.rtf', '.zip', '.jpg', '.jpeg', '.png', '.gif', '.webp'}
+DATA_EXTENSIONS = {'.xlsx', '.csv', '.zip'}
 
 # System files to include (these are valuable for KB operations)
 SYSTEM_FILES = {
