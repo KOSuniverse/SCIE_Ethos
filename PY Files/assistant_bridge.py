@@ -492,6 +492,8 @@ Provide a thoughtful, detailed response that synthesizes information and provide
             
         except Exception as e:
             print(f"AI pass failed: {e}")
+            import traceback
+            traceback.print_exc()
         
         # Compose dual response
         final_answer = f"""### Document Answer
@@ -521,14 +523,38 @@ Provide a thoughtful, detailed response that synthesizes information and provide
         
     except Exception as e:
         print(f"Dual query failed, falling back to basic query: {e}")
+        import traceback
+        traceback.print_exc()
+        
         # Graceful fallback to existing function
         try:
-            return run_query(prompt, thread_id=thread_id)
-        except Exception as fallback_error:
+            basic_response = run_query(prompt, thread_id=thread_id)
+            # Convert to dual format for consistency
             return {
-                "answer": f"### AI Answer\nI apologize, but I encountered an error processing your question: {str(e)}",
+                "answer": f"""### Document Answer
+insufficient evidence in KB - fallback mode
+
+### AI Answer  
+{basic_response.get('answer', 'Unable to provide analysis.')}""",
+                "sources": basic_response.get('sources', {}),
+                "confidence": basic_response.get('confidence', 0.5),
+                "thread_id": basic_response.get('thread_id', thread_id or ''),
+                "doc_confidence": 0.0,
+                "ai_confidence": basic_response.get('confidence', 0.5)
+            }
+        except Exception as fallback_error:
+            print(f"Even basic fallback failed: {fallback_error}")
+            traceback.print_exc()
+            return {
+                "answer": f"""### Document Answer
+insufficient evidence in KB
+
+### AI Answer
+I apologize, but I encountered an error processing your question. Please try again.""",
                 "sources": {},
                 "confidence": 0.0,
-                "thread_id": thread_id or ""
+                "thread_id": thread_id or "",
+                "doc_confidence": 0.0,
+                "ai_confidence": 0.0
             }
 
