@@ -352,25 +352,62 @@ def run_query_dual(
                 kb_files = candidates.get('kb_docs', [])
                 data_files = candidates.get('data_files', [])
                 
+                
             except Exception as e:
                 print(f"Warning: Could not get KB candidates: {e}")
         
         # Attach relevant files to assistant (simplified for now)
         file_ids = []
-        if _FILE_SYNC_AVAILABLE and (kb_files or data_files):
-            try:
-                # For now, we'll use a simple approach
-                # In a full implementation, this would upload and deduplicate files
-                print(f"Found {len(kb_files)} KB docs and {len(data_files)} data files for context")
-            except Exception as e:
-                print(f"Warning: File attachment failed: {e}")
+        if kb_files or data_files:
+            # Try with dbx_utils if available
+            if _FILE_SYNC_AVAILABLE:
+                try:
+                    from dbx_utils import upload_dropbox_file_to_openai
+                    
+                    # Upload a few relevant files
+                    for file_info in (kb_files + data_files)[:5]:  # Limit to 5 files for performance
+                        file_path = file_info['path']
+                        try:
+                            file_id = upload_dropbox_file_to_openai(file_path, purpose="assistants")
+                            if file_id:
+                                file_ids.append(file_id)
+                        except Exception as e:
+                            print(f"Failed to upload {file_info['name']}: {e}")
+                            
+                except Exception as e:
+                    print(f"Warning: dbx_utils file upload failed: {e}")
+            
+            # Fallback: Create a summary of available documents for context
+            else:
+                # Group files by folder for better organization
+                from dropbox_kb_sync import get_folder_structure
+                folder_structure = get_folder_structure(kb_files)
+                
+                doc_summary = "Available Knowledge Base Documents:\n\n"
+                for folder, docs in folder_structure.items():
+                    doc_summary += f"**{folder}:**\n"
+                    for doc in docs[:5]:  # Limit per folder
+                        doc_summary += f"- {doc['name']} ({doc.get('size', 0)} bytes)\n"
+                    doc_summary += "\n"
+                
+                if data_files:
+                    doc_summary += "**Data Files:**\n"
+                    for doc in data_files[:5]:
+                        doc_summary += f"- {doc['name']} ({doc.get('size', 0)} bytes)\n"
+                
+                # Add document listing as context (fallback when files can't be uploaded)
+                client.beta.threads.messages.create(
+                    thread_id=thread.id,
+                    role="user",
+                    content=f"CONTEXT: {doc_summary}\n\nNote: Document contents are not directly accessible for this query."
+                )
         
         # DOCUMENT PASS: Try to answer from documents first
         doc_answer = "insufficient evidence in KB"
         doc_sources = {}
         doc_confidence = 0.0
         
-        if kb_files or data_files:
+        if file_ids:  # Only try document pass if we actually uploaded files
             try:
                 # Add document-focused message
                 doc_prompt = f"""Answer this question strictly from the attached documents and data files. 
@@ -416,6 +453,10 @@ Answer:"""
             except Exception as e:
                 print(f"Document pass failed: {e}")
                 doc_answer = "insufficient evidence in KB - document search error"
+        
+        elif kb_files or data_files:
+            # We have document metadata but no file access
+            doc_answer = f"insufficient evidence in KB - Found {len(kb_files)} KB documents and {len(data_files)} data files, but cannot access content. Please ensure Dropbox integration is properly configured."
         
         # AI PASS: Get synthesized answer
         ai_answer = "Unable to provide AI analysis."
