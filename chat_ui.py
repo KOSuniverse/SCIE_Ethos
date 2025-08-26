@@ -249,15 +249,25 @@ def render_chat_assistant():
                             keywords.extend(["siop", "s&op", "sales", "operations", "planning", "quarterly"])
                         if "launch" in prompt.lower():
                             keywords.extend(["launch", "launching", "product"])
+                        if "wip" in prompt.lower() or "work in progress" in prompt.lower():
+                            keywords.extend(["wip", "work", "progress", "inventory", "manufacturing"])
+                        if "inventory" in prompt.lower():
+                            keywords.extend(["inventory", "stock", "on hand", "oh"])
+                        if any(word in prompt.lower() for word in ["us", "united states", "america"]):
+                            keywords.extend(["us", "usa", "america", "united", "states"])
                         
                         # Define folder priorities (1 = highest priority)
+                        # Boost data file priority for data-specific queries
+                        is_data_query = any(term in prompt.lower() for term in ["wip", "inventory", "stock", "data", "numbers", "chart", "table"])
+                        
                         folder_priorities = {
                             "meeting minutes": 1,
                             "meetings": 1, 
                             "live events": 2,
                             "quarterly": 2,
                             "email": 2,
-                            "data": 3,  # For data files
+                            "data": 1 if is_data_query else 3,  # Higher priority for data queries
+                            "cleansed": 1 if is_data_query else 3,  # Data folder variants
                             "training": 4,
                             "apics": 4,
                             "source_docs": 5,
@@ -373,14 +383,15 @@ UPLOADED DOCUMENTS:
 
 INSTRUCTIONS:
 1. Analyze ALL uploaded documents to find relevant information
-2. Clearly identify which document each piece of information comes from
-3. Use format: "According to [DOCUMENT NAME]: [information]"
-4. If documents have conflicting information, mention both viewpoints
-5. Prioritize information from meeting minutes and live events over training materials
-6. Provide specific details, quotes, and data points where available
+2. For each piece of information, use this format: "From [DOCUMENT NAME] (folder: [FOLDER]): [information]"
+3. If documents have conflicting information, mention both viewpoints
+4. Prioritize information from meeting minutes and live events over training materials
+5. For data files (.xlsx), look for specific tables, numbers, and data points
+6. Provide specific details, quotes, data points, and table information where available
 7. If no relevant information is found in the documents, clearly state this
+8. Do NOT use OpenAI's internal citation format (【4:1†source】) - use the clear format specified above
 
-Please provide a comprehensive analysis that synthesizes information from all relevant documents."""
+Please provide a comprehensive analysis that synthesizes information from all relevant documents with clear source attribution."""
 
                                         client.beta.threads.messages.create(
                                             thread_id=thread.id,
