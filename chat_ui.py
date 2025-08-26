@@ -238,25 +238,107 @@ def render_chat_assistant():
                     kb_files = candidates.get('kb_docs', [])
                     
                     if kb_files:
-                        # Simple relevance check - look for keywords in file names
+                        # Enhanced relevance check - look for keywords in file names
                         keywords = prompt.lower().split()
+                        # Add special cases for common terms
+                        if "s&op" in prompt.lower() or "siop" in prompt.lower():
+                            keywords.extend(["siop", "s&op", "sales", "operations", "planning"])
+                        if "launch" in prompt.lower():
+                            keywords.extend(["launch", "launching", "product"])
+                        
                         relevant_files = []
                         
                         for file_info in kb_files[:10]:  # Check first 10 files
                             file_name = file_info['name'].lower()
                             folder_name = file_info.get('folder', '').lower()
                             
-                            # Simple keyword matching
+                            # Enhanced keyword matching
                             for keyword in keywords:
-                                if len(keyword) > 3 and (keyword in file_name or keyword in folder_name):
+                                if len(keyword) > 2 and (keyword in file_name or keyword in folder_name):
                                     relevant_files.append(file_info)
                                     break
                         
                         if relevant_files:
                             kb_sources = [{"name": f["name"], "folder": f.get("folder", "root")} for f in relevant_files[:5]]
-                            kb_answer = f"Found {len(relevant_files)} relevant documents:\n"
-                            for f in relevant_files[:3]:
-                                kb_answer += f"• {f['name']} (in {f.get('folder', 'root')})\n"
+                            
+                            # Try to upload and get content from the most relevant files
+                            try:
+                                from dbx_utils import upload_dropbox_file_to_openai
+                                from openai import OpenAI
+                                
+                                client = OpenAI()
+                                uploaded_files = []
+                                
+                                # Upload top 2 most relevant files
+                                for file_info in relevant_files[:2]:
+                                    try:
+                                        file_id = upload_dropbox_file_to_openai(file_info['path'], purpose="assistants")
+                                        if file_id:
+                                            uploaded_files.append({"file_id": file_id, "name": file_info['name']})
+                                    except Exception as e:
+                                        print(f"Failed to upload {file_info['name']}: {e}")
+                                
+                                if uploaded_files:
+                                    # Create a thread and ask for summary
+                                    thread = client.beta.threads.create()
+                                    
+                                    # Get assistant ID
+                                    try:
+                                        with open("prompts/assistant.json", "r", encoding="utf-8") as f:
+                                            meta = json.load(f)
+                                            assistant_id = meta["assistant_id"]
+                                    except:
+                                        assistant_id = os.getenv("ASSISTANT_ID")
+                                    
+                                    if assistant_id:
+                                        # Ask for document summary
+                                        client.beta.threads.messages.create(
+                                            thread_id=thread.id,
+                                            role="user",
+                                            content=f"Based on the uploaded documents, please answer this question: {prompt}\n\nFocus only on information directly from these documents. Provide specific details and quotes where relevant."
+                                        )
+                                        
+                                        # Run the assistant
+                                        run = client.beta.threads.runs.create(
+                                            thread_id=thread.id,
+                                            assistant_id=assistant_id
+                                        )
+                                        
+                                        # Wait for completion (simple polling)
+                                        import time
+                                        max_wait = 30  # 30 second timeout
+                                        waited = 0
+                                        while run.status not in ["completed", "failed", "cancelled", "expired"] and waited < max_wait:
+                                            time.sleep(2)
+                                            run = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+                                            waited += 2
+                                        
+                                        if run.status == "completed":
+                                            # Get the response
+                                            messages = client.beta.threads.messages.list(thread_id=thread.id, order="desc")
+                                            if messages.data:
+                                                latest_message = messages.data[0]
+                                                if hasattr(latest_message, 'content') and latest_message.content:
+                                                    content_block = latest_message.content[0]
+                                                    if hasattr(content_block, 'text'):
+                                                        kb_answer = content_block.text.value
+                                                    else:
+                                                        kb_answer = f"Found {len(relevant_files)} relevant documents but could not extract summary."
+                                                else:
+                                                    kb_answer = f"Found {len(relevant_files)} relevant documents but received empty response."
+                                        else:
+                                            kb_answer = f"Found {len(relevant_files)} relevant documents but processing timed out."
+                                    else:
+                                        kb_answer = f"Found {len(relevant_files)} relevant documents but no assistant configured."
+                                else:
+                                    kb_answer = f"Found {len(relevant_files)} relevant documents but could not upload files:\n"
+                                    for f in relevant_files[:3]:
+                                        kb_answer += f"• {f['name']} (in {f.get('folder', 'root')})\n"
+                                        
+                            except Exception as e:
+                                kb_answer = f"Found {len(relevant_files)} relevant documents but could not process them: {str(e)}\n"
+                                for f in relevant_files[:3]:
+                                    kb_answer += f"• {f['name']} (in {f.get('folder', 'root')})\n"
                         else:
                             kb_answer = "No documents found matching your query keywords."
                     
