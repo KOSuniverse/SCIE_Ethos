@@ -210,23 +210,77 @@ def render_chat_assistant():
                 # Initialize export manager with current service level
                 export_manager = ExportManager(st.session_state.service_level)
                 
-                # Use original working query functions
+                # Get AI response (working)
                 if st.session_state.selected_files:
-                    response = run_query_with_files(
+                    ai_response = run_query_with_files(
                         prompt,
                         st.session_state.selected_files,
                         thread_id=st.session_state.thread_id
                     )
                 else:
-                    response = run_query(
+                    ai_response = run_query(
                         prompt,
                         thread_id=st.session_state.thread_id
                     )
                 
-                # Extract response components
-                answer = response.get("answer", "No answer provided")
-                sources = response.get("sources", {})
-                confidence_raw = response.get("confidence", 0.5)
+                # Try to get KB document answer alongside AI
+                kb_answer = "No relevant documents found in knowledge base."
+                kb_sources = []
+                
+                try:
+                    from dropbox_kb_sync import list_kb_candidates, get_folder_structure
+                    
+                    # Get KB files
+                    kb_path = os.getenv("KB_DBX_PATH", "/Project_Root/06_LLM_Knowledge_Base")
+                    data_path = os.getenv("DATA_DBX_PATH", "/Project_Root/04_Data")
+                    
+                    candidates = list_kb_candidates(kb_path, data_path)
+                    kb_files = candidates.get('kb_docs', [])
+                    
+                    if kb_files:
+                        # Simple relevance check - look for keywords in file names
+                        keywords = prompt.lower().split()
+                        relevant_files = []
+                        
+                        for file_info in kb_files[:10]:  # Check first 10 files
+                            file_name = file_info['name'].lower()
+                            folder_name = file_info.get('folder', '').lower()
+                            
+                            # Simple keyword matching
+                            for keyword in keywords:
+                                if len(keyword) > 3 and (keyword in file_name or keyword in folder_name):
+                                    relevant_files.append(file_info)
+                                    break
+                        
+                        if relevant_files:
+                            kb_sources = [{"name": f["name"], "folder": f.get("folder", "root")} for f in relevant_files[:5]]
+                            kb_answer = f"Found {len(relevant_files)} relevant documents:\n"
+                            for f in relevant_files[:3]:
+                                kb_answer += f"• {f['name']} (in {f.get('folder', 'root')})\n"
+                        else:
+                            kb_answer = "No documents found matching your query keywords."
+                    
+                except Exception as e:
+                    kb_answer = f"Knowledge base search unavailable: {str(e)}"
+                
+                # Combine responses
+                ai_answer = ai_response.get("answer", "No AI response available")
+                
+                # Create dual format answer
+                answer = f"""### 📚 Knowledge Base Answer
+{kb_answer}
+
+### 🤖 AI Analysis
+{ai_answer}"""
+                
+                # Combine sources
+                ai_sources = ai_response.get("sources", {})
+                sources = {
+                    "kb_sources": kb_sources,
+                    "ai_sources": ai_sources
+                }
+                
+                confidence_raw = ai_response.get("confidence", 0.5)
                 
                 # Handle confidence score - it might be a dict from score_ravc() or a float
                 if isinstance(confidence_raw, dict):
@@ -234,9 +288,9 @@ def render_chat_assistant():
                 else:
                     confidence_score = float(confidence_raw) if confidence_raw is not None else 0.5
                 
-                # Capture thread_id for conversation continuity
-                if response.get("thread_id") and not st.session_state.thread_id:
-                    st.session_state.thread_id = response["thread_id"]
+                # Capture thread_id for conversation continuity (from AI response)
+                if ai_response.get("thread_id") and not st.session_state.thread_id:
+                    st.session_state.thread_id = ai_response["thread_id"]
                 
                 # Update confidence history
                 st.session_state.confidence_history.append(confidence_score)
