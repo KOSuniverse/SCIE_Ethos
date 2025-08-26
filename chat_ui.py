@@ -236,27 +236,76 @@ def render_chat_assistant():
                     
                     candidates = list_kb_candidates(kb_path, data_path)
                     kb_files = candidates.get('kb_docs', [])
+                    data_files = candidates.get('data_files', [])
                     
-                    if kb_files:
-                        # Enhanced relevance check - look for keywords in file names
+                    # Add data files to search scope
+                    all_files = kb_files + data_files
+                    
+                    if all_files:
+                        # Enhanced relevance check with folder prioritization
                         keywords = prompt.lower().split()
                         # Add special cases for common terms
                         if "s&op" in prompt.lower() or "siop" in prompt.lower():
-                            keywords.extend(["siop", "s&op", "sales", "operations", "planning"])
+                            keywords.extend(["siop", "s&op", "sales", "operations", "planning", "quarterly"])
                         if "launch" in prompt.lower():
                             keywords.extend(["launch", "launching", "product"])
                         
-                        relevant_files = []
+                        # Define folder priorities (1 = highest priority)
+                        folder_priorities = {
+                            "meeting minutes": 1,
+                            "meetings": 1, 
+                            "live events": 2,
+                            "quarterly": 2,
+                            "email": 2,
+                            "data": 3,  # For data files
+                            "training": 4,
+                            "apics": 4,
+                            "source_docs": 5,
+                            "root": 6
+                        }
                         
-                        for file_info in kb_files[:10]:  # Check first 10 files
+                        scored_files = []
+                        
+                        for file_info in all_files[:15]:  # Check more files
                             file_name = file_info['name'].lower()
                             folder_name = file_info.get('folder', '').lower()
                             
-                            # Enhanced keyword matching
+                            # Calculate relevance score
+                            relevance_score = 0
+                            keyword_matches = 0
+                            
+                            # Check keyword matching
                             for keyword in keywords:
-                                if len(keyword) > 2 and (keyword in file_name or keyword in folder_name):
-                                    relevant_files.append(file_info)
-                                    break
+                                if len(keyword) > 2:
+                                    if keyword in file_name:
+                                        keyword_matches += 2  # Higher weight for filename matches
+                                    elif keyword in folder_name:
+                                        keyword_matches += 1
+                            
+                            if keyword_matches > 0:
+                                # Get folder priority (lower number = higher priority)
+                                folder_priority = 6  # Default lowest priority
+                                for folder_key, priority in folder_priorities.items():
+                                    if folder_key in folder_name:
+                                        folder_priority = min(folder_priority, priority)
+                                        break
+                                
+                                # Calculate final score (higher = better)
+                                relevance_score = keyword_matches * 10 - folder_priority
+                                
+                                # Bonus for exact matches or multiple keywords
+                                if any(keyword in file_name for keyword in keywords if len(keyword) > 4):
+                                    relevance_score += 5
+                                
+                                scored_files.append({
+                                    **file_info,
+                                    'relevance_score': relevance_score,
+                                    'keyword_matches': keyword_matches,
+                                    'folder_priority': folder_priority
+                                })
+                        
+                        # Sort by relevance score (highest first)
+                        relevant_files = sorted(scored_files, key=lambda x: x['relevance_score'], reverse=True)
                         
                         if relevant_files:
                             kb_sources = [{"name": f["name"], "folder": f.get("folder", "root")} for f in relevant_files[:5]]
@@ -269,14 +318,37 @@ def render_chat_assistant():
                                 client = OpenAI()
                                 uploaded_files = []
                                 
-                                # Upload top 2 most relevant files
-                                for file_info in relevant_files[:2]:
-                                    try:
-                                        file_id = upload_dropbox_file_to_openai(file_info['path'], purpose="assistants")
-                                        if file_id:
-                                            uploaded_files.append({"file_id": file_id, "name": file_info['name']})
-                                    except Exception as e:
-                                        print(f"Failed to upload {file_info['name']}: {e}")
+                                # Upload top relevant files with priority weighting (filter out unsupported formats)
+                                supported_extensions = {'.pdf', '.docx', '.doc', '.txt', '.md', '.csv', '.xlsx', '.pptx'}
+                                
+                                # Separate by priority groups
+                                high_priority = [f for f in relevant_files if f.get('folder_priority', 6) <= 2]
+                                medium_priority = [f for f in relevant_files if f.get('folder_priority', 6) == 3]
+                                low_priority = [f for f in relevant_files if f.get('folder_priority', 6) > 3]
+                                
+                                # Try to upload from each priority group
+                                files_to_try = (high_priority[:2] + medium_priority[:2] + low_priority[:1])[:4]
+                                
+                                for file_info in files_to_try:
+                                    file_ext = os.path.splitext(file_info['name'])[1].lower()
+                                    
+                                    if file_ext in supported_extensions:
+                                        try:
+                                            file_id = upload_dropbox_file_to_openai(file_info['path'], purpose="assistants")
+                                            if file_id:
+                                                uploaded_files.append({
+                                                    "file_id": file_id, 
+                                                    "name": file_info['name'],
+                                                    "folder": file_info.get('folder', 'root'),
+                                                    "priority": file_info.get('folder_priority', 6),
+                                                    "score": file_info.get('relevance_score', 0)
+                                                })
+                                                if len(uploaded_files) >= 3:  # Upload up to 3 files
+                                                    break
+                                        except Exception as e:
+                                            print(f"Failed to upload {file_info['name']}: {e}")
+                                    else:
+                                        print(f"Skipping {file_info['name']} - unsupported format ({file_ext})")
                                 
                                 if uploaded_files:
                                     # Create a thread and ask for summary
@@ -291,11 +363,29 @@ def render_chat_assistant():
                                         assistant_id = os.getenv("ASSISTANT_ID")
                                     
                                     if assistant_id:
-                                        # Ask for document summary
+                                        # Create detailed prompt for multi-document analysis
+                                        file_list = "\n".join([f"- {f['name']} (from {f['folder']} folder, priority {f['priority']})" for f in uploaded_files])
+                                        
+                                        analysis_prompt = f"""I have uploaded {len(uploaded_files)} documents to analyze. Please answer this question: {prompt}
+
+UPLOADED DOCUMENTS:
+{file_list}
+
+INSTRUCTIONS:
+1. Analyze ALL uploaded documents to find relevant information
+2. Clearly identify which document each piece of information comes from
+3. Use format: "According to [DOCUMENT NAME]: [information]"
+4. If documents have conflicting information, mention both viewpoints
+5. Prioritize information from meeting minutes and live events over training materials
+6. Provide specific details, quotes, and data points where available
+7. If no relevant information is found in the documents, clearly state this
+
+Please provide a comprehensive analysis that synthesizes information from all relevant documents."""
+
                                         client.beta.threads.messages.create(
                                             thread_id=thread.id,
                                             role="user",
-                                            content=f"Based on the uploaded documents, please answer this question: {prompt}\n\nFocus only on information directly from these documents. Provide specific details and quotes where relevant."
+                                            content=analysis_prompt
                                         )
                                         
                                         # Run the assistant
@@ -305,7 +395,6 @@ def render_chat_assistant():
                                         )
                                         
                                         # Wait for completion (simple polling)
-                                        import time
                                         max_wait = 30  # 30 second timeout
                                         waited = 0
                                         while run.status not in ["completed", "failed", "cancelled", "expired"] and waited < max_wait:
@@ -331,9 +420,11 @@ def render_chat_assistant():
                                     else:
                                         kb_answer = f"Found {len(relevant_files)} relevant documents but no assistant configured."
                                 else:
-                                    kb_answer = f"Found {len(relevant_files)} relevant documents but could not upload files:\n"
+                                    kb_answer = f"Found {len(relevant_files)} relevant documents but could not process them:\n"
                                     for f in relevant_files[:3]:
-                                        kb_answer += f"• {f['name']} (in {f.get('folder', 'root')})\n"
+                                        file_ext = os.path.splitext(f['name'])[1].lower()
+                                        status = "unsupported format" if file_ext not in supported_extensions else "upload failed"
+                                        kb_answer += f"• {f['name']} (in {f.get('folder', 'root')}) - {status}\n"
                                         
                             except Exception as e:
                                 kb_answer = f"Found {len(relevant_files)} relevant documents but could not process them: {str(e)}\n"
