@@ -110,14 +110,14 @@ def _list_files_recursive(root_path: str, allowed_extensions: set, max_files: in
     """
     try:
         # Import Dropbox utilities
-        from dbx_utils import list_data_files, get_file_info
+        from dbx_utils import list_files_recursive
         
         files = []
         
         # Use existing Dropbox utilities if available
         try:
             # Get file list from Dropbox
-            all_files = list_data_files(root_path, recursive=True)
+            all_files = list_files_recursive(root_path, file_extensions=allowed_extensions, recursive=True)
             
             for file_info in all_files:
                 file_path = file_info.get('path_lower', file_info.get('path', ''))

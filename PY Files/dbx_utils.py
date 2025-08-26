@@ -89,6 +89,53 @@ def list_data_files(folder_path: str) -> List[Dict]:
     files.sort(key=lambda d: d.get("server_modified") or 0, reverse=True)
     return files
 
+def list_files_recursive(folder_path: str, file_extensions: set = None, recursive: bool = True) -> List[Dict]:
+    """List files in a Dropbox folder with optional filtering and recursive support.
+    
+    Args:
+        folder_path: Dropbox folder path to list
+        file_extensions: Set of extensions to filter (e.g., {'.pdf', '.docx'}). None = all files
+        recursive: Whether to recursively list subfolders
+        
+    Returns:
+        List of file metadata dictionaries
+    """
+    import dropbox
+    dbx = _get_dbx_client()
+    files: List[Dict] = []
+
+    try:
+        resp = dbx.files_list_folder(folder_path, recursive=recursive)
+        entries = list(resp.entries)
+
+        while resp.has_more:
+            resp = dbx.files_list_folder_continue(resp.cursor)
+            entries.extend(resp.entries)
+
+        for e in entries:
+            if isinstance(e, dropbox.files.FileMetadata):
+                # Filter by file extension if specified
+                if file_extensions:
+                    file_ext = os.path.splitext(e.name)[1].lower()
+                    if file_ext not in file_extensions:
+                        continue
+                
+                files.append({
+                    "name": e.name,
+                    "path": e.path_display,
+                    "path_lower": e.path_lower, 
+                    "size": e.size,
+                    "server_modified": getattr(e, "server_modified", None),
+                    "modified": getattr(e, "client_modified", None)
+                })
+
+        files.sort(key=lambda d: d.get("server_modified") or 0, reverse=True)
+        return files
+        
+    except Exception as e:
+        print(f"Error listing files in {folder_path}: {e}")
+        return []
+
 def read_file_bytes(path_lower: str) -> bytes:
     """Read a file from Dropbox into memory."""
     print(f"DEBUG read_file_bytes: Attempting to read from Dropbox: {path_lower}")
