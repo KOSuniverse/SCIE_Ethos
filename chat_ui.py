@@ -273,9 +273,13 @@ def render_chat_assistant():
                     if all_files:
                         # Enhanced relevance check with folder prioritization
                         keywords = prompt.lower().split()
-                        # Add special cases for common terms
+                        # Add special cases for common terms with quarterly meeting focus
                         if "s&op" in prompt.lower() or "siop" in prompt.lower():
-                            keywords.extend(["siop", "s&op", "sales", "operations", "planning", "quarterly"])
+                            keywords.extend(["siop", "s&op", "sales", "operations", "planning", "quarterly", "meeting", "mom", "minutes"])
+                        if "quarterly" in prompt.lower() or "quarter" in prompt.lower():
+                            keywords.extend(["quarterly", "quarter", "q1", "q2", "q3", "q4", "meeting", "minutes", "mom", "siop", "s&op"])
+                        if "meeting" in prompt.lower():
+                            keywords.extend(["meeting", "minutes", "mom", "discussion", "agenda", "quarterly"])
                         if "launch" in prompt.lower():
                             keywords.extend(["launch", "launching", "product"])
                         if "wip" in prompt.lower() or "work in progress" in prompt.lower():
@@ -367,8 +371,9 @@ def render_chat_assistant():
                                 medium_priority = [f for f in relevant_files if f.get('folder_priority', 6) == 3]
                                 low_priority = [f for f in relevant_files if f.get('folder_priority', 6) > 3]
                                 
-                                # Try to upload from each priority group
-                                files_to_try = (high_priority[:2] + medium_priority[:2] + low_priority[:1])[:4]
+                                # Use ALL relevant files - no artificial limits
+                                # Prioritize by relevance but don't cap the number of files
+                                files_to_try = high_priority + medium_priority + low_priority
                                 
                                 for file_info in files_to_try:
                                     file_ext = os.path.splitext(file_info['name'])[1].lower()
@@ -384,8 +389,7 @@ def render_chat_assistant():
                                                     "priority": file_info.get('folder_priority', 6),
                                                     "score": file_info.get('relevance_score', 0)
                                                 })
-                                                if len(uploaded_files) >= 3:  # Upload up to 3 files
-                                                    break
+                                                # No artificial limit - upload ALL relevant files
                                         except Exception as e:
                                             print(f"Failed to upload {file_info['name']}: {e}")
                                     else:
@@ -424,17 +428,21 @@ UPLOADED DOCUMENTS:
 {file_list}{conversation_context}
 
 CRITICAL INSTRUCTIONS - FOLLOW EXACTLY:
-1. Extract SPECIFIC, ACTIONABLE details from the documents - not high-level summaries
-2. Include: names of people, specific products mentioned, exact decisions made, action items assigned
-3. For meetings: Who said what? What was decided? What are the next steps? What problems were identified?
-4. For data files: Extract actual numbers, table data, specific metrics, trends
+1. Extract SPECIFIC, ACTIONABLE details from ALL documents - not high-level summaries
+2. Include: EXACT names of people, specific product names/numbers, dollar amounts, percentages, quantities
+3. For meetings: Who said what? What was decided? What are the next steps? What problems were identified? What are the specific action items and deadlines?
+4. For data files: Extract actual numbers, table data, specific metrics, trends, variances
 5. Use ONLY this source format: "From [DOCUMENT NAME] (folder: [FOLDER]): [specific detail]"
-6. NEVER use 【4:1†source】 or similar OpenAI citation formats
+6. NEVER use 【4:1†source】 or similar OpenAI citation formats - I will reject responses with this format
 7. Focus on information that can be used to solve problems or answer follow-up questions
-8. If documents mention specific products, people, dates, or decisions - include them
-9. Prioritize meeting minutes and live events over training/reference materials
+8. If documents mention specific products, people, dates, or decisions - include them ALL
+9. For comprehensive queries: Extract from ALL uploaded documents, not just one. Include specific dates, participants, decisions, and numbers from each document
+10. Prioritize meeting minutes and live events over training/reference materials
+11. Include specific quotes, decisions, and action items with responsible parties
+12. Extract actual data points: inventory levels, sales figures, forecast numbers, budget amounts
+13. When multiple documents are provided, synthesize information across ALL of them
 
-CONTEXT: This is for data mining and operational decision-making, not executive reporting. Extract granular, actionable intelligence."""
+CONTEXT: This is for data mining and operational decision-making, not executive reporting. Extract granular, actionable intelligence that can be used to make business decisions."""
 
                                         client.beta.threads.messages.create(
                                             thread_id=thread.id,
@@ -465,6 +473,11 @@ CONTEXT: This is for data mining and operational decision-making, not executive 
                                                     content_block = latest_message.content[0]
                                                     if hasattr(content_block, 'text'):
                                                         kb_answer = content_block.text.value
+                                                        
+                                                        # Clean up any OpenAI citation formats that slip through
+                                                        import re
+                                                        kb_answer = re.sub(r'【\d+:\d+†[^】]*】', '', kb_answer)
+                                                        kb_answer = re.sub(r'【[^】]*】', '', kb_answer)
                                                     else:
                                                         kb_answer = f"Found {len(relevant_files)} relevant documents but could not extract summary."
                                                 else:
