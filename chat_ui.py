@@ -167,8 +167,17 @@ def render_chat_assistant():
     # Confidence badge (from last interaction)
     if st.session_state.confidence_history:
         last_confidence = st.session_state.confidence_history[-1]
-        confidence_badge_html = get_confidence_badge(last_confidence, st.session_state.service_level)
-        st.markdown(f"**Confidence:** {confidence_badge_html}", unsafe_allow_html=True)
+        # Ensure confidence is a valid float
+        try:
+            if isinstance(last_confidence, dict):
+                confidence_value = last_confidence.get("score", 0.5)
+            else:
+                confidence_value = float(last_confidence) if last_confidence is not None else 0.5
+            confidence_badge_html = get_confidence_badge(confidence_value, st.session_state.service_level)
+            st.markdown(f"**Confidence:** {confidence_badge_html}", unsafe_allow_html=True)
+        except (ValueError, TypeError) as e:
+            # Fallback if confidence formatting fails
+            st.markdown("**Confidence:** Medium (0.50)", unsafe_allow_html=True)
 
     # Chat messages display
     for message in st.session_state.chat_messages:
@@ -210,7 +219,13 @@ def render_chat_assistant():
                 # Extract response components
                 answer = response.get("answer", "No answer provided")
                 sources = response.get("sources", {})
-                confidence_score = response.get("confidence", 0.5)
+                confidence_raw = response.get("confidence", 0.5)
+                
+                # Handle confidence score - it might be a dict from score_ravc() or a float
+                if isinstance(confidence_raw, dict):
+                    confidence_score = confidence_raw.get("score", 0.5)
+                else:
+                    confidence_score = float(confidence_raw) if confidence_raw is not None else 0.5
                 
                 # Update confidence history
                 st.session_state.confidence_history.append(confidence_score)
