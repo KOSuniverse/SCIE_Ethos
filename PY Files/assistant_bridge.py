@@ -277,3 +277,217 @@ def run_query_with_files(question: str, dropbox_paths: list[str], thread_id: str
 
     return {"answer": answer, "confidence": conf, "thread_id": thread.id, "debug_file_sync": debug_info}
 
+
+# NEW: Dual-answer function for Chat Assistant with KB + Data integration
+def run_query_dual(
+    messages: list[dict] | None = None,
+    prompt: str | None = None, 
+    thread_id: str | None = None,
+    kb_scope_dbx: str | None = None,
+    data_scope_dbx: str | None = None
+) -> dict:
+    """
+    Enhanced query function that provides both document-based and AI-synthesized answers.
+    
+    Args:
+        messages: Chat message history (not used yet, but reserved for future)
+        prompt: Current user question
+        thread_id: Existing thread ID to continue conversation
+        kb_scope_dbx: Dropbox path to knowledge base (e.g., "/Project_Root/06_LLM_Knowledge_Base")
+        data_scope_dbx: Dropbox path to data files (e.g., "/Project_Root/04_Data")
+    
+    Returns:
+        Dict with dual answers, sources, confidence, and thread_id
+    """
+    client = OpenAI()
+    
+    # Use prompt if provided, otherwise extract from messages
+    if prompt is None and messages:
+        # Extract the latest user message
+        user_messages = [msg for msg in messages if msg.get("role") == "user"]
+        if user_messages:
+            prompt = user_messages[-1].get("content", "")
+    
+    if not prompt:
+        return {
+            "answer": "### AI Answer\nNo question provided.",
+            "sources": {},
+            "confidence": 0.0,
+            "thread_id": thread_id or ""
+        }
+    
+    try:
+        # Load assistant configuration
+        assistant_id = None
+        try:
+            with open("prompts/assistant.json", "r", encoding="utf-8") as f:
+                meta = json.load(f)
+                assistant_id = meta["assistant_id"]
+        except Exception:
+            assistant_id = os.getenv("ASSISTANT_ID")
+        
+        if not assistant_id:
+            # Fallback to basic query if no assistant configured
+            return run_query(prompt, thread_id=thread_id)
+        
+        # Get or create thread
+        if thread_id:
+            thread = client.beta.threads.retrieve(thread_id)
+        else:
+            thread = client.beta.threads.create()
+        
+        # Get file candidates if KB/Data paths provided
+        kb_files = []
+        data_files = []
+        
+        if kb_scope_dbx or data_scope_dbx:
+            try:
+                from dropbox_kb_sync import list_kb_candidates
+                
+                candidates = list_kb_candidates(
+                    kb_scope_dbx or "/Project_Root/06_LLM_Knowledge_Base",
+                    data_scope_dbx or "/Project_Root/04_Data"
+                )
+                
+                kb_files = candidates.get('kb_docs', [])
+                data_files = candidates.get('data_files', [])
+                
+            except Exception as e:
+                print(f"Warning: Could not get KB candidates: {e}")
+        
+        # Attach relevant files to assistant (simplified for now)
+        file_ids = []
+        if _FILE_SYNC_AVAILABLE and (kb_files or data_files):
+            try:
+                # For now, we'll use a simple approach
+                # In a full implementation, this would upload and deduplicate files
+                print(f"Found {len(kb_files)} KB docs and {len(data_files)} data files for context")
+            except Exception as e:
+                print(f"Warning: File attachment failed: {e}")
+        
+        # DOCUMENT PASS: Try to answer from documents first
+        doc_answer = "insufficient evidence in KB"
+        doc_sources = {}
+        doc_confidence = 0.0
+        
+        if kb_files or data_files:
+            try:
+                # Add document-focused message
+                doc_prompt = f"""Answer this question strictly from the attached documents and data files. 
+                
+Question: {prompt}
+
+Requirements:
+- Only use information directly found in the documents
+- Always cite your sources with specific document names
+- If evidence is insufficient, state "insufficient evidence in KB" and explain what's missing
+- Provide at least 2 citations for a complete answer
+
+Answer:"""
+                
+                client.beta.threads.messages.create(
+                    thread_id=thread.id,
+                    role="user", 
+                    content=doc_prompt
+                )
+                
+                # Run with document focus
+                run = client.beta.threads.runs.create(
+                    thread_id=thread.id, 
+                    assistant_id=assistant_id,
+                    instructions="Focus on document content. Cite sources. Be strict about evidence requirements."
+                )
+                
+                # Poll for completion
+                terminal_states = {"completed", "failed", "cancelled", "expired"}
+                while run.status not in terminal_states:
+                    time.sleep(1)
+                    run = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+                
+                doc_answer = _extract_answer(client, thread.id)
+                
+                # Simple confidence based on presence of citations
+                citation_count = doc_answer.count("(") + doc_answer.count("[")  # Simple citation detection
+                if "insufficient evidence" not in doc_answer.lower() and citation_count >= 2:
+                    doc_confidence = 0.8
+                else:
+                    doc_confidence = 0.3
+                    
+            except Exception as e:
+                print(f"Document pass failed: {e}")
+                doc_answer = "insufficient evidence in KB - document search error"
+        
+        # AI PASS: Get synthesized answer
+        ai_answer = "Unable to provide AI analysis."
+        ai_confidence = 0.0
+        
+        try:
+            # Add AI-focused message
+            ai_prompt = f"""Provide a comprehensive analysis of this question using your knowledge and reasoning:
+
+Question: {prompt}
+
+Provide a thoughtful, detailed response that synthesizes information and provides insights."""
+            
+            client.beta.threads.messages.create(
+                thread_id=thread.id,
+                role="user",
+                content=ai_prompt
+            )
+            
+            # Run for AI synthesis
+            run = client.beta.threads.runs.create(
+                thread_id=thread.id,
+                assistant_id=assistant_id
+            )
+            
+            # Poll for completion
+            while run.status not in terminal_states:
+                time.sleep(1)
+                run = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+            
+            ai_answer = _extract_answer(client, thread.id)
+            ai_confidence = 0.7  # Default AI confidence
+            
+        except Exception as e:
+            print(f"AI pass failed: {e}")
+        
+        # Compose dual response
+        final_answer = f"""### Document Answer
+{doc_answer}
+
+### AI Answer
+{ai_answer}"""
+        
+        # Combine sources (simplified for now)
+        combined_sources = {
+            "kb_sources": [{"name": f["name"], "path": f["path"]} for f in kb_files[:5]],
+            "data_sources": [{"name": f["name"], "path": f["path"]} for f in data_files[:3]],
+            "file_sources": []
+        }
+        
+        # Use higher confidence score
+        final_confidence = max(doc_confidence, ai_confidence)
+        
+        return {
+            "answer": final_answer,
+            "sources": combined_sources,
+            "confidence": final_confidence,
+            "thread_id": thread.id,
+            "doc_confidence": doc_confidence,
+            "ai_confidence": ai_confidence
+        }
+        
+    except Exception as e:
+        print(f"Dual query failed, falling back to basic query: {e}")
+        # Graceful fallback to existing function
+        try:
+            return run_query(prompt, thread_id=thread_id)
+        except Exception as fallback_error:
+            return {
+                "answer": f"### AI Answer\nI apologize, but I encountered an error processing your question: {str(e)}",
+                "sources": {},
+                "confidence": 0.0,
+                "thread_id": thread_id or ""
+            }
+
