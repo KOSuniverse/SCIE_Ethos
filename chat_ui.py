@@ -199,14 +199,13 @@ def render_chat_assistant():
                 # Initialize export manager with current service level
                 export_manager = ExportManager(st.session_state.service_level)
                 
-                # Run query with appropriate model
-                if model_choice == "Assistant API":
-                    # Use OpenAI Assistant API
-                    response = run_query(prompt, selected_files=st.session_state.selected_files)
+                # Run query with appropriate method
+                if st.session_state.selected_files:
+                    # Use file-based query if files are selected
+                    response = run_query_with_files(prompt, st.session_state.selected_files)
                 else:
-                    # Use direct model calls
-                    model_name = "gpt-4o" if model_choice == "GPT-4o" else "gpt-5"
-                    response = run_query(prompt, model=model_name, selected_files=st.session_state.selected_files)
+                    # Use basic query
+                    response = run_query(prompt)
                 
                 # Extract response components
                 answer = response.get("answer", "No answer provided")
