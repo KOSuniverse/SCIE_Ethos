@@ -376,22 +376,34 @@ def render_chat_assistant():
                                         # Create detailed prompt for multi-document analysis
                                         file_list = "\n".join([f"- {f['name']} (from {f['folder']} folder, priority {f['priority']})" for f in uploaded_files])
                                         
+                                        # Add conversation context for follow-up questions
+                                        conversation_context = ""
+                                        if len(st.session_state.chat_messages) > 2:  # Has previous conversation
+                                            recent_messages = st.session_state.chat_messages[-4:]  # Last 2 Q&A pairs
+                                            conversation_context = "\nRECENT CONVERSATION CONTEXT:\n"
+                                            for msg in recent_messages:
+                                                role = msg.get('role', 'unknown')
+                                                content = msg.get('content', '')[:200]  # Limit length
+                                                conversation_context += f"{role.upper()}: {content}...\n"
+                                            conversation_context += "\nUse this context to understand follow-up questions.\n"
+                                        
                                         analysis_prompt = f"""I have uploaded {len(uploaded_files)} documents to analyze. Please answer this question: {prompt}
 
 UPLOADED DOCUMENTS:
-{file_list}
+{file_list}{conversation_context}
 
-INSTRUCTIONS:
-1. Analyze ALL uploaded documents to find relevant information
-2. For each piece of information, use this format: "From [DOCUMENT NAME] (folder: [FOLDER]): [information]"
-3. If documents have conflicting information, mention both viewpoints
-4. Prioritize information from meeting minutes and live events over training materials
-5. For data files (.xlsx), look for specific tables, numbers, and data points
-6. Provide specific details, quotes, data points, and table information where available
-7. If no relevant information is found in the documents, clearly state this
-8. Do NOT use OpenAI's internal citation format (【4:1†source】) - use the clear format specified above
+CRITICAL INSTRUCTIONS - FOLLOW EXACTLY:
+1. Extract SPECIFIC, ACTIONABLE details from the documents - not high-level summaries
+2. Include: names of people, specific products mentioned, exact decisions made, action items assigned
+3. For meetings: Who said what? What was decided? What are the next steps? What problems were identified?
+4. For data files: Extract actual numbers, table data, specific metrics, trends
+5. Use ONLY this source format: "From [DOCUMENT NAME] (folder: [FOLDER]): [specific detail]"
+6. NEVER use 【4:1†source】 or similar OpenAI citation formats
+7. Focus on information that can be used to solve problems or answer follow-up questions
+8. If documents mention specific products, people, dates, or decisions - include them
+9. Prioritize meeting minutes and live events over training/reference materials
 
-Please provide a comprehensive analysis that synthesizes information from all relevant documents with clear source attribution."""
+CONTEXT: This is for data mining and operational decision-making, not executive reporting. Extract granular, actionable intelligence."""
 
                                         client.beta.threads.messages.create(
                                             thread_id=thread.id,
@@ -447,8 +459,31 @@ Please provide a comprehensive analysis that synthesizes information from all re
                 except Exception as e:
                     kb_answer = f"Knowledge base search unavailable: {str(e)}"
                 
-                # Combine responses
+                # Combine responses with enhanced AI analysis
                 ai_answer = ai_response.get("answer", "No AI response available")
+                
+                # Enhance AI analysis to be contextual to KB findings
+                if kb_answer and kb_answer != "No relevant documents found in knowledge base." and "could not" not in kb_answer:
+                    # AI should enhance/contextualize KB findings
+                    enhanced_ai_prompt = f"""Based on the Knowledge Base findings below, provide additional context, analysis, or insights that relate specifically to the question: {prompt}
+
+Knowledge Base Findings:
+{kb_answer}
+
+Instructions:
+- Build upon the KB findings, don't repeat them
+- Add relevant context or implications
+- Relate your analysis directly to the specific question asked
+- Do NOT use external company examples (like Pegasa or random manufacturers)
+- Focus on insights that would help with follow-up questions or decisions
+- If the KB findings are sufficient, acknowledge them and add minimal but relevant context"""
+                    
+                    try:
+                        # Get contextual AI response
+                        ai_response_enhanced = run_query(enhanced_ai_prompt, thread_id=st.session_state.thread_id)
+                        ai_answer = ai_response_enhanced.get("answer", ai_answer)
+                    except:
+                        pass  # Fall back to original AI answer
                 
                 # Create dual format answer
                 answer = f"""### 📚 Knowledge Base Answer
