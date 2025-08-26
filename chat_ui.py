@@ -20,7 +20,7 @@ from session import SessionState
 from logger import log_event, log_query_result
 from orchestrator import answer_question
 from assistant_bridge import auto_model, run_query, run_query_with_files
-from confidence import score_ravc, should_abstain, score_confidence_enhanced, get_service_level_zscore
+from confidence import score_ravc, should_abstain, score_confidence_enhanced, get_service_level_zscore, get_confidence_badge
 from path_utils import get_project_paths
 from dbx_utils import list_data_files
 
@@ -300,9 +300,9 @@ def render_chat_assistant():
                 })
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Enhanced Export Options
-# ─────────────────────────────────────────────────────────────
-if st.session_state.chat_messages:
+    # Enhanced Export Options
+    # ─────────────────────────────────────────────────────────────
+    if st.session_state.chat_messages:
         st.markdown("---")
         st.header("📤 Export Options")
         
@@ -400,22 +400,7 @@ if st.session_state.chat_messages:
                         else:
                             st.error(f"❌ {format_name.upper()}")
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # Footer
-    # ─────────────────────────────────────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown(
-        "<div style='text-align: center; color: #666; font-size: 0.8rem;'>"
-        "🧠 SCIE Ethos LLM Assistant | Enhanced Phase 4 UI with Service Level Control & Multi-Format Exports"
-        "</div>", 
-        unsafe_allow_html=True
-    )
 
-
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Main execution when run as standalone
-# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     render_chat_assistant()
