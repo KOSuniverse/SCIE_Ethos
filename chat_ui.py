@@ -101,6 +101,8 @@ def render_chat_assistant():
         st.session_state.selected_files = []
     if "service_level" not in st.session_state:
         st.session_state.service_level = 0.95
+    if "thread_id" not in st.session_state:
+        st.session_state.thread_id = None
 
     # ─────────────────────────────────────────────────────────────────────────────
     # Helper Functions
@@ -208,13 +210,20 @@ def render_chat_assistant():
                 # Initialize export manager with current service level
                 export_manager = ExportManager(st.session_state.service_level)
                 
-                # Run query with appropriate method
+                # Run query with appropriate method and thread continuity
                 if st.session_state.selected_files:
                     # Use file-based query if files are selected
-                    response = run_query_with_files(prompt, st.session_state.selected_files)
+                    response = run_query_with_files(
+                        prompt, 
+                        st.session_state.selected_files,
+                        thread_id=st.session_state.thread_id
+                    )
                 else:
                     # Use basic query
-                    response = run_query(prompt)
+                    response = run_query(
+                        prompt,
+                        thread_id=st.session_state.thread_id
+                    )
                 
                 # Extract response components
                 answer = response.get("answer", "No answer provided")
@@ -226,6 +235,10 @@ def render_chat_assistant():
                     confidence_score = confidence_raw.get("score", 0.5)
                 else:
                     confidence_score = float(confidence_raw) if confidence_raw is not None else 0.5
+                
+                # Capture thread_id for conversation continuity
+                if response.get("thread_id") and not st.session_state.thread_id:
+                    st.session_state.thread_id = response["thread_id"]
                 
                 # Update confidence history
                 st.session_state.confidence_history.append(confidence_score)
