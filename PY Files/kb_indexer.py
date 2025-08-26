@@ -397,6 +397,36 @@ Include ALL names, numbers, dates, decisions, and action items that someone migh
         
         return " | ".join(searchable_parts)
     
+    def _ensure_dropbox_folder_exists(self, folder_path: str) -> bool:
+        """Ensure Dropbox folder exists, create if needed."""
+        try:
+            from dbx_utils import _get_dbx_client
+            import dropbox
+            
+            client = _get_dbx_client()
+            
+            # Try to get folder metadata
+            try:
+                client.files_get_metadata(folder_path)
+                return True  # Folder exists
+            except dropbox.exceptions.ApiError as e:
+                if e.error.is_path_not_found():
+                    # Folder doesn't exist, create it
+                    try:
+                        client.files_create_folder_v2(folder_path)
+                        print(f"📁 Created Dropbox folder: {folder_path}")
+                        return True
+                    except dropbox.exceptions.ApiError as create_error:
+                        print(f"❌ Failed to create folder {folder_path}: {create_error}")
+                        return False
+                else:
+                    print(f"❌ Error checking folder {folder_path}: {e}")
+                    return False
+                    
+        except Exception as e:
+            print(f"❌ Error ensuring folder exists: {e}")
+            return False
+
     def _save_summary_to_dropbox(self, summary_data: Dict[str, Any]) -> bool:
         """Save individual summary to Dropbox."""
         if not DROPBOX_AVAILABLE:
@@ -406,6 +436,11 @@ Include ALL names, numbers, dates, decisions, and action items that someone migh
         try:
             from dbx_utils import _get_dbx_client
             import dropbox
+            
+            # Ensure the summaries folder exists
+            if not self._ensure_dropbox_folder_exists(self.dropbox_summaries_folder):
+                print(f"❌ Cannot create summaries folder: {self.dropbox_summaries_folder}")
+                return False
             
             # Create filename for individual summary
             safe_filename = summary_data['summary_filename'] + '.json'
@@ -437,6 +472,11 @@ Include ALL names, numbers, dates, decisions, and action items that someone migh
         try:
             from dbx_utils import _get_dbx_client
             import dropbox
+            
+            # Ensure the summaries folder exists
+            if not self._ensure_dropbox_folder_exists(self.dropbox_summaries_folder):
+                print(f"❌ Cannot create summaries folder for master index")
+                return False
             
             # Create master index
             master_index = {
@@ -571,10 +611,15 @@ Include ALL names, numbers, dates, decisions, and action items that someone migh
             return {"error": "OpenAI Assistant not configured"}
         
         print("🔍 Scanning for new files...")
+        print(f"📁 KB Path: {self.kb_path}")
+        print(f"📁 Data Path: {self.data_path}")
+        print(f"📁 Summaries will be saved to: {self.dropbox_summaries_folder}")
         
         # Get all files
         candidates = list_kb_candidates(self.kb_path, self.data_path)
         all_files = candidates.get('kb_docs', []) + candidates.get('data_files', [])
+        
+        print(f"📄 Found {len(all_files)} total files to consider")
         
         new_files = []
         updated_files = []
@@ -606,7 +651,10 @@ Include ALL names, numbers, dates, decisions, and action items that someone migh
         failed_count = 0
         all_summaries = []
         
-        for file_info in new_files + updated_files:
+        for i, file_info in enumerate(new_files + updated_files, 1):
+            total_to_process = len(new_files) + len(updated_files)
+            print(f"🔄 Processing {i}/{total_to_process}: {file_info['name']}")
+            
             summary_data = self._summarize_document(file_info)
             
             if summary_data:
@@ -616,12 +664,15 @@ Include ALL names, numbers, dates, decisions, and action items that someone migh
                 self.file_hashes[file_path] = self._calculate_file_hash(file_path)
                 
                 # Save individual summary to Dropbox
-                self._save_summary_to_dropbox(summary_data)
-                all_summaries.append(summary_data)
-                
-                processed_count += 1
-                print(f"✅ Processed: {file_info['name']}")
+                if self._save_summary_to_dropbox(summary_data):
+                    all_summaries.append(summary_data)
+                    processed_count += 1
+                    print(f"✅ Processed and saved: {file_info['name']}")
+                else:
+                    print(f"⚠️ Processed but failed to save: {file_info['name']}")
+                    failed_count += 1
             else:
+                print(f"❌ Failed to process: {file_info['name']}")
                 failed_count += 1
         
         # Load existing summaries from Dropbox and merge with new ones
