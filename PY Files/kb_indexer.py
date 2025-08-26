@@ -448,7 +448,14 @@ Include ALL names, numbers, dates, decisions, and action items that someone migh
             
             # Upload summary to Dropbox
             client = _get_dbx_client()
-            summary_json = json.dumps(summary_data, indent=2, ensure_ascii=False)
+            
+            # Convert datetime objects to strings for JSON serialization
+            def datetime_handler(obj):
+                if hasattr(obj, 'isoformat'):
+                    return obj.isoformat()
+                raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+            
+            summary_json = json.dumps(summary_data, indent=2, ensure_ascii=False, default=datetime_handler)
             
             client.files_upload(
                 summary_json.encode('utf-8'),
@@ -487,7 +494,14 @@ Include ALL names, numbers, dates, decisions, and action items that someone migh
             
             # Upload to Dropbox
             client = _get_dbx_client()
-            index_json = json.dumps(master_index, indent=2, ensure_ascii=False)
+            
+            # Convert datetime objects to strings for JSON serialization
+            def datetime_handler(obj):
+                if hasattr(obj, 'isoformat'):
+                    return obj.isoformat()
+                raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+            
+            index_json = json.dumps(master_index, indent=2, ensure_ascii=False, default=datetime_handler)
             
             client.files_upload(
                 index_json.encode('utf-8'),
