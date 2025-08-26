@@ -171,15 +171,10 @@ if interface_mode == "💬 Chat Assistant":
     # Import and render chat assistant inline
     from chat_ui import render_chat_assistant
     render_chat_assistant()
-    
-    # Chat assistant is now rendered inline above - no button needed
+    st.stop()  # Stop execution here - don't run DP code
 
-
-
-
-else:
-    # Data Processing mode
-    st.title("📊 SCIE Ethos — Data Processing Workflows")
+# Data Processing mode
+st.title("📊 SCIE Ethos — Data Processing Workflows")
 
 # Resolve canonical cloud paths (diagnostic/manifest usage)
 cloud_paths = get_project_paths()  # keep separate from AppPaths below
