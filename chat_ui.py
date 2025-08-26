@@ -19,7 +19,7 @@ from constants import PROJECT_ROOT, META_DIR, DATA_ROOT, CLEANSED
 from session import SessionState
 from logger import log_event, log_query_result
 from orchestrator import answer_question
-from assistant_bridge import auto_model, run_query, run_query_with_files
+from assistant_bridge import auto_model, run_query, run_query_with_files, run_query_dual
 from confidence import score_ravc, should_abstain, score_confidence_enhanced, get_service_level_zscore, get_confidence_badge
 from path_utils import get_project_paths
 from dbx_utils import list_data_files
@@ -210,20 +210,16 @@ def render_chat_assistant():
                 # Initialize export manager with current service level
                 export_manager = ExportManager(st.session_state.service_level)
                 
-                # Run query with appropriate method and thread continuity
-                if st.session_state.selected_files:
-                    # Use file-based query if files are selected
-                    response = run_query_with_files(
-                        prompt, 
-                        st.session_state.selected_files,
-                        thread_id=st.session_state.thread_id
-                    )
-                else:
-                    # Use basic query
-                    response = run_query(
-                        prompt,
-                        thread_id=st.session_state.thread_id
-                    )
+                # Run query with dual-answer approach (KB + AI)
+                kb_path = os.getenv("KB_DBX_PATH", "/Project_Root/06_LLM_Knowledge_Base")
+                data_path = os.getenv("DATA_DBX_PATH", "/Project_Root/04_Data")
+                
+                response = run_query_dual(
+                    prompt=prompt,
+                    thread_id=st.session_state.thread_id,
+                    kb_scope_dbx=kb_path,
+                    data_scope_dbx=data_path
+                )
                 
                 # Extract response components
                 answer = response.get("answer", "No answer provided")
