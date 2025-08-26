@@ -45,7 +45,7 @@ def _extract_answer(client: OpenAI, thread_id: str) -> str:
     except Exception:
         return ""
 
-def run_query(question: str, intent_hint: str | None = None) -> dict:
+def run_query(question: str, intent_hint: str | None = None, thread_id: str | None = None) -> dict:
     client = OpenAI()
     
     # Try to load assistant metadata from multiple sources
@@ -76,7 +76,11 @@ def run_query(question: str, intent_hint: str | None = None) -> dict:
     if not assistant_id:
         raise RuntimeError("No assistant ID found. Run dropbox_sync.py first to create the assistant.")
 
-    thread = client.beta.threads.create()
+    # Reuse existing thread or create new one
+    if thread_id:
+        thread = client.beta.threads.retrieve(thread_id)
+    else:
+        thread = client.beta.threads.create()
     
     # Create the user message
     message_content = question
@@ -196,13 +200,17 @@ def run_query(question: str, intent_hint: str | None = None) -> dict:
 
 # NEW: Variant that syncs selected Dropbox cleansed files to OpenAI and attaches a vector store
 
-def run_query_with_files(question: str, dropbox_paths: list[str]) -> dict:
+def run_query_with_files(question: str, dropbox_paths: list[str], thread_id: str | None = None) -> dict:
     client = OpenAI()
     with open("prompts/assistant.json", "r", encoding="utf-8") as f:
         meta = json.load(f)
     assistant_id = meta["assistant_id"]
 
-    thread = client.beta.threads.create()
+    # Reuse existing thread or create new one
+    if thread_id:
+        thread = client.beta.threads.retrieve(thread_id)
+    else:
+        thread = client.beta.threads.create()
 
     # Use Code Interpreter instead of File Search for Excel files
     debug_info = {"file_sync_attempted": False, "files_uploaded": [], "code_interpreter_files": [], "sync_error": None}
