@@ -27,6 +27,10 @@ class KBIndexer:
         self.summaries_path = summaries_path
         self.client = OpenAI()
         
+        # Dropbox paths for saving summaries
+        self.dropbox_summaries_folder = "/Project_Root/06_LLM_Knowledge_Base/KB_Summaries"
+        self.master_index_path = "/Project_Root/06_LLM_Knowledge_Base/KB_Summaries/master_index.json"
+        
         # Load assistant configuration
         self.assistant_id = self._get_assistant_id()
         
@@ -142,8 +146,31 @@ class KBIndexer:
         """Create appropriate summarization prompt based on file type."""
         
         base_instructions = f"""
-CRITICAL: Extract ALL dates mentioned in this document and format them clearly.
-For each significant piece of information, include the date when it was discussed/decided.
+CRITICAL: Create a GRANULAR, DATA-MINING level summary for this document.
+
+This summary will be used to FIND this document later when searching for specific information. Include ALL searchable details that someone might look for.
+
+Extract and include EVERY:
+- Person name (full name, title, role, department) - e.g., "John Smith, VP Operations", "Sarah Johnson, Finance Manager"  
+- Product name, model number, SKU, part number - e.g., "Widget-A Model 2024", "SKU-12345", "Product Line B"
+- Company name, vendor, supplier, customer - e.g., "ABC Manufacturing", "XYZ Logistics"
+- Location, facility, region, country - e.g., "Ohio Plant", "European Division", "Site #3"
+- Date mentioned (meeting dates, deadlines, launch dates) - e.g., "March 15, 2024", "Q2 deadline"
+- Number, quantity, percentage, dollar amount - e.g., "$2.3M budget", "15% increase", "50,000 units"
+- Decision made and decision maker - e.g., "John Smith approved 20% price increase"
+- Action item and responsible party - e.g., "Sarah to review contracts by April 30"
+- Problem identified and impact - e.g., "12,000 unit shortage causing $450K revenue loss"
+- Solution proposed and timeline - e.g., "Expedite supplier delivery, 2-week timeline"
+- Key topic, theme, discussion point - Include specific context, not just categories
+
+SEARCHABILITY FOCUS: Include terms someone would actually search for:
+- If discussing inventory: Include specific product names, quantities, locations
+- If discussing budgets: Include dollar amounts, cost centers, approval levels  
+- If discussing people: Include full names, titles, what they said/decided
+- If discussing timelines: Include specific dates, milestones, deadlines
+- If discussing problems: Include specific impacts, root causes, solutions
+
+Format as a comprehensive summary that reads like: "On [DATE], [PERSON] discussed [SPECIFIC TOPIC] involving [SPECIFIC DETAILS]..."
 
 Document: {file_name}
 Location: {folder_path}
@@ -177,26 +204,37 @@ Format as clear, searchable text with all visible details captured."""
         elif file_type in ['.msg', '.eml']:
             return f"""{base_instructions}
 
-This is an EMAIL file. Please provide:
+This is an EMAIL file. Extract EVERY searchable detail:
 
 **METADATA SECTION:**
 - Email Date: [Extract exact date/time]
-- From: [Sender name and email]
-- To: [Recipients]
-- Subject: [Full subject line]
+- From: [Full sender name, title if mentioned, email address]
+- To: [All recipient names and emails]
+- Subject: [Complete subject line]
+- CC/BCC: [All additional recipients]
 
-**CONTENT SECTION:**
-- Full email body text
-- Key participants mentioned in the email
-- Important decisions or action items with dates
-- Products, projects, or topics discussed
-- Any meetings, deadlines, or future dates mentioned
-- Numbers, metrics, or data points
+**GRANULAR CONTENT EXTRACTION:**
+- Full names and titles of everyone mentioned
+- Specific product names, model numbers, SKUs discussed
+- Exact dollar amounts, quantities, percentages mentioned
+- Specific dates (deadlines, meeting dates, launch dates)
+- Decisions made and who made them
+- Action items with responsible parties and deadlines
+- Problems identified with specific impacts
+- Solutions proposed with timelines
+- Company names, vendors, suppliers mentioned
+- Locations, facilities, regions discussed
+- Project names, initiative codes, reference numbers
+
+**EMAIL THREAD CONTEXT:**
+- If this is part of a thread, include context from previous messages
+- Reference any attachments mentioned
+- Note any urgency indicators or priority levels
 
 **SEARCHABLE SUMMARY:**
-Create a paragraph summary that includes key dates and can be easily searched.
+Create a comprehensive summary: "On [EXACT DATE], [FULL NAME/TITLE] emailed [RECIPIENTS] regarding [SPECIFIC TOPIC]. Key points: [SPECIFIC PERSON] decided [SPECIFIC DECISION] involving [SPECIFIC PRODUCTS/AMOUNTS]. Action items: [PERSON] to [SPECIFIC ACTION] by [DATE]. Problems discussed: [SPECIFIC ISSUES] with [DOLLAR IMPACT]. Solutions: [SPECIFIC PROPOSALS]."
 
-Format everything as clear, searchable text with dates prominently featured."""
+Include ALL names, numbers, dates, and decisions that someone might search for later."""
 
         elif file_type in ['.xlsx', '.csv']:
             return f"""{base_instructions}
@@ -221,30 +259,55 @@ Create a summary focusing on what questions this data could answer and when it's
 
 Include all dates and time periods prominently."""
 
-        else:  # Documents (.pdf, .docx, etc.)
+        else:  # Documents (.pdf, .docx, .pptx, etc.)
+            # Determine document context based on filename/folder
+            doc_context = ""
+            if any(term in file_name.lower() for term in ["meeting", "minutes", "mom", "agenda"]):
+                doc_context = "This appears to be MEETING MINUTES. "
+            elif any(term in file_name.lower() for term in ["presentation", "ppt", "slides"]):
+                doc_context = "This appears to be a PRESENTATION. "
+            elif any(term in file_name.lower() for term in ["report", "analysis", "summary"]):
+                doc_context = "This appears to be a REPORT/ANALYSIS. "
+            elif "meeting" in folder_path.lower():
+                doc_context = "This is from a meeting folder - likely MEETING CONTENT. "
+            
             return f"""{base_instructions}
 
-This is a DOCUMENT file. Please provide:
+This is a DOCUMENT file ({file_type}). {doc_context}Extract EVERY searchable detail:
 
 **METADATA SECTION:**
 - Document Date: [When was this document created/meeting held?]
 - Meeting Date: [If this is meeting minutes, when was the meeting?]
-- Key Participants: [Names and roles of people involved]
+- Key Participants: [Full names, titles, departments of ALL people involved]
 - Document Type: [Meeting minutes, report, presentation, etc.]
 
-**CONTENT SECTION:**
-- Main topic and purpose with dates
-- Important decisions made (WHO decided WHAT and WHEN)
-- Action items with owners and deadlines
-- Products, projects, or initiatives discussed
-- Data points, metrics, or numbers with their context
-- Problems identified and solutions proposed with timelines
-- Follow-up meetings or deadlines mentioned
+**GRANULAR CONTENT EXTRACTION:**
+- Meeting attendees with full names and titles
+- Specific topics discussed with context
+- Exact decisions made (WHO decided WHAT involving WHICH PRODUCTS/AMOUNTS)
+- Action items with responsible parties and specific deadlines
+- Product names, model numbers, SKUs, project codes mentioned
+- Dollar amounts, quantities, percentages, metrics discussed
+- Problems identified with specific impacts and root causes
+- Solutions proposed with timelines and responsible parties
+- Company names, vendors, suppliers, customers mentioned
+- Locations, facilities, regions, markets discussed
+- Dates mentioned (deadlines, launch dates, meeting dates, milestones)
+- Budget allocations, cost centers, approval levels
+- Performance metrics, KPIs, targets, variances
+
+**MEETING MINUTES SPECIFIC:**
+- Agenda items covered
+- Motions made and voting results
+- Disagreements or concerns raised
+- Follow-up meetings scheduled
+- Presentation topics and key findings
+- Questions asked and answers provided
 
 **SEARCHABLE SUMMARY:**
-Create a detailed summary that starts with the date and includes "On [DATE], [PARTICIPANTS] discussed [TOPICS]..."
+Create a comprehensive summary: "On [EXACT DATE], [FULL NAMES/TITLES] met to discuss [SPECIFIC TOPICS]. Key decisions: [PERSON] approved [SPECIFIC DECISION] involving [PRODUCTS/AMOUNTS]. Action items: [PERSON] to [SPECIFIC ACTION] by [DATE]. Problems discussed: [SPECIFIC ISSUES] with [IMPACT]. Budget items: [AMOUNTS] for [PURPOSES]. Next steps: [SPECIFIC ACTIONS] by [DATES]."
 
-Make this summary detailed enough for data mining and problem-solving, with dates prominently featured throughout."""
+Include ALL names, numbers, dates, decisions, and action items that someone might search for when looking for specific information."""
     
     def _extract_dates_from_summary(self, summary_text: str) -> List[str]:
         """Extract dates from summary text using regex patterns."""
@@ -290,14 +353,133 @@ Make this summary detailed enough for data mining and problem-solving, with date
         return f"{date_prefix}{folder_clean}_{base_name}_summary"
     
     def _create_searchable_content(self, summary_text: str, file_name: str, folder_path: str) -> str:
-        """Create enhanced searchable content combining all metadata."""
+        """Create enhanced searchable content combining all metadata and extracting key terms."""
+        import re
+        
+        # Extract key searchable terms from summary
+        searchable_terms = []
+        
+        # Extract names (capitalized words, likely people/companies)
+        names = re.findall(r'\b[A-Z][a-z]+ [A-Z][a-z]+\b', summary_text)
+        searchable_terms.extend(names)
+        
+        # Extract dollar amounts
+        dollar_amounts = re.findall(r'\$[\d,]+(?:\.\d{2})?[KMB]?', summary_text)
+        searchable_terms.extend(dollar_amounts)
+        
+        # Extract percentages
+        percentages = re.findall(r'\d+(?:\.\d+)?%', summary_text)
+        searchable_terms.extend(percentages)
+        
+        # Extract dates
+        dates = re.findall(r'\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b', summary_text)
+        dates.extend(re.findall(r'\b\d{1,2}/\d{1,2}/\d{4}\b', summary_text))
+        searchable_terms.extend(dates)
+        
+        # Extract product codes/SKUs (alphanumeric patterns)
+        product_codes = re.findall(r'\b[A-Z]{2,}-?\d+[A-Z]?\b', summary_text)
+        searchable_terms.extend(product_codes)
+        
+        # Extract quantities with units
+        quantities = re.findall(r'\b\d{1,3}(?:,\d{3})*\s+(?:units|pieces|items|tons|pounds|kg|lbs)\b', summary_text, re.IGNORECASE)
+        searchable_terms.extend(quantities)
+        
+        # Clean filename for additional searchable terms
+        clean_filename = file_name.replace('_', ' ').replace('-', ' ').replace('.', ' ')
+        
         searchable_parts = [
             f"Filename: {file_name}",
             f"Location: {folder_path}",
+            f"Key Terms: {' | '.join(set(searchable_terms))}",
+            f"Clean Filename: {clean_filename}",
             f"Summary: {summary_text}"
         ]
         
         return " | ".join(searchable_parts)
+    
+    def _save_summary_to_dropbox(self, summary_data: Dict[str, Any]) -> bool:
+        """Save individual summary to Dropbox."""
+        if not DROPBOX_AVAILABLE:
+            print("Dropbox not available - cannot save summary")
+            return False
+            
+        try:
+            from dbx_utils import _get_dbx_client
+            import dropbox
+            
+            # Create filename for individual summary
+            safe_filename = summary_data['summary_filename'] + '.json'
+            dropbox_path = f"{self.dropbox_summaries_folder}/{safe_filename}"
+            
+            # Upload summary to Dropbox
+            client = _get_dbx_client()
+            summary_json = json.dumps(summary_data, indent=2, ensure_ascii=False)
+            
+            client.files_upload(
+                summary_json.encode('utf-8'),
+                dropbox_path,
+                mode=dropbox.files.WriteMode.overwrite
+            )
+            
+            print(f"✅ Saved summary: {safe_filename}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Failed to save summary to Dropbox: {e}")
+            return False
+    
+    def _save_master_index_to_dropbox(self, all_summaries: List[Dict[str, Any]]) -> bool:
+        """Save master index of all summaries to Dropbox."""
+        if not DROPBOX_AVAILABLE:
+            print("Dropbox not available - cannot save master index")
+            return False
+            
+        try:
+            from dbx_utils import _get_dbx_client
+            import dropbox
+            
+            # Create master index
+            master_index = {
+                "last_updated": datetime.now().isoformat(),
+                "total_documents": len(all_summaries),
+                "summaries": all_summaries
+            }
+            
+            # Upload to Dropbox
+            client = _get_dbx_client()
+            index_json = json.dumps(master_index, indent=2, ensure_ascii=False)
+            
+            client.files_upload(
+                index_json.encode('utf-8'),
+                self.master_index_path,
+                mode=dropbox.files.WriteMode.overwrite
+            )
+            
+            print(f"✅ Saved master index with {len(all_summaries)} documents")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Failed to save master index to Dropbox: {e}")
+            return False
+    
+    def _load_master_index_from_dropbox(self) -> List[Dict[str, Any]]:
+        """Load existing master index from Dropbox."""
+        if not DROPBOX_AVAILABLE:
+            return []
+            
+        try:
+            from dbx_utils import read_file_bytes
+            
+            # Try to read existing master index
+            index_bytes = read_file_bytes(self.master_index_path)
+            if index_bytes:
+                index_data = json.loads(index_bytes.decode('utf-8'))
+                return index_data.get('summaries', [])
+                
+        except Exception as e:
+            print(f"No existing master index found: {e}")
+            
+        return []
     
     def _summarize_document(self, file_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Create summary for a single document."""
@@ -422,6 +604,7 @@ Make this summary detailed enough for data mining and problem-solving, with date
         # Process new and updated files
         processed_count = 0
         failed_count = 0
+        all_summaries = []
         
         for file_info in new_files + updated_files:
             summary_data = self._summarize_document(file_info)
@@ -431,12 +614,29 @@ Make this summary detailed enough for data mining and problem-solving, with date
                 file_path = file_info['path']
                 self.document_index[file_path] = summary_data
                 self.file_hashes[file_path] = self._calculate_file_hash(file_path)
+                
+                # Save individual summary to Dropbox
+                self._save_summary_to_dropbox(summary_data)
+                all_summaries.append(summary_data)
+                
                 processed_count += 1
                 print(f"✅ Processed: {file_info['name']}")
             else:
                 failed_count += 1
         
-        # Save updated indexes
+        # Load existing summaries from Dropbox and merge with new ones
+        existing_summaries = self._load_master_index_from_dropbox()
+        
+        # Merge existing with new (avoid duplicates by file path)
+        existing_paths = {s.get('file_path') for s in existing_summaries}
+        for summary in all_summaries:
+            if summary.get('file_path') not in existing_paths:
+                existing_summaries.append(summary)
+        
+        # Save master index to Dropbox
+        self._save_master_index_to_dropbox(existing_summaries)
+        
+        # Save updated local indexes (for hash tracking)
         self._save_document_index()
         self._save_file_hashes()
         
@@ -449,31 +649,129 @@ Make this summary detailed enough for data mining and problem-solving, with date
             "index_size": len(self.document_index)
         }
     
-    def search_summaries(self, query: str, max_results: int = 5) -> List[Dict[str, Any]]:
-        """Search through document summaries."""
+    def search_summaries(self, query: str, max_results: int = 10) -> List[Dict[str, Any]]:
+        """Advanced search through document summaries with intelligent query analysis."""
+        import re
+        from datetime import datetime, timedelta
+        
         query_lower = query.lower()
         results = []
         
-        for file_path, summary_data in self.document_index.items():
+        # Analyze query type for better search strategy
+        query_analysis = self._analyze_query(query_lower)
+        
+        # Load master index from Dropbox if available
+        master_summaries = self._load_master_index_from_dropbox()
+        all_summaries = master_summaries if master_summaries else list(self.document_index.values())
+        
+        for summary_data in all_summaries:
             summary_text = summary_data.get('summary', '').lower()
+            searchable_content = summary_data.get('searchable_content', '').lower()
             file_name = summary_data.get('file_name', '').lower()
+            folder = summary_data.get('folder', '').lower()
             
-            # Simple relevance scoring
+            # Advanced relevance scoring
             score = 0
+            
+            # Keyword matching with weights
             for word in query_lower.split():
-                if len(word) > 2:
-                    score += summary_text.count(word) * 2  # Summary matches worth more
-                    score += file_name.count(word) * 1     # Filename matches
+                if len(word) > 2:  # Skip short words
+                    if word in summary_text:
+                        score += 3
+                    if word in searchable_content:
+                        score += 2
+                    if word in file_name:
+                        score += 2
+                    if word in folder:
+                        score += 1
+            
+            # Query-type specific scoring
+            if query_analysis['type'] == 'people':
+                # Boost documents with people names
+                for person_term in query_analysis['people_terms']:
+                    if person_term in searchable_content:
+                        score += 5
+                        
+            elif query_analysis['type'] == 'financial':
+                # Boost documents with financial data
+                if any(term in searchable_content for term in ['$', 'budget', 'cost', 'revenue']):
+                    score += 4
+                    
+            elif query_analysis['type'] == 'product':
+                # Boost documents with product references
+                for product_term in query_analysis['product_terms']:
+                    if product_term in searchable_content:
+                        score += 4
+                        
+            elif query_analysis['type'] == 'temporal':
+                # Boost recent documents for time-based queries
+                doc_date = summary_data.get('processed_date')
+                if doc_date:
+                    try:
+                        doc_datetime = datetime.fromisoformat(doc_date.replace('Z', '+00:00'))
+                        days_old = (datetime.now() - doc_datetime).days
+                        if days_old < 30:
+                            score += 3
+                        elif days_old < 90:
+                            score += 2
+                    except:
+                        pass
+            
+            # Folder priority boost
+            folder_priority = summary_data.get('folder_priority', 6)
+            if folder_priority <= 2:
+                score += 2
+            elif folder_priority == 3:
+                score += 1
             
             if score > 0:
-                results.append({
-                    **summary_data,
-                    "relevance_score": score
-                })
+                result = summary_data.copy()
+                result['relevance_score'] = score
+                result['query_analysis'] = query_analysis
+                results.append(result)
         
         # Sort by relevance and return top results
         results.sort(key=lambda x: x['relevance_score'], reverse=True)
         return results[:max_results]
+    
+    def _analyze_query(self, query_lower: str) -> Dict[str, Any]:
+        """Analyze query to determine search strategy."""
+        analysis = {
+            'type': 'general',
+            'people_terms': [],
+            'product_terms': [],
+            'financial_terms': [],
+            'temporal_terms': []
+        }
+        
+        # Check for people-focused queries
+        people_indicators = ['who', 'person', 'manager', 'director', 'vp', 'ceo', 'cfo', 'team', 'responsible', 'assigned']
+        if any(term in query_lower for term in people_indicators):
+            analysis['type'] = 'people'
+            # Extract potential names (capitalized words)
+            import re
+            names = re.findall(r'\b[A-Z][a-z]+ [A-Z][a-z]+\b', query_lower.title())
+            analysis['people_terms'] = names
+        
+        # Check for financial queries
+        financial_indicators = ['budget', 'cost', 'revenue', 'profit', 'expense', 'financial', 'money', '$', 'price', 'investment']
+        if any(term in query_lower for term in financial_indicators):
+            analysis['type'] = 'financial'
+            analysis['financial_terms'] = [term for term in financial_indicators if term in query_lower]
+        
+        # Check for product queries
+        product_indicators = ['product', 'model', 'sku', 'item', 'widget', 'launch', 'inventory', 'manufacturing']
+        if any(term in query_lower for term in product_indicators):
+            analysis['type'] = 'product'
+            analysis['product_terms'] = [term for term in product_indicators if term in query_lower]
+        
+        # Check for time-based queries
+        temporal_indicators = ['recent', 'latest', 'last', 'quarterly', 'monthly', 'this year', 'q1', 'q2', 'q3', 'q4']
+        if any(term in query_lower for term in temporal_indicators):
+            analysis['type'] = 'temporal'
+            analysis['temporal_terms'] = [term for term in temporal_indicators if term in query_lower]
+        
+        return analysis
 
 # Test function
 def test_kb_indexer():

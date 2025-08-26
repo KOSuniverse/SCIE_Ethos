@@ -201,11 +201,11 @@ def list_kb_candidates(kb_root: str, data_root: str) -> Dict[str, List[Dict[str,
     print("Refreshing KB candidates from Dropbox...")
     
     # List KB documents (including system files like FAISS index)
-    kb_docs = _list_files_recursive(kb_root, KB_EXTENSIONS, max_files=30, include_system_files=True)
+    kb_docs = _list_files_recursive(kb_root, KB_EXTENSIONS, max_files=100, include_system_files=True)
     
     # List data files from cleansed folder
     cleansed_path = f"{data_root.rstrip('/')}/01_Cleansed_Files"
-    data_files = _list_files_recursive(cleansed_path, DATA_EXTENSIONS, max_files=12)
+    data_files = _list_files_recursive(cleansed_path, DATA_EXTENSIONS, max_files=50)
     
     result = {
         'kb_docs': kb_docs,
