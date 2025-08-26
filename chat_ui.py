@@ -302,7 +302,7 @@ def render_chat_assistant():
                 
                 # Phase 3A: Display response with enhanced template structure
                 # Check if response follows Phase 3 template format
-                template_sections = response.get("template", {})
+                template_sections = ai_response.get("template", {})
                 if template_sections and len(template_sections) > 2:
                     # Render structured template
                     st.markdown("## " + template_sections.get("title", "Analysis Results"))
@@ -331,7 +331,7 @@ def render_chat_assistant():
                     message_placeholder.markdown(answer)
                 
                 # Phase 3C: Enhanced confidence badge display
-                confidence_data = response.get("confidence_data", {})
+                confidence_data = ai_response.get("confidence_data", {})
                 if confidence_data:
                     col1, col2, col3 = st.columns([2, 1, 1])
                     with col1:
@@ -349,13 +349,13 @@ def render_chat_assistant():
                                 st.write(f"**C**overage: {breakdown.get('coverage', 0):.2f}")
                 
                 # Hidden debug caption (Intent=<auto_routed_intent> | Mode=<resolved_mode>)
-                intent = response.get("intent", "unknown")
+                intent = ai_response.get("intent", "unknown")
                 mode = "chat"  # This is chat mode
                 st.caption(f"Intent={intent} | Mode={mode}")
                 
                 # Phase 3B: Enhanced sources display with coverage warnings
                 sources_drawer = SourcesDrawer()
-                coverage_warning = response.get("kb_coverage_warning")
+                coverage_warning = ai_response.get("kb_coverage_warning")
                 if coverage_warning:
                     st.warning(f"⚠️ {coverage_warning}")
                 sources_drawer.render_inline_sources(sources, confidence_score)
