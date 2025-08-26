@@ -159,6 +159,35 @@ def render_chat_assistant():
         
         # Render data needed panel in sidebar
         data_panel.render_panel(expanded=False)
+        
+        # KB Indexer Section
+        st.subheader("📚 Knowledge Base Tools")
+        
+        if st.button("🔄 Index New Documents", help="Process new documents and create searchable summaries"):
+            with st.spinner("Indexing new documents..."):
+                try:
+                    import sys
+                    sys.path.append('PY Files')
+                    from kb_indexer import KBIndexer
+                    
+                    kb_path = os.getenv('KB_DBX_PATH', '/Project_Root/06_LLM_Knowledge_Base')
+                    data_path = os.getenv('DATA_DBX_PATH', '/Project_Root/04_Data')
+                    
+                    indexer = KBIndexer(kb_path, data_path)
+                    result = indexer.process_new_files()
+                    
+                    st.success(f"✅ Indexing Complete!")
+                    st.info(f"""📊 **Results:**
+- Processed: {result.get('processed', 0)} new files
+- Failed: {result.get('failed', 0)} files  
+- Skipped (unchanged): {result.get('skipped', 0)} files
+- Skipped (in FAISS): {result.get('faiss_skipped', 0)} files
+- Total index size: {result.get('index_size', 0)} documents""")
+                    
+                except Exception as e:
+                    st.error(f"❌ Indexing failed: {str(e)}")
+        
+        st.caption("Creates searchable summaries for new documents while respecting your existing FAISS index.")
 
     # ─────────────────────────────────────────────────────────────────────────────
     # Main Chat Interface
@@ -255,6 +284,8 @@ def render_chat_assistant():
                             keywords.extend(["inventory", "stock", "on hand", "oh"])
                         if any(word in prompt.lower() for word in ["us", "united states", "america"]):
                             keywords.extend(["us", "usa", "america", "united", "states"])
+                        if any(word in prompt.lower() for word in ["team", "leadership", "people", "photo", "image"]):
+                            keywords.extend(["team", "leadership", "people", "photo", "global", "management"])
                         
                         # Define folder priorities (1 = highest priority)
                         # Boost data file priority for data-specific queries
@@ -329,7 +360,7 @@ def render_chat_assistant():
                                 uploaded_files = []
                                 
                                 # Upload top relevant files with priority weighting (filter out unsupported formats)
-                                supported_extensions = {'.pdf', '.docx', '.doc', '.txt', '.md', '.csv', '.xlsx', '.pptx'}
+                                supported_extensions = {'.pdf', '.docx', '.doc', '.txt', '.md', '.csv', '.xlsx', '.pptx', '.zip', '.jpg', '.jpeg', '.png', '.gif', '.webp'}
                                 
                                 # Separate by priority groups
                                 high_priority = [f for f in relevant_files if f.get('folder_priority', 6) <= 2]
