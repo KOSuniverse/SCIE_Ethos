@@ -252,32 +252,79 @@ def render_chat_assistant():
                         thread_id=st.session_state.thread_id
                     )
                 
-                # Try to get KB document answer alongside AI
+                                # Try to get KB document answer alongside AI
                 kb_answer = "No relevant documents found in knowledge base."
                 kb_sources = []
-                
+
                 try:
-                    from dropbox_kb_sync import list_kb_candidates, get_folder_structure
-                    
-                    # Get KB files
-                    kb_path = os.getenv("KB_DBX_PATH", "/Project_Root/06_LLM_Knowledge_Base")
-                    data_path = os.getenv("DATA_DBX_PATH", "/Project_Root/04_Data")
-                    
-                    candidates = list_kb_candidates(kb_path, data_path)
-                    kb_files = candidates.get('kb_docs', [])
-                    data_files = candidates.get('data_files', [])
-                    
-                    # Add data files to search scope
-                    all_files = kb_files + data_files
-                    
-                    if all_files:
-                        # Enhanced relevance check with folder prioritization
-                        keywords = prompt.lower().split()
+                    # First try to search indexed summaries
+                    try:
+                        import sys
+                        sys.path.append('PY Files')
+                        from kb_indexer import KBIndexer
+                        import os
+                        
+                        kb_path = os.getenv('KB_DBX_PATH', '/Project_Root/06_LLM_Knowledge_Base')
+                        data_path = os.getenv('DATA_DBX_PATH', '/Project_Root/04_Data')
+                        
+                        indexer = KBIndexer(kb_path, data_path)
+                        indexed_results = indexer.search_summaries(prompt, max_results=8)
+                        
+                        if indexed_results:
+                            kb_answer = f"Found {len(indexed_results)} relevant documents with detailed summaries:\n\n"
+                            kb_sources = []
+                            
+                            for result in indexed_results:
+                                file_name = result.get('file_name', 'Unknown')
+                                folder = result.get('folder', 'root')
+                                summary = result.get('summary', 'No summary available')
+                                relevance = result.get('relevance_score', 0)
+                                
+                                # Clean up any OpenAI citation formats in the summary
+                                import re
+                                summary = re.sub(r'【\d+:\d+†[^】]*】', '', summary)
+                                summary = re.sub(r'【[^】]*】', '', summary)
+                                
+                                kb_answer += f"From \"{file_name}\" (folder: {folder}):\n"
+                                kb_answer += f"{summary}\n\n"
+                                
+                                kb_sources.append({
+                                    "name": file_name,
+                                    "folder": folder,
+                                    "relevance": relevance
+                                })
+                            
+                            # Successfully found indexed results - skip the rest
+                            print(f"✅ Using indexed summaries: found {len(indexed_results)} documents")
+                            
+                        else:
+                            print("⚠️ No indexed results found, falling back to file search")
+                            raise Exception("No indexed results - use fallback")
+                            
+                    except Exception as indexer_error:
+                        print(f"❌ KB Indexer search failed: {indexer_error}, using fallback file search")
+                        # Continue to original file search method below
+                        from dropbox_kb_sync import list_kb_candidates, get_folder_structure
+                        
+                        # Get KB files
+                        kb_path = os.getenv("KB_DBX_PATH", "/Project_Root/06_LLM_Knowledge_Base")
+                        data_path = os.getenv("DATA_DBX_PATH", "/Project_Root/04_Data")
+                        
+                        candidates = list_kb_candidates(kb_path, data_path)
+                        kb_files = candidates.get('kb_docs', [])
+                        data_files = candidates.get('data_files', [])
+                        
+                        # Add data files to search scope
+                        all_files = kb_files + data_files
+                        
+                        if all_files:
+                            # Enhanced relevance check with folder prioritization
+                            keywords = prompt.lower().split()
                         # Add special cases for common terms with quarterly meeting focus
                         if "s&op" in prompt.lower() or "siop" in prompt.lower():
                             keywords.extend(["siop", "s&op", "sales", "operations", "planning", "quarterly", "meeting", "mom", "minutes"])
                         if "quarterly" in prompt.lower() or "quarter" in prompt.lower():
-                            keywords.extend(["quarterly", "quarter", "q1", "q2", "q3", "q4", "meeting", "minutes", "mom", "siop", "s&op"])
+                            keywords.extend(["quarterly", "quarter", "q1", "q2", "q3", "q4", "meeting", "minutes", "mom", "siop", "s&op", "202406", "2024", "june"])
                         if "meeting" in prompt.lower():
                             keywords.extend(["meeting", "minutes", "mom", "discussion", "agenda", "quarterly"])
                         if "launch" in prompt.lower():
