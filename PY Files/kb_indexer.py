@@ -649,6 +649,123 @@ EMAIL CONTENT:
             print(f"❌ Error processing email {file_name}: {e}")
             return None
     
+    def _simple_document_analysis(self, file_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Fast single-pass analysis for small documents."""
+        file_name = file_info['name']
+        file_path = file_info['path']
+        file_ext = Path(file_name).suffix.lower()
+        folder_path = file_info.get('folder', 'root')
+        
+        try:
+            # Upload file to OpenAI
+            file_id = upload_dropbox_file_to_openai(file_path, purpose="assistants")
+            if not file_id:
+                print(f"❌ Failed to upload {file_name}")
+                return None
+                
+            print(f"✅ Uploaded {file_name} to OpenAI with file_id: {file_id}")
+            
+            # Single comprehensive prompt for small files
+            thread = self.client.beta.threads.create()
+            
+            prompt = f"""Analyze this document comprehensively in a single pass.
+
+DOCUMENT: {file_name} (Type: {file_ext}, Location: {folder_path})
+
+Extract ALL of the following that appear in the document:
+
+**PEOPLE & PARTICIPANTS:**
+- Full names (exactly as written)
+- Titles and roles
+- Email addresses
+- What each person said, decided, or was assigned
+
+**FINANCIAL & NUMBERS:**
+- Exact dollar amounts (e.g., $128,952.00)
+- Percentages and quantities
+- Budget items and costs
+
+**DATES & TIMELINE:**
+- Meeting dates and times
+- Deadlines and milestones
+- Document creation date
+
+**DECISIONS & ACTIONS:**
+- Specific decisions made
+- Who made each decision
+- Action items with responsible parties
+- Deadlines
+
+**PRODUCTS & TECHNICAL:**
+- Product names and model numbers
+- Technical specifications
+- Part numbers and codes
+
+**KEY CONTENT:**
+- Main topics discussed
+- Problems identified
+- Solutions proposed
+
+CRITICAL RULES:
+- Use EXACT information from the document
+- Include ALL names, amounts, and dates
+- Use format: "From [DOCUMENT NAME]: [specific detail]"
+- NEVER use 【4:1†source】 citation format
+- Be specific, not generic
+
+Format as a comprehensive summary with all extracted details."""
+
+            self.client.beta.threads.messages.create(
+                thread_id=thread.id,
+                role="user",
+                content=prompt,
+                attachments=[{"file_id": file_id, "tools": [{"type": "file_search"}]}]
+            )
+            
+            run = self.client.beta.threads.runs.create_and_poll(
+                thread_id=thread.id,
+                assistant_id=self.assistant_id,
+                timeout=120
+            )
+            
+            if run.status == 'completed':
+                messages = self.client.beta.threads.messages.list(thread_id=thread.id)
+                if messages.data:
+                    summary_text = messages.data[0].content[0].text.value
+                    
+                    # Clean up any OpenAI citation formats
+                    import re
+                    summary_text = re.sub(r'【\d+:\d+†[^】]*】', '', summary_text)
+                    summary_text = re.sub(r'【[^】]*】', '', summary_text)
+                    
+                    # Extract dates and create metadata
+                    extracted_dates = self._extract_dates_from_summary(summary_text)
+                    summary_filename = self._create_summary_filename(file_name, folder_path, extracted_dates)
+                    
+                    return {
+                        "file_name": file_name,
+                        "file_path": file_path,
+                        "folder": folder_path,
+                        "full_folder_path": file_info.get('folder', 'root'),
+                        "file_type": file_ext,
+                        "summary": summary_text,
+                        "summary_filename": summary_filename + "_simple",  # Mark as simple analysis
+                        "extracted_dates": extracted_dates,
+                        "processed_date": datetime.now().isoformat(),
+                        "file_size": file_info.get('size', 0),
+                        "file_modified": file_info.get('modified_time', ''),
+                        "openai_file_id": file_id,
+                        "searchable_content": self._create_searchable_content(summary_text, file_name, folder_path),
+                        "processing_method": "simple_analysis"  # Mark processing method
+                    }
+            
+            print(f"⚠️ Processing timeout or failed for {file_name}")
+            return None
+            
+        except Exception as e:
+            print(f"❌ Error in simple analysis for {file_name}: {e}")
+            return None
+    
     def _chunked_document_analysis(self, file_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Analyze document in chunks for comprehensive detail extraction."""
         file_name = file_info['name']
@@ -671,26 +788,31 @@ EMAIL CONTENT:
             all_extractions = []
             
             # Chunk 1: Basic metadata and overview
+            print(f"  📋 Extracting overview and metadata...")
             overview = self._extract_document_overview(file_id, file_name, file_ext, folder_path)
             if overview:
                 all_extractions.append(f"OVERVIEW:\n{overview}")
             
             # Chunk 2: People and participants  
+            print(f"  👥 Extracting people and participants...")
             people = self._extract_people_details(file_id, file_name)
             if people:
                 all_extractions.append(f"PEOPLE & PARTICIPANTS:\n{people}")
             
             # Chunk 3: Financial data and numbers
+            print(f"  💰 Extracting financial details...")
             financial = self._extract_financial_details(file_id, file_name)
             if financial:
                 all_extractions.append(f"FINANCIAL DETAILS:\n{financial}")
                 
             # Chunk 4: Decisions and action items
+            print(f"  ✅ Extracting decisions and actions...")
             decisions = self._extract_decisions_actions(file_id, file_name)
             if decisions:
                 all_extractions.append(f"DECISIONS & ACTIONS:\n{decisions}")
                 
             # Chunk 5: Products and technical details
+            print(f"  🔧 Extracting products and technical details...")
             products = self._extract_product_details(file_id, file_name)
             if products:
                 all_extractions.append(f"PRODUCTS & TECHNICAL:\n{products}")
@@ -972,8 +1094,16 @@ Format: Product by product with all technical details and specifications."""
             if file_ext in ['.msg', '.eml']:
                 return self._summarize_email_file(file_info)
             
-            # Use chunked analysis for comprehensive extraction
-            return self._chunked_document_analysis(file_info)
+            # Adaptive processing based on file size
+            file_size = file_info.get('size', 0)
+            
+            # Use simple analysis for small files (under 500KB)
+            if file_size < 500000:  # 500KB threshold
+                print(f"📄 Small file detected ({file_size} bytes) - using single-pass analysis")
+                return self._simple_document_analysis(file_info)
+            else:
+                print(f"📚 Large file detected ({file_size} bytes) - using comprehensive chunked analysis")
+                return self._chunked_document_analysis(file_info)
             
             # Create thread and get summary
             thread = self.client.beta.threads.create()
@@ -1093,25 +1223,37 @@ Format: Product by product with all technical details and specifications."""
             total_to_process = len(new_files) + len(updated_files)
             print(f"🔄 Processing {i}/{total_to_process}: {file_info['name']}")
             
-            summary_data = self._summarize_document(file_info)
-            
-            if summary_data:
-                # Add to index
-                file_path = file_info['path']
-                self.document_index[file_path] = summary_data
-                self.file_hashes[file_path] = self._calculate_file_hash(file_path)
+            try:
+                summary_data = self._summarize_document(file_info)
                 
-                # Save individual summary to Dropbox
-                if self._save_summary_to_dropbox(summary_data):
-                    all_summaries.append(summary_data)
-                    processed_count += 1
-                    print(f"✅ Processed and saved: {file_info['name']}")
+                if summary_data:
+                    # Add to index
+                    file_path = file_info['path']
+                    self.document_index[file_path] = summary_data
+                    self.file_hashes[file_path] = self._calculate_file_hash(file_path)
+                    
+                    # Save individual summary to Dropbox
+                    if self._save_summary_to_dropbox(summary_data):
+                        all_summaries.append(summary_data)
+                        processed_count += 1
+                        print(f"✅ Processed and saved: {file_info['name']} ({processed_count}/{total_to_process})")
+                        
+                        # Save progress every 5 files
+                        if processed_count % 5 == 0:
+                            print(f"💾 Saving progress... ({processed_count} files completed)")
+                            self._save_document_index()
+                            self._save_file_hashes()
+                    else:
+                        print(f"⚠️ Processed but failed to save: {file_info['name']}")
+                        failed_count += 1
                 else:
-                    print(f"⚠️ Processed but failed to save: {file_info['name']}")
+                    print(f"❌ Failed to process: {file_info['name']}")
                     failed_count += 1
-            else:
-                print(f"❌ Failed to process: {file_info['name']}")
+                    
+            except Exception as e:
+                print(f"❌ Exception processing {file_info['name']}: {e}")
                 failed_count += 1
+                # Continue processing other files instead of stopping
         
         # Load existing summaries from Dropbox and merge with new ones
         existing_summaries = self._load_master_index_from_dropbox()
