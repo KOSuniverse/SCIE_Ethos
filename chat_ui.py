@@ -38,6 +38,126 @@ if __name__ == "__main__":
         initial_sidebar_state="expanded"
     )
 
+def _analyze_query_type(prompt):
+    """Analyze the query to determine the best response format."""
+    prompt_lower = prompt.lower()
+    
+    # List queries
+    if any(word in prompt_lower for word in ['list', 'show all', 'what are', 'give me all']):
+        if any(word in prompt_lower for word in ['part', 'product', 'sku', 'number']):
+            return 'part_list'
+        elif any(word in prompt_lower for word in ['meeting', 'quarterly', 'siop']):
+            return 'meeting_list'
+        else:
+            return 'general_list'
+    
+    # Data/inventory queries
+    if any(word in prompt_lower for word in ['inventory', 'stock', 'level', 'wip', 'data']):
+        return 'data_query'
+    
+    # Meeting summaries
+    if any(word in prompt_lower for word in ['summarize', 'summary', 'what happened', 'discuss']):
+        return 'summary_query'
+    
+    # Specific information requests
+    if any(word in prompt_lower for word in ['who', 'when', 'where', 'how much', 'what decision']):
+        return 'specific_query'
+    
+    return 'general_query'
+
+def _create_adaptive_analysis_prompt(prompt, query_type, uploaded_files, file_list, conversation_context):
+    """Create an adaptive prompt based on the query type."""
+    
+    base_info = f"""I have uploaded {len(uploaded_files)} documents to analyze. Please answer this question: {prompt}
+
+UPLOADED DOCUMENTS:
+{file_list}{conversation_context}
+
+CRITICAL INSTRUCTIONS - FOLLOW EXACTLY:
+- Use ONLY this source format: "From [DOCUMENT NAME] (folder: [FOLDER]): [specific detail]"
+- NEVER use 【4:1†source】 or similar OpenAI citation formats - I will reject responses with this format
+- Extract SPECIFIC, ACTIONABLE details - not high-level summaries
+- Focus on information that can be used to solve problems or answer follow-up questions
+
+"""
+    
+    if query_type == 'part_list':
+        return base_info + """
+RESPONSE FORMAT FOR PART/PRODUCT LIST:
+Provide a simple, clean list format:
+
+**Part Numbers Found:**
+• [Part Number] - [Product Name] (from [Document])
+• [Part Number] - [Product Name] (from [Document])
+
+Include ONLY actual part numbers mentioned in the documents. Do not include textbook examples or generic inventory data.
+If no specific part numbers are found, state: "No specific part numbers found in the uploaded documents."
+"""
+    
+    elif query_type == 'data_query':
+        return base_info + """
+RESPONSE FORMAT FOR DATA/INVENTORY QUERY:
+Focus on ACTUAL operational data from your company:
+
+**Current Data Found:**
+• [Specific metric]: [Actual value] (from [Document])
+• [Inventory item]: [Current level] (from [Document])
+
+EXCLUDE textbook examples, academic exercises, or generic inventory management data.
+Include ONLY real operational data from EthosEnergy or related business operations.
+"""
+    
+    elif query_type == 'summary_query':
+        return base_info + """
+RESPONSE FORMAT FOR MEETING SUMMARY:
+Provide a structured but natural summary:
+
+**Meeting: [Meeting Name/Date]**
+**Key Participants:** [Names and roles]
+**Main Decisions:**
+• [Decision 1] - Responsible: [Person]
+• [Decision 2] - Responsible: [Person]
+
+**Action Items:**
+• [Action] - Due: [Date] - Owner: [Person]
+
+**Key Discussion Points:**
+• [Specific topic with details]
+
+Focus on ACTIONABLE information that could be referenced later.
+"""
+    
+    elif query_type == 'specific_query':
+        return base_info + """
+RESPONSE FORMAT FOR SPECIFIC INFORMATION:
+Answer the specific question directly and concisely:
+
+[Direct answer to the question]
+
+**Supporting Details:**
+• [Specific detail 1] (from [Document])
+• [Specific detail 2] (from [Document])
+
+Keep the response focused on exactly what was asked.
+"""
+    
+    else:  # general_query
+        return base_info + """
+RESPONSE FORMAT:
+Provide a natural, comprehensive answer organized logically:
+
+[Main answer to the question]
+
+**Key Details:**
+• [Important detail 1] (from [Document])
+• [Important detail 2] (from [Document])
+
+**Additional Context:**
+[Any relevant background information]
+
+Organize information in a way that best serves the specific question asked.
+"""
+
 def render_chat_assistant():
     """Render the complete chat assistant UI inline."""
     
@@ -470,27 +590,9 @@ def render_chat_assistant():
                                                 conversation_context += f"{role.upper()}: {content}...\n"
                                             conversation_context += "\nUse this context to understand follow-up questions.\n"
                                         
-                                        analysis_prompt = f"""I have uploaded {len(uploaded_files)} documents to analyze. Please answer this question: {prompt}
-
-UPLOADED DOCUMENTS:
-{file_list}{conversation_context}
-
-CRITICAL INSTRUCTIONS - FOLLOW EXACTLY:
-1. Extract SPECIFIC, ACTIONABLE details from ALL documents - not high-level summaries
-2. Include: EXACT names of people, specific product names/numbers, dollar amounts, percentages, quantities
-3. For meetings: Who said what? What was decided? What are the next steps? What problems were identified? What are the specific action items and deadlines?
-4. For data files: Extract actual numbers, table data, specific metrics, trends, variances
-5. Use ONLY this source format: "From [DOCUMENT NAME] (folder: [FOLDER]): [specific detail]"
-6. NEVER use 【4:1†source】 or similar OpenAI citation formats - I will reject responses with this format
-7. Focus on information that can be used to solve problems or answer follow-up questions
-8. If documents mention specific products, people, dates, or decisions - include them ALL
-9. For comprehensive queries: Extract from ALL uploaded documents, not just one. Include specific dates, participants, decisions, and numbers from each document
-10. Prioritize meeting minutes and live events over training/reference materials
-11. Include specific quotes, decisions, and action items with responsible parties
-12. Extract actual data points: inventory levels, sales figures, forecast numbers, budget amounts
-13. When multiple documents are provided, synthesize information across ALL of them
-
-CONTEXT: This is for data mining and operational decision-making, not executive reporting. Extract granular, actionable intelligence that can be used to make business decisions."""
+                                        # Create adaptive prompt based on query type
+                                        query_type = _analyze_query_type(prompt)
+                                        analysis_prompt = _create_adaptive_analysis_prompt(prompt, query_type, uploaded_files, file_list, conversation_context)
 
                                         client.beta.threads.messages.create(
                                             thread_id=thread.id,
@@ -562,9 +664,13 @@ CONTEXT: This is for data mining and operational decision-making, not executive 
 Knowledge Base Findings:
 {kb_answer}
 
-Instructions:
+CRITICAL INSTRUCTIONS:
 - Build upon the KB findings, don't repeat them
-- Add relevant context or implications
+- Add relevant context or implications ONLY from your general business knowledge
+- NEVER reference external companies (like Pegasa, Nike, Apple, etc.) or their data
+- NEVER use specific dollar amounts, percentages, or data from other companies
+- Focus on general principles, best practices, or analytical frameworks
+- If you cannot provide relevant context without using external company data, simply state: "The KB findings above provide the specific information available."
 - Relate your analysis directly to the specific question asked
 - Do NOT use external company examples (like Pegasa or random manufacturers)
 - Focus on insights that would help with follow-up questions or decisions
