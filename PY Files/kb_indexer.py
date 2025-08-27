@@ -148,6 +148,15 @@ class KBIndexer:
         base_instructions = f"""
 CRITICAL: Create a GRANULAR, DATA-MINING level summary for this document.
 
+MANDATORY: YOU MUST EXTRACT THE ACTUAL CONTENT FROM THE DOCUMENT - NOT GENERIC SUMMARIES.
+- Use the EXACT names written in the document
+- Use the EXACT dates written in the document  
+- Use the EXACT dollar amounts written in the document
+- Use the EXACT product names/codes written in the document
+- Use the EXACT company names written in the document
+- DO NOT use generic terms like "department heads" - use the actual names
+- DO NOT use vague dates like "June 2024" - use the exact date and time if available
+
 This summary will be used to FIND this document later when searching for specific information. Include ALL searchable details that someone might look for.
 
 Extract and include EVERY:
@@ -304,10 +313,22 @@ This is a DOCUMENT file ({file_type}). {doc_context}Extract EVERY searchable det
 - Presentation topics and key findings
 - Questions asked and answers provided
 
-**SEARCHABLE SUMMARY:**
-Create a comprehensive summary: "On [EXACT DATE], [FULL NAMES/TITLES] met to discuss [SPECIFIC TOPICS]. Key decisions: [PERSON] approved [SPECIFIC DECISION] involving [PRODUCTS/AMOUNTS]. Action items: [PERSON] to [SPECIFIC ACTION] by [DATE]. Problems discussed: [SPECIFIC ISSUES] with [IMPACT]. Budget items: [AMOUNTS] for [PURPOSES]. Next steps: [SPECIFIC ACTIONS] by [DATES]."
+**CRITICAL EXTRACTION REQUIREMENTS:**
+YOU MUST EXTRACT THE ACTUAL CONTENT FROM THE DOCUMENT - NOT GENERIC DESCRIPTIONS.
 
-Include ALL names, numbers, dates, decisions, and action items that someone might search for when looking for specific information."""
+WRONG: "Department heads discussed budget items"
+RIGHT: "John Smith (VP Operations) and Sarah Johnson (Finance Director) discussed $2.3M budget for Widget-A production"
+
+WRONG: "Meeting held in June 2024"  
+RIGHT: "Meeting held Thursday, June 20, 2024 at 12:43 PM"
+
+WRONG: "Various products were discussed"
+RIGHT: "Frame 5 Blade 1, Frame 5 Vane 2, Frame 6 Blade 3 with costs $128,952.00, $104,886.40, $181,591.00"
+
+**SEARCHABLE SUMMARY:**
+Extract ONLY the actual content from this document. Use the EXACT names, dates, amounts, and details written in the document. Create a comprehensive summary: "On [EXACT DATE FROM DOCUMENT], [ACTUAL NAMES FROM DOCUMENT] met to discuss [SPECIFIC TOPICS FROM DOCUMENT]. Key decisions: [ACTUAL PERSON NAME] approved [SPECIFIC DECISION FROM DOCUMENT] involving [ACTUAL PRODUCTS/AMOUNTS FROM DOCUMENT]. Action items: [ACTUAL PERSON] to [SPECIFIC ACTION FROM DOCUMENT] by [ACTUAL DATE FROM DOCUMENT]. Problems discussed: [SPECIFIC ISSUES FROM DOCUMENT] with [ACTUAL IMPACT FROM DOCUMENT]. Budget items: [ACTUAL AMOUNTS FROM DOCUMENT] for [ACTUAL PURPOSES FROM DOCUMENT]."
+
+DO NOT make up generic content. ONLY use information that actually appears in the document."""
     
     def _extract_dates_from_summary(self, summary_text: str) -> List[str]:
         """Extract dates from summary text using regex patterns."""
@@ -535,8 +556,410 @@ Include ALL names, numbers, dates, decisions, and action items that someone migh
             
         return []
     
+    def _summarize_email_file(self, file_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Summarize email files (.msg, .eml) without OpenAI file upload."""
+        file_name = file_info['name']
+        file_path = file_info['path']
+        file_ext = Path(file_name).suffix.lower()
+        folder_path = file_info.get('folder', 'root')
+        
+        try:
+            # Read email content directly from Dropbox
+            email_content = read_file_bytes(file_path)
+            if not email_content:
+                print(f"❌ Could not read email content: {file_name}")
+                return None
+            
+            # Convert bytes to text (attempt different encodings)
+            email_text = ""
+            for encoding in ['utf-8', 'utf-16', 'latin-1', 'cp1252']:
+                try:
+                    email_text = email_content.decode(encoding)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            
+            if not email_text:
+                print(f"❌ Could not decode email content: {file_name}")
+                return None
+            
+            # Create a simplified summary for emails without OpenAI file upload
+            # Extract basic email info from text
+            lines = email_text.split('\n')
+            
+            # Try to extract basic email metadata
+            subject = ""
+            sender = ""
+            date = ""
+            
+            for line in lines[:20]:  # Check first 20 lines for headers
+                line_lower = line.lower()
+                if line_lower.startswith('subject:'):
+                    subject = line[8:].strip()
+                elif line_lower.startswith('from:'):
+                    sender = line[5:].strip()
+                elif line_lower.startswith('date:'):
+                    date = line[5:].strip()
+            
+            # Create summary using OpenAI chat completion (not file upload)
+            summary_prompt = f"""Analyze this email content and create a detailed summary:
+
+SUBJECT: {subject}
+FROM: {sender}  
+DATE: {date}
+
+EMAIL CONTENT:
+{email_text[:2000]}  # First 2000 characters
+
+{self._create_summary_prompt(file_name, file_ext, folder_path)}"""
+
+            # Use chat completion instead of file upload
+            response = self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "user", "content": summary_prompt}
+                ],
+                max_tokens=1500
+            )
+            
+            summary_text = response.choices[0].message.content
+            
+            # Extract dates and create metadata
+            extracted_dates = self._extract_dates_from_summary(summary_text)
+            summary_filename = self._create_summary_filename(file_name, folder_path, extracted_dates)
+            
+            return {
+                "file_name": file_name,
+                "file_path": file_path,
+                "folder": folder_path,
+                "full_folder_path": file_info.get('folder', 'root'),
+                "file_type": file_ext,
+                "summary": summary_text,
+                "summary_filename": summary_filename,
+                "extracted_dates": extracted_dates,
+                "processed_date": datetime.now().isoformat(),
+                "file_size": file_info.get('size', 0),
+                "file_modified": file_info.get('modified_time', ''),
+                "openai_file_id": None,  # No file upload for .msg files
+                "searchable_content": self._create_searchable_content(summary_text, file_name, folder_path),
+                "processing_method": "chat_completion"  # Indicate how this was processed
+            }
+            
+        except Exception as e:
+            print(f"❌ Error processing email {file_name}: {e}")
+            return None
+    
+    def _chunked_document_analysis(self, file_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Analyze document in chunks for comprehensive detail extraction."""
+        file_name = file_info['name']
+        file_path = file_info['path']
+        file_ext = Path(file_name).suffix.lower()
+        folder_path = file_info.get('folder', 'root')
+        
+        print(f"🔄 Starting chunked analysis: {file_name}")
+        
+        try:
+            # Upload file to OpenAI
+            file_id = upload_dropbox_file_to_openai(file_path, purpose="assistants")
+            if not file_id:
+                print(f"❌ Failed to upload {file_name}")
+                return None
+                
+            print(f"✅ Uploaded {file_name} to OpenAI with file_id: {file_id}")
+            
+            # Create comprehensive analysis using multiple focused prompts
+            all_extractions = []
+            
+            # Chunk 1: Basic metadata and overview
+            overview = self._extract_document_overview(file_id, file_name, file_ext, folder_path)
+            if overview:
+                all_extractions.append(f"OVERVIEW:\n{overview}")
+            
+            # Chunk 2: People and participants  
+            people = self._extract_people_details(file_id, file_name)
+            if people:
+                all_extractions.append(f"PEOPLE & PARTICIPANTS:\n{people}")
+            
+            # Chunk 3: Financial data and numbers
+            financial = self._extract_financial_details(file_id, file_name)
+            if financial:
+                all_extractions.append(f"FINANCIAL DETAILS:\n{financial}")
+                
+            # Chunk 4: Decisions and action items
+            decisions = self._extract_decisions_actions(file_id, file_name)
+            if decisions:
+                all_extractions.append(f"DECISIONS & ACTIONS:\n{decisions}")
+                
+            # Chunk 5: Products and technical details
+            products = self._extract_product_details(file_id, file_name)
+            if products:
+                all_extractions.append(f"PRODUCTS & TECHNICAL:\n{products}")
+            
+            # Combine all extractions
+            comprehensive_summary = "\n\n".join(all_extractions)
+            
+            if not comprehensive_summary:
+                print(f"❌ No content extracted from {file_name}")
+                return None
+            
+            # Extract dates and create metadata
+            extracted_dates = self._extract_dates_from_summary(comprehensive_summary)
+            summary_filename = self._create_summary_filename(file_name, folder_path, extracted_dates)
+            
+            return {
+                "file_name": file_name,
+                "file_path": file_path,
+                "folder": folder_path,
+                "full_folder_path": file_info.get('folder', 'root'),
+                "file_type": file_ext,
+                "summary": comprehensive_summary,
+                "summary_filename": summary_filename + "_chunked",  # Mark as chunked
+                "extracted_dates": extracted_dates,
+                "processed_date": datetime.now().isoformat(),
+                "file_size": file_info.get('size', 0),
+                "file_modified": file_info.get('modified_time', ''),
+                "openai_file_id": file_id,
+                "searchable_content": self._create_searchable_content(comprehensive_summary, file_name, folder_path),
+                "processing_method": "chunked_analysis",  # Mark processing method
+                "chunks_processed": len(all_extractions)
+            }
+            
+        except Exception as e:
+            print(f"❌ Error in chunked analysis for {file_name}: {e}")
+            return None
+    
+    def _extract_document_overview(self, file_id: str, file_name: str, file_ext: str, folder_path: str) -> Optional[str]:
+        """Extract basic metadata and document overview."""
+        try:
+            thread = self.client.beta.threads.create()
+            
+            prompt = f"""Analyze this document and extract ONLY the basic metadata and overview.
+
+DOCUMENT: {file_name} (Type: {file_ext}, Location: {folder_path})
+
+Extract EXACTLY what you see in the document:
+1. Document date/meeting date (EXACT date and time if shown)
+2. Document type (meeting minutes, email, report, etc.)
+3. Main subject/topic
+4. Brief overview of what this document contains
+
+CRITICAL: Use ONLY information that actually appears in the document. Do not make assumptions.
+Format: Simple, factual statements about what this document is and when it was created."""
+
+            self.client.beta.threads.messages.create(
+                thread_id=thread.id,
+                role="user", 
+                content=prompt,
+                attachments=[{"file_id": file_id, "tools": [{"type": "file_search"}]}]
+            )
+            
+            run = self.client.beta.threads.runs.create_and_poll(
+                thread_id=thread.id,
+                assistant_id=self.assistant_id,
+                timeout=60
+            )
+            
+            if run.status == 'completed':
+                messages = self.client.beta.threads.messages.list(thread_id=thread.id)
+                if messages.data:
+                    return messages.data[0].content[0].text.value
+                    
+        except Exception as e:
+            print(f"Error extracting overview: {e}")
+            
+        return None
+    
+    def _extract_people_details(self, file_id: str, file_name: str) -> Optional[str]:
+        """Extract all people mentioned with full details."""
+        try:
+            thread = self.client.beta.threads.create()
+            
+            prompt = f"""Focus ONLY on extracting people information from this document.
+
+Extract EVERY person mentioned:
+1. Full names (exactly as written)
+2. Titles/roles (exactly as written)
+3. Email addresses (if shown)
+4. Companies/departments (if mentioned)
+5. What each person said, decided, or was assigned to do
+
+CRITICAL RULES:
+- List EVERY person mentioned, not just "department heads"
+- Use EXACT names as they appear in the document
+- Include ALL participants in meetings, emails, etc.
+- If someone is mentioned multiple times, include all contexts
+
+Format: Person by person with all their details and actions."""
+
+            self.client.beta.threads.messages.create(
+                thread_id=thread.id,
+                role="user",
+                content=prompt,
+                attachments=[{"file_id": file_id, "tools": [{"type": "file_search"}]}]
+            )
+            
+            run = self.client.beta.threads.runs.create_and_poll(
+                thread_id=thread.id,
+                assistant_id=self.assistant_id,
+                timeout=60
+            )
+            
+            if run.status == 'completed':
+                messages = self.client.beta.threads.messages.list(thread_id=thread.id)
+                if messages.data:
+                    return messages.data[0].content[0].text.value
+                    
+        except Exception as e:
+            print(f"Error extracting people details: {e}")
+            
+        return None
+    
+    def _extract_financial_details(self, file_id: str, file_name: str) -> Optional[str]:
+        """Extract all financial information and numbers."""
+        try:
+            thread = self.client.beta.threads.create()
+            
+            prompt = f"""Focus ONLY on extracting financial and numerical information from this document.
+
+Extract EVERY number mentioned:
+1. Dollar amounts (exact amounts, not rounded)
+2. Percentages  
+3. Quantities (units, pieces, etc.)
+4. Budget allocations
+5. Costs and expenses
+6. Revenue figures
+7. Targets and forecasts
+
+CRITICAL RULES:
+- Include the EXACT dollar amount (e.g., $128,952.00, not "approximately $129K")
+- Include what each amount is for
+- Include who approved or discussed each amount
+- Include any conditions or terms (e.g., "40% at PO & 60% prior to collection")
+
+Format: Amount by amount with full context of what each number represents."""
+
+            self.client.beta.threads.messages.create(
+                thread_id=thread.id,
+                role="user",
+                content=prompt,
+                attachments=[{"file_id": file_id, "tools": [{"type": "file_search"}]}]
+            )
+            
+            run = self.client.beta.threads.runs.create_and_poll(
+                thread_id=thread.id,
+                assistant_id=self.assistant_id,
+                timeout=60
+            )
+            
+            if run.status == 'completed':
+                messages = self.client.beta.threads.messages.list(thread_id=thread.id)
+                if messages.data:
+                    return messages.data[0].content[0].text.value
+                    
+        except Exception as e:
+            print(f"Error extracting financial details: {e}")
+            
+        return None
+    
+    def _extract_decisions_actions(self, file_id: str, file_name: str) -> Optional[str]:
+        """Extract all decisions made and action items assigned."""
+        try:
+            thread = self.client.beta.threads.create()
+            
+            prompt = f"""Focus ONLY on extracting decisions and action items from this document.
+
+Extract EVERY decision and action:
+1. What was decided (exact decision)
+2. Who made the decision
+3. Action items assigned
+4. Who is responsible for each action
+5. Deadlines and timelines
+6. Follow-up meetings scheduled
+7. Problems identified and solutions proposed
+
+CRITICAL RULES:
+- Include WHO decided WHAT
+- Include WHO is responsible for WHICH action
+- Include specific deadlines and dates
+- Include any voting results or approvals
+- Don't summarize - list each decision and action separately
+
+Format: Decision by decision and action by action with responsible parties and deadlines."""
+
+            self.client.beta.threads.messages.create(
+                thread_id=thread.id,
+                role="user",
+                content=prompt,
+                attachments=[{"file_id": file_id, "tools": [{"type": "file_search"}]}]
+            )
+            
+            run = self.client.beta.threads.runs.create_and_poll(
+                thread_id=thread.id,
+                assistant_id=self.assistant_id,
+                timeout=60
+            )
+            
+            if run.status == 'completed':
+                messages = self.client.beta.threads.messages.list(thread_id=thread.id)
+                if messages.data:
+                    return messages.data[0].content[0].text.value
+                    
+        except Exception as e:
+            print(f"Error extracting decisions/actions: {e}")
+            
+        return None
+    
+    def _extract_product_details(self, file_id: str, file_name: str) -> Optional[str]:
+        """Extract all product and technical information."""
+        try:
+            thread = self.client.beta.threads.create()
+            
+            prompt = f"""Focus ONLY on extracting product and technical information from this document.
+
+Extract EVERY product mentioned:
+1. Product names (exact names as written)
+2. Model numbers and SKUs
+3. Part numbers and codes
+4. Technical specifications
+5. Manufacturing details
+6. Inventory levels
+7. Suppliers and vendors
+8. Launch dates and timelines
+
+CRITICAL RULES:
+- Use EXACT product names (e.g., "Frame 5 Blade 1", not "turbine parts")
+- Include all model numbers and part codes
+- Include quantities and specifications
+- Include supplier names and locations
+- Include any technical problems or issues mentioned
+
+Format: Product by product with all technical details and specifications."""
+
+            self.client.beta.threads.messages.create(
+                thread_id=thread.id,
+                role="user",
+                content=prompt,
+                attachments=[{"file_id": file_id, "tools": [{"type": "file_search"}]}]
+            )
+            
+            run = self.client.beta.threads.runs.create_and_poll(
+                thread_id=thread.id,
+                assistant_id=self.assistant_id,
+                timeout=60
+            )
+            
+            if run.status == 'completed':
+                messages = self.client.beta.threads.messages.list(thread_id=thread.id)
+                if messages.data:
+                    return messages.data[0].content[0].text.value
+                    
+        except Exception as e:
+            print(f"Error extracting product details: {e}")
+            
+        return None
+    
     def _summarize_document(self, file_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Create summary for a single document."""
+        """Create comprehensive summary using chunked analysis for better detail extraction."""
         file_name = file_info['name']
         file_path = file_info['path']
         file_ext = Path(file_name).suffix.lower()
@@ -545,11 +968,12 @@ Include ALL names, numbers, dates, decisions, and action items that someone migh
         print(f"📄 Processing: {file_name} (in {folder_path})")
         
         try:
-            # Upload file to OpenAI
-            file_id = upload_dropbox_file_to_openai(file_path, purpose="assistants")
-            if not file_id:
-                print(f"❌ Failed to upload {file_name}")
-                return None
+            # Handle .msg files differently (OpenAI doesn't support them)
+            if file_ext in ['.msg', '.eml']:
+                return self._summarize_email_file(file_info)
+            
+            # Use chunked analysis for comprehensive extraction
+            return self._chunked_document_analysis(file_info)
             
             # Create thread and get summary
             thread = self.client.beta.threads.create()
