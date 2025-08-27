@@ -167,6 +167,7 @@ def render_chat_assistant():
             with st.spinner("Indexing new documents..."):
                 try:
                     import sys
+                    import os
                     sys.path.append('PY Files')
                     from kb_indexer import KBIndexer
                     
