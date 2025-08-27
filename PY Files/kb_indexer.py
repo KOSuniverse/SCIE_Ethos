@@ -649,6 +649,167 @@ EMAIL CONTENT:
             print(f"❌ Error processing email {file_name}: {e}")
             return None
     
+    def _summarize_image_file(self, file_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Process image files using OpenAI Vision API."""
+        file_name = file_info['name']
+        file_path = file_info['path']
+        folder_path = file_info.get('folder', 'root')
+        
+        try:
+            print(f"🖼️ Processing image: {file_name}")
+            
+            # Read image from Dropbox
+            image_bytes = read_file_bytes(file_path)
+            if not image_bytes:
+                print(f"❌ Could not read image: {file_name}")
+                return None
+            
+            # Convert to base64 for Vision API
+            import base64
+            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+            
+            # Create image analysis prompt
+            prompt = f"""
+ANALYZE THIS IMAGE IN EXTREME DETAIL FOR BUSINESS INTELLIGENCE PURPOSES.
+
+Image Context:
+- Filename: {file_name}
+- Location: {folder_path}
+- Business Context: This image is from a corporate knowledge base
+
+MANDATORY EXTRACTION REQUIREMENTS:
+
+1. METADATA EXTRACTION:
+   - Image type/format
+   - Any visible dates or timestamps
+   - Location information (if visible)
+   - People in image (names if visible, roles, count)
+
+2. TEXT EXTRACTION:
+   - Extract ALL visible text exactly as written
+   - Include signs, labels, documents, screens, whiteboards
+   - Preserve formatting, bullet points, numbers
+   - Include handwritten text if legible
+
+3. CONTENT ANALYSIS:
+   - What is happening in this image?
+   - Business context (meeting, presentation, facility, product, etc.)
+   - Equipment, products, or systems visible
+   - Any processes or workflows shown
+
+4. SEARCHABLE DETAILS:
+   - Product names, model numbers, SKUs
+   - Company names, logos, branding
+   - Technical specifications or measurements
+   - Meeting participants or presenters
+   - Facility locations or departments
+
+5. BUSINESS INTELLIGENCE:
+   - What business decisions or information does this image contain?
+   - Any action items, deadlines, or responsibilities shown?
+   - Financial information (budgets, costs, prices) if visible
+   - Performance metrics, charts, or data displays
+
+CRITICAL: Extract SPECIFIC, GRANULAR details. Avoid generic descriptions.
+Include EXACT text, SPECIFIC names, PRECISE numbers, ACTUAL dates.
+"""
+            
+            # Use Vision API
+            response = self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{image_base64}",
+                                    "detail": "high"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=2000
+            )
+            
+            summary_text = response.choices[0].message.content
+            
+            # Extract dates from summary
+            extracted_dates = self._extract_dates_from_summary(summary_text)
+            
+            # Create searchable content
+            searchable_content = self._create_searchable_content(
+                summary_text, file_name, folder_path
+            )
+            
+            # Create summary filename
+            summary_filename = self._create_summary_filename(
+                file_name, folder_path, extracted_dates
+            )
+            
+            return {
+                "original_file": file_name,
+                "original_path": file_path,
+                "folder": folder_path,
+                "summary": summary_text,
+                "searchable_content": searchable_content,
+                "extracted_dates": extracted_dates,
+                "summary_filename": summary_filename,
+                "processed_date": datetime.now(),
+                "file_size": file_info.get('size', 0),
+                "processing_method": "vision_api"  # Indicate how this was processed
+            }
+            
+        except Exception as e:
+            print(f"❌ Error processing image {file_name}: {e}")
+            return None
+    
+    def _should_use_chunked_analysis(self, file_info: Dict[str, Any]) -> bool:
+        """Smart decision on whether to use chunked analysis based on file characteristics."""
+        file_name = file_info['name'].lower()
+        file_size = file_info.get('size', 0)
+        file_ext = Path(file_info['name']).suffix.lower()
+        folder_path = file_info.get('folder', '').lower()
+        
+        # Always chunk very large files (> 1MB)
+        if file_size > 1000000:  # 1MB
+            return True
+            
+        # Always use simple for very small files (< 100KB)
+        if file_size < 100000:  # 100KB
+            return False
+            
+        # Content-based decisions for medium files (100KB - 1MB)
+        
+        # Chunk complex document types
+        if any(term in file_name for term in [
+            'meeting', 'minutes', 'mom', 'quarterly', 'annual', 'report',
+            'analysis', 'review', 'summary', 'presentation', 'agenda'
+        ]):
+            return True
+            
+        # Chunk if in complex folders
+        if any(term in folder_path for term in [
+            'meeting', 'quarterly', 'annual', 'reports', 'analysis'
+        ]):
+            return True
+            
+        # Chunk multi-page document types
+        if file_ext in ['.pdf', '.docx', '.pptx'] and file_size > 300000:  # 300KB
+            return True
+            
+        # Simple analysis for likely simple documents
+        if any(term in file_name for term in [
+            'email', 'note', 'memo', 'brief', 'quick', 'short'
+        ]):
+            return False
+            
+        # Default: medium files get simple analysis unless they look complex
+        return False
+    
     def _simple_document_analysis(self, file_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Fast single-pass analysis for small documents."""
         file_name = file_info['name']
@@ -1090,20 +1251,24 @@ Format: Product by product with all technical details and specifications."""
         print(f"📄 Processing: {file_name} (in {folder_path})")
         
         try:
-            # Handle .msg files differently (OpenAI doesn't support them)
+            # Handle different file types that need special processing
             if file_ext in ['.msg', '.eml']:
                 return self._summarize_email_file(file_info)
+            elif file_ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
+                return self._summarize_image_file(file_info)
             
-            # Adaptive processing based on file size
+            # Adaptive processing based on file size and type
             file_size = file_info.get('size', 0)
             
-            # Use simple analysis for small files (under 500KB)
-            if file_size < 500000:  # 500KB threshold
-                print(f"📄 Small file detected ({file_size} bytes) - using single-pass analysis")
-                return self._simple_document_analysis(file_info)
-            else:
-                print(f"📚 Large file detected ({file_size} bytes) - using comprehensive chunked analysis")
+            # Determine if chunking is needed based on file characteristics
+            needs_chunking = self._should_use_chunked_analysis(file_info)
+            
+            if needs_chunking:
+                print(f"📚 Complex document detected ({file_size} bytes) - using comprehensive chunked analysis")
                 return self._chunked_document_analysis(file_info)
+            else:
+                print(f"📄 Simple document detected ({file_size} bytes) - using single-pass analysis")
+                return self._simple_document_analysis(file_info)
             
             # Create thread and get summary
             thread = self.client.beta.threads.create()
