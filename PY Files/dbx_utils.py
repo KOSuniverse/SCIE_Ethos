@@ -203,9 +203,9 @@ def save_xlsx_bytes(
 
 # ---------------- JSON upload ----------------
 
-def upload_json(path_lower: str, obj: dict, mode: str = "overwrite"):
+def upload_json(path_lower: str, obj: dict, mode: str = "overwrite", default=None):
     """Upload a JSON object to Dropbox."""
-    data = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
+    data = json.dumps(obj, ensure_ascii=False, indent=2, default=default).encode("utf-8")
     upload_bytes(path_lower, data, mode=mode)
 
 

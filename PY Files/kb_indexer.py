@@ -118,7 +118,13 @@ class KBIndexer:
         try:
             if DROPBOX_AVAILABLE:
                 from dbx_utils import upload_json
-                upload_json(index_path, self.document_index)
+                # Use datetime_handler for JSON serialization
+                def datetime_handler(obj):
+                    if hasattr(obj, 'isoformat'):
+                        return obj.isoformat()
+                    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+                
+                upload_json(index_path, self.document_index, default=datetime_handler)
         except Exception as e:
             print(f"Failed to save document index: {e}")
     
@@ -128,7 +134,13 @@ class KBIndexer:
         try:
             if DROPBOX_AVAILABLE:
                 from dbx_utils import upload_json
-                upload_json(hash_path, self.file_hashes)
+                # Use datetime_handler for JSON serialization (defensive)
+                def datetime_handler(obj):
+                    if hasattr(obj, 'isoformat'):
+                        return obj.isoformat()
+                    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+                
+                upload_json(hash_path, self.file_hashes, default=datetime_handler)
         except Exception as e:
             print(f"Failed to save file hashes: {e}")
     
