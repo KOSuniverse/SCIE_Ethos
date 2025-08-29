@@ -101,7 +101,7 @@ class DataNeededPanel:
         
         with col1:
             description = st.text_area("Description", key="gap_desc", height=80)
-            impact = st.text_area("Business Impact", key="gap_impact", height=60)
+            impact = st.text_area("Business Impact", key="gap_impact", height=80)
             data_type = "Inventory"  # Auto-set - no dropdown
             st.caption(f"Data Type: {data_type} (auto-detected)")
         
