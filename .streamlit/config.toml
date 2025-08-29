@@ -1,11 +1,8 @@
 [theme]
 # Primary theme colors
 primaryColor = "#4CAF50"           # Green accent color
-backgroundColor = "#0E1117"        # Dark background
-secondaryBackgroundColor = "#262730" # Slightly lighter dark
-textColor = "#FAFAFA"             # Light text
 
-# Base theme - dark mode
+# Base theme - dark mode by default (user can toggle in settings)
 base = "dark"
 
 # Font
