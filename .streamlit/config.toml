@@ -1,0 +1,21 @@
+[theme]
+# Primary theme colors
+primaryColor = "#4CAF50"           # Green accent color
+backgroundColor = "#0E1117"        # Dark background
+secondaryBackgroundColor = "#262730" # Slightly lighter dark
+textColor = "#FAFAFA"             # Light text
+
+# Base theme - dark mode
+base = "dark"
+
+# Font
+font = "sans serif"
+
+[server]
+# Development settings
+runOnSave = true
+allowRunOnSave = true
+
+[browser]
+# Automatically open browser
+gatherUsageStats = false
