@@ -503,19 +503,34 @@ Please structure your response with clear sections and cite your sources."""
                                     folder = result.get('folder', 'root')
                                     summary = result.get('summary', 'No summary available')
                                     relevance = result.get('relevance_score', 0)
+                                    original_path = result.get('file_path', '')  # Original document location
                                     
                                     # Clean up any OpenAI citation formats in the summary
                                     import re
                                     summary = re.sub(r'【\d+:\d+†[^】]*】', '', summary)
                                     summary = re.sub(r'【[^】]*】', '', summary)
                                     
-                                    kb_answer += f"**From \"{file_name}\" (folder: {folder}):**\n"
+                                    # Enhanced display with drill-down capability
+                                    kb_answer += f"**📄 From \"{file_name}\"**\n"
+                                    kb_answer += f"*Location: {folder}*\n"
+                                    if original_path:
+                                        kb_answer += f"*Raw Document: `{original_path}`*\n"
+                                    kb_answer += f"*Relevance: {relevance:.1%}*\n\n"
+                                    
+                                    # Extract key details for enterprise-level granularity
+                                    kb_answer += f"**📋 GRANULAR DETAILS:**\n"
                                     kb_answer += f"{summary}\n\n"
+                                    
+                                    # Add drill-down note
+                                    kb_answer += f"💡 *Drill-down available: This summary is extracted from the full document at the location above.*\n\n"
+                                    kb_answer += "---\n\n"
                                     
                                     kb_sources.append({
                                         "name": file_name,
                                         "folder": folder,
-                                        "relevance": relevance
+                                        "relevance": relevance,
+                                        "original_path": original_path,
+                                        "drill_down_available": bool(original_path)
                                     })
                                 
                                 print(f"✅ Found {len(indexed_results)} relevant meeting summaries")
@@ -567,14 +582,19 @@ RESPONSE FORMAT - ENTERPRISE ANALYSIS TEMPLATE:
 - Suggest follow-up questions to gather missing critical information
 - Prioritize actions by business impact and urgency
 
-CRITICAL REQUIREMENTS:
+CRITICAL GROUNDING REQUIREMENTS - NEVER VIOLATE:
 - PRESERVE every specific detail (no summarizing away important facts)
-- Use actual names, numbers, and dates from the meetings
-- Build analysis on factual evidence, not assumptions
-- Focus on actionable intelligence for EthosEnergy operations
-- NEVER reference external companies, training materials, or textbook examples
+- Use ONLY actual names, numbers, and dates from the meetings provided
+- Build analysis ONLY on factual evidence from the documents - NEVER assume or infer
+- If information is missing or unclear, explicitly state "Information not available in documents"
+- NEVER add external knowledge, examples, or assumptions
+- NEVER reference companies, people, or data not mentioned in the provided meetings
+- NEVER use general business knowledge to fill gaps - stick to document facts only
+- If asked about something not in the documents, say "This information is not covered in the available meeting summaries"
 - Do NOT use OpenAI citation formats 【4:0†source】
-- Base everything ONLY on the EthosEnergy meeting content provided"""
+- Base everything ONLY on the EthosEnergy meeting content provided
+
+STRICT RULE: If you cannot find specific information in the meeting summaries, do not invent or assume it. State clearly what information is missing."""
                     
                     try:
                         # Use Chat Completion API directly to avoid Assistant's attached training docs
@@ -601,30 +621,35 @@ CRITICAL REQUIREMENTS:
                     except Exception as e:
                         ai_answer = "The meeting documents above provide the specific information available."
                 else:
-                    # No KB findings - provide general response without training docs
-                    general_prompt = f"""Provide a brief, general response to this question: {prompt}
+                    # No KB findings - provide ChatGPT-like general knowledge response
+                    general_prompt = f"""You are a knowledgeable business assistant. Please provide a comprehensive, helpful response to: {prompt}
 
-CRITICAL INSTRUCTIONS:
-- Do NOT cite any training documents, PDFs, or external company examples
-- Do NOT use citations with 【4:0†source】 format
-- Provide only general business knowledge without specific company references
-- Keep response concise and focused on the question asked
-- If you don't have relevant general knowledge, state: "I don't have specific information to answer this question without access to relevant documents."
-"""
+RESPONSE GUIDELINES:
+- Provide detailed, useful information like ChatGPT would
+- Use your general knowledge and expertise to give practical insights
+- Include relevant business concepts, frameworks, or best practices when applicable
+- Make the response actionable and valuable
+- Structure information clearly with headings or bullet points when helpful
+- Do NOT cite specific training documents, PDFs, or external company examples
+- Do NOT use citation formats like 【4:0†source】
+- Focus on providing genuine value and practical guidance
+- If the question is about specific company data you don't have, clearly state that and pivot to general guidance
+
+Remember: You should be as helpful and comprehensive as ChatGPT, while avoiding citations to specific documents."""
                     
                     try:
-                        # Use Chat Completion API directly to avoid Assistant's training docs
+                        # Use Chat Completion API for comprehensive general knowledge
                         from openai import OpenAI
                         client = OpenAI()
                         
                         response = client.chat.completions.create(
                             model="gpt-4o",
                             messages=[
-                                {"role": "system", "content": "You are a helpful assistant. Provide only general business knowledge without referencing specific training materials, documents, or external companies."},
+                                {"role": "system", "content": "You are an expert business consultant and analyst. Provide comprehensive, practical, and actionable advice using your extensive knowledge. Be as helpful as ChatGPT while avoiding citations to specific documents."},
                                 {"role": "user", "content": general_prompt}
                             ],
-                            temperature=0.3,
-                            max_tokens=400
+                            temperature=0.4,
+                            max_tokens=800
                         )
                         
                         ai_answer = response.choices[0].message.content
