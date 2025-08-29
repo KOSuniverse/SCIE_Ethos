@@ -569,7 +569,7 @@ DO NOT make up generic content. ONLY use information that actually appears in th
         return []
 
     def _load_all_summary_files_from_dropbox(self) -> List[Dict[str, Any]]:
-        """Universal loader: Find and load ALL *_summary.json files from KB_Summaries folder."""
+        """Universal loader: Find and load ALL *_summary.json files with structured data parsing."""
         if not DROPBOX_AVAILABLE:
             print("⚠️ Dropbox not available for universal summary search")
             return []
@@ -595,9 +595,13 @@ DO NOT make up generic content. ONLY use information that actually appears in th
                     
                     if file_bytes:
                         summary_data = json.loads(file_bytes.decode('utf-8'))
-                        # Ensure we have the file location for drill-down capability
-                        summary_data['summary_file_path'] = file_path
-                        all_summaries.append(summary_data)
+                        
+                        # Enhanced structured data extraction
+                        enhanced_summary = self._parse_structured_json(summary_data)
+                        enhanced_summary['summary_file_path'] = file_path
+                        enhanced_summary['original_json'] = summary_data  # Preserve original
+                        
+                        all_summaries.append(enhanced_summary)
                         
                 except Exception as file_error:
                     print(f"❌ Failed to load summary file {file_info['name']}: {file_error}")
@@ -609,6 +613,223 @@ DO NOT make up generic content. ONLY use information that actually appears in th
         except Exception as e:
             print(f"❌ Universal summary search failed: {e}")
             return []
+
+    def _parse_structured_json(self, json_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse JSON summary and extract all structured fields for enhanced search and AI processing."""
+        
+        # Start with original data
+        parsed = json_data.copy()
+        
+        # Extract all searchable structured content
+        structured_content = []
+        
+        # Extract direct reports (org charts)
+        if 'direct_reports' in json_data:
+            direct_reports = json_data['direct_reports']
+            if isinstance(direct_reports, list):
+                structured_content.extend(direct_reports)
+                parsed['has_org_chart'] = True
+                parsed['people_count'] = len(direct_reports)
+        
+        # Extract participants (meetings)
+        if 'participants' in json_data:
+            participants = json_data['participants']
+            if isinstance(participants, list):
+                structured_content.extend(participants)
+                parsed['has_participants'] = True
+        
+        # Extract actions/decisions
+        if 'actions' in json_data:
+            actions = json_data['actions']
+            if isinstance(actions, list):
+                for action in actions:
+                    if isinstance(action, dict):
+                        structured_content.extend([str(v) for v in action.values()])
+                    else:
+                        structured_content.append(str(action))
+                parsed['has_actions'] = True
+        
+        # Extract deliverables
+        if 'deliverables' in json_data:
+            deliverables = json_data['deliverables']
+            if isinstance(deliverables, list):
+                structured_content.extend(deliverables)
+                parsed['has_deliverables'] = True
+        
+        # Extract key processes/workflows
+        for field in ['ito_otr_flow', 'contract_economics', 'operations_controls', 'process', 'governance']:
+            if field in json_data:
+                field_data = json_data[field]
+                if isinstance(field_data, dict):
+                    structured_content.extend([str(v) for v in field_data.values()])
+                elif isinstance(field_data, list):
+                    structured_content.extend([str(item) for item in field_data])
+        
+        # Extract systems/entities information
+        for field in ['systems', 'entities', 'scope', 'erps']:
+            if field in json_data:
+                field_data = json_data[field]
+                if isinstance(field_data, dict):
+                    structured_content.extend([str(v) for v in field_data.values()])
+                elif isinstance(field_data, list):
+                    structured_content.extend([str(item) for item in field_data])
+        
+        # Create comprehensive searchable content
+        all_searchable = []
+        all_searchable.append(json_data.get('summary', ''))
+        all_searchable.extend(structured_content)
+        
+        parsed['structured_searchable_content'] = ' '.join(all_searchable)
+        parsed['all_structured_fields'] = structured_content
+        
+        return parsed
+
+    def drill_down_to_raw_document(self, file_path: str, query: str) -> Optional[Dict[str, Any]]:
+        """Drill down to raw document when summary is insufficient for the query."""
+        if not DROPBOX_AVAILABLE:
+            print("⚠️ Dropbox not available for drill-down")
+            return None
+            
+        try:
+            from dbx_utils import read_file_bytes
+            from openai import OpenAI
+            
+            print(f"🔍 Drilling down to raw document: {file_path}")
+            
+            # Read the raw document
+            file_bytes = read_file_bytes(file_path)
+            if not file_bytes:
+                print(f"❌ Could not read raw document: {file_path}")
+                return None
+            
+            # Determine file type and processing method
+            file_ext = file_path.lower().split('.')[-1]
+            
+            if file_ext in ['msg', 'eml']:
+                # Email files - read content directly
+                content = file_bytes.decode('utf-8', errors='ignore')
+                analysis_prompt = f"""Analyze this email content to answer: {query}
+
+Email Content:
+{content}
+
+Extract specific details that answer the question. Include names, roles, dates, amounts, and any relevant details."""
+                
+            elif file_ext in ['jpg', 'jpeg', 'png', 'gif', 'webp']:
+                # Image files - use Vision API
+                import base64
+                base64_image = base64.b64encode(file_bytes).decode('utf-8')
+                
+                client = OpenAI()
+                response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": f"Analyze this image to answer: {query}\n\nExtract all specific details, names, roles, organizational structure, or any information that answers the question."},
+                                {"type": "image_url", "image_url": {"url": f"data:image/{file_ext};base64,{base64_image}"}}
+                            ]
+                        }
+                    ],
+                    max_tokens=800
+                )
+                
+                return {
+                    "drill_down_content": response.choices[0].message.content,
+                    "source_file": file_path,
+                    "analysis_method": "vision_api"
+                }
+                
+            else:
+                # Other documents - upload to OpenAI for analysis
+                client = OpenAI()
+                
+                # Upload file to OpenAI
+                file_obj = client.files.create(
+                    file=(file_path.split('/')[-1], file_bytes),
+                    purpose='assistants'
+                )
+                
+                # Create a temporary assistant for this analysis
+                assistant = client.beta.assistants.create(
+                    name="Document Drill-Down Analyzer",
+                    instructions=f"You are analyzing a document to answer this specific question: {query}. Extract all relevant details, names, roles, processes, amounts, dates, and specific information that answers the question.",
+                    model="gpt-4o",
+                    tools=[{"type": "file_search"}],
+                    tool_resources={"file_search": {"vector_store_ids": []}}
+                )
+                
+                # Create vector store and add file
+                vector_store = client.beta.vector_stores.create()
+                client.beta.vector_stores.files.create(
+                    vector_store_id=vector_store.id,
+                    file_id=file_obj.id
+                )
+                
+                # Update assistant with vector store
+                client.beta.assistants.update(
+                    assistant_id=assistant.id,
+                    tool_resources={"file_search": {"vector_store_ids": [vector_store.id]}}
+                )
+                
+                # Create thread and get analysis
+                thread = client.beta.threads.create()
+                client.beta.threads.messages.create(
+                    thread_id=thread.id,
+                    role="user",
+                    content=f"Please analyze the uploaded document to answer this question: {query}\n\nProvide specific details, names, roles, amounts, dates, and any relevant information."
+                )
+                
+                run = client.beta.threads.runs.create_and_poll(
+                    thread_id=thread.id,
+                    assistant_id=assistant.id,
+                    max_completion_tokens=800
+                )
+                
+                if run.status == 'completed':
+                    messages = client.beta.threads.messages.list(thread_id=thread.id)
+                    drill_down_content = messages.data[0].content[0].text.value
+                    
+                    # Clean up OpenAI resources
+                    client.files.delete(file_obj.id)
+                    client.beta.assistants.delete(assistant.id)
+                    client.beta.vector_stores.delete(vector_store.id)
+                    
+                    return {
+                        "drill_down_content": drill_down_content,
+                        "source_file": file_path,
+                        "analysis_method": "assistant_api"
+                    }
+                else:
+                    # Clean up on failure
+                    client.files.delete(file_obj.id)
+                    client.beta.assistants.delete(assistant.id)
+                    client.beta.vector_stores.delete(vector_store.id)
+                    return None
+            
+            # For email/text content, use Chat Completion API
+            if file_ext in ['msg', 'eml']:
+                client = OpenAI()
+                response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": "You are analyzing document content to extract specific information. Focus on names, roles, processes, amounts, dates, and relevant details."},
+                        {"role": "user", "content": analysis_prompt}
+                    ],
+                    temperature=0.2,
+                    max_tokens=800
+                )
+                
+                return {
+                    "drill_down_content": response.choices[0].message.content,
+                    "source_file": file_path,
+                    "analysis_method": "chat_completion"
+                }
+            
+        except Exception as e:
+            print(f"❌ Drill-down analysis failed for {file_path}: {e}")
+            return None
     
     def _summarize_email_file(self, file_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Summarize email files (.msg, .eml) without OpenAI file upload."""
@@ -1520,15 +1741,18 @@ Format: Product by product with all technical details and specifications."""
         for summary_data in all_summaries:
             summary_text = summary_data.get('summary', '').lower()
             searchable_content = summary_data.get('searchable_content', '').lower()
+            structured_content = summary_data.get('structured_searchable_content', '').lower()
             file_name = summary_data.get('file_name', '').lower()
             folder = summary_data.get('folder', '').lower()
             
-            # Advanced relevance scoring
+            # Enhanced relevance scoring with structured data priority
             score = 0
             
-            # Keyword matching with weights
+            # Keyword matching with weights (structured data gets highest priority)
             for word in query_lower.split():
                 if len(word) > 2:  # Skip short words
+                    if word in structured_content:
+                        score += 5  # Highest priority for structured fields
                     if word in summary_text:
                         score += 3
                     if word in searchable_content:
@@ -1537,6 +1761,16 @@ Format: Product by product with all technical details and specifications."""
                         score += 2
                     if word in folder:
                         score += 1
+            
+            # Bonus scoring for specific structured field matches
+            if summary_data.get('has_org_chart') and any(term in query_lower for term in ['direct reports', 'org chart', 'reports to', 'team']):
+                score += 10
+            
+            if summary_data.get('has_participants') and any(term in query_lower for term in ['meeting', 'participants', 'attendees']):
+                score += 8
+                
+            if summary_data.get('has_actions') and any(term in query_lower for term in ['actions', 'decisions', 'follow up', 'tasks']):
+                score += 8
             
             # Query-type specific scoring
             if query_analysis['type'] == 'people':
