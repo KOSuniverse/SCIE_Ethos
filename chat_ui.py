@@ -78,6 +78,9 @@ CRITICAL INSTRUCTIONS - FOLLOW EXACTLY:
 - NEVER use 【4:1†source】 or similar OpenAI citation formats - I will reject responses with this format
 - Extract SPECIFIC, ACTIONABLE details - not high-level summaries
 - Focus on information that can be used to solve problems or answer follow-up questions
+- NEVER include textbook examples, academic exercises, or generic company data (like "Pegasa" or random manufacturers)
+- Use ONLY actual EthosEnergy business data and real operational information from the uploaded documents
+- If you don't find specific information in the documents, say so clearly - don't make up examples
 
 """
     
@@ -373,13 +376,14 @@ def render_chat_assistant():
                         thread_id=st.session_state.thread_id
                     )
                 
-                                # Try to get KB document answer alongside AI
-                kb_answer = "No relevant documents found in knowledge base."
+                                # TEMPORARILY DISABLE KB SEARCH - Focus on AI responses only
+                kb_answer = "📋 **KB Search Temporarily Disabled**\n\nFocusing on AI analysis of uploaded files for cleaner, more targeted responses."
                 kb_sources = []
 
                 try:
-                    # First try to search indexed summaries
-                    try:
+                    # KB search disabled for now
+                    indexed_results = None
+                    if False:  # Disabled block
                         import sys
                         sys.path.append('PY Files')
                         from kb_indexer import KBIndexer
