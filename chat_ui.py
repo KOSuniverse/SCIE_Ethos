@@ -164,60 +164,20 @@ Organize information in a way that best serves the specific question asked.
 def render_chat_assistant():
     """Render the complete chat assistant UI inline."""
     
-    # Enhanced Dark Mode CSS for ChatGPT-like appearance
+    # Enhanced styling that works with both light and dark themes
     st.markdown("""
     <style>
-        /* Force dark theme for ALL elements - full coverage */
-        .stApp, .main, .block-container, body, html {
-            background-color: #0E1117 !important;
-            color: #FAFAFA !important;
-        }
-        
-        /* Force sidebar dark */
-        .css-1d391kg, .css-1aumxhk, .stSidebar, .sidebar .sidebar-content {
-            background-color: #262730 !important;
-        }
-        
-        /* Force main content area dark */
-        .main .block-container {
-            background-color: #0E1117 !important;
-            padding-top: 1rem !important;
-        }
-        
-        /* Force header dark */
-        .stAppHeader, header[data-testid="stHeader"] {
-            background-color: #0E1117 !important;
-        }
-        
-        /* Force footer dark */
-        .stAppFooter, footer {
-            background-color: #0E1117 !important;
-        }
-        
-        /* Chat messages styling */
+        /* Chat messages styling - adapts to theme */
         .stChatMessage {
             font-size: 1rem;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background-color: #262730 !important;
-            border-radius: 12px !important;
-            padding: 16px !important;
-            margin: 8px 0 !important;
-            border: 1px solid #333 !important;
+            border-radius: 12px;
+            padding: 16px;
+            margin: 8px 0;
+            border: 1px solid var(--secondary-background-color);
         }
         
-        /* User messages - slightly different color */
-        .stChatMessage[data-testid="user-message"] {
-            background-color: #1E2A5E !important;
-            border: 1px solid #4CAF50 !important;
-        }
-        
-        /* Assistant messages */
-        .stChatMessage[data-testid="assistant-message"] {
-            background-color: #2D2D35 !important;
-            border: 1px solid #555 !important;
-        }
-        
-        /* Badges */
+        /* Badges that work in both themes */
         .badge {
             padding: 4px 8px;
             border-radius: 8px;
@@ -235,14 +195,13 @@ def render_chat_assistant():
         .model-4o { background: linear-gradient(135deg, #9C27B0 0%, #7B1FA2 100%); }
         .model-assistant { background: linear-gradient(135deg, #00BCD4 0%, #0097A7 100%); }
         
-        /* Dark mode sources card */
+        /* Sources card that adapts to theme */
         .sources-card {
-            background: #262730 !important;
-            border: 1px solid #444 !important;
+            background: var(--secondary-background-color);
+            border: 1px solid var(--border-color);
             border-radius: 8px;
             padding: 12px;
             margin: 8px 0;
-            color: #FAFAFA !important;
         }
         
         .service-level-badge {
@@ -256,86 +215,21 @@ def render_chat_assistant():
             margin: 4px;
         }
         
-        /* Sidebar dark styling */
-        .css-1d391kg {
-            background-color: #262730 !important;
-        }
-        
-        /* Input fields dark mode */
-        .stTextInput input {
-            background-color: #262730 !important;
-            color: #FAFAFA !important;
-            border: 1px solid #444 !important;
-        }
-        
-        /* Chat input dark mode */
-        .stChatInput input {
-            background-color: #262730 !important;
-            color: #FAFAFA !important;
-            border: 1px solid #4CAF50 !important;
-            border-radius: 20px !important;
-        }
-        
-        /* Buttons dark mode */
+        /* Enhanced button styling */
         .stButton button {
-            background-color: #4CAF50 !important;
-            color: white !important;
-            border: none !important;
-            border-radius: 8px !important;
-            transition: all 0.3s ease !important;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            font-weight: 500;
         }
         
         .stButton button:hover {
-            background-color: #45a049 !important;
-            box-shadow: 0 4px 8px rgba(76, 175, 80, 0.3) !important;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
         }
         
-        /* Success/Error messages dark mode */
-        .stSuccess {
-            background-color: #1B4332 !important;
-            color: #4CAF50 !important;
-        }
-        
-        .stError {
-            background-color: #4A1A1A !important;
-            color: #f44336 !important;
-        }
-        
-        .stInfo {
-            background-color: #1A2332 !important;
-            color: #2196F3 !important;
-        }
-        
-        /* Expander dark mode */
-        .streamlit-expanderHeader {
-            background-color: #262730 !important;
-            color: #FAFAFA !important;
-        }
-        
-        .streamlit-expanderContent {
-            background-color: #1E1E1E !important;
-            border: 1px solid #444 !important;
-        }
-        
-        /* Code blocks dark mode */
-        .stCode {
-            background-color: #1E1E1E !important;
-            color: #FAFAFA !important;
-            border: 1px solid #444 !important;
-        }
-        
-        /* Markdown text dark mode */
-        .stMarkdown {
-            color: #FAFAFA !important;
-        }
-        
-        .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
-            color: #4CAF50 !important;
-        }
-        
-        /* Radio button dark mode */
-        .stRadio label {
-            color: #FAFAFA !important;
+        /* Chat input styling */
+        .stChatInput input {
+            border-radius: 20px;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -373,6 +267,9 @@ def render_chat_assistant():
     # ─────────────────────────────────────────────────────────────────────────────
     with st.sidebar:
         st.header("🧠 SCIE Ethos Control Panel")
+        
+        # Theme toggle info
+        st.info("💡 **Tip**: Toggle dark/light mode using the ⚙️ settings menu (top-right)")
         
         # Service Level Control (Auto-set to 95% - no dropdowns)
         st.subheader("⚙️ Service Level")
@@ -533,20 +430,17 @@ def render_chat_assistant():
                 kb_sources = []
                 
                 try:
-                    # Only search through documents that are uploaded to this chat session
                     if st.session_state.selected_files:
+                        # UPLOADED FILES: Search through user-uploaded documents
                         print(f"🔍 Searching through {len(st.session_state.selected_files)} uploaded files")
                         
-                        # Use OpenAI to analyze the uploaded files for document-based answers
                         from openai import OpenAI
                         import os
                         client = OpenAI()
                         
-                        # Helper function to get assistant ID
                         def _get_assistant_id():
-                            return os.getenv("ASSISTANT_ID", "asst_abc123")  # Replace with actual assistant ID
+                            return os.getenv("ASSISTANT_ID", "asst_abc123")
                         
-                        # Create a focused document search prompt
                         doc_search_prompt = f"""Based on the documents I've uploaded to this conversation, please provide a comprehensive answer to this question: {prompt}
 
 INSTRUCTIONS:
@@ -560,7 +454,6 @@ Question: {prompt}
 
 Please structure your response with clear sections and cite your sources."""
                         
-                        # Get document-based response using the existing thread with uploaded files
                         if st.session_state.thread_id:
                             thread = client.beta.threads.retrieve(st.session_state.thread_id)
                             
@@ -581,7 +474,6 @@ Please structure your response with clear sections and cite your sources."""
                                 messages = client.beta.threads.messages.list(thread_id=thread.id)
                                 kb_answer = messages.data[0].content[0].text.value
                                 
-                                # Clean up any OpenAI citation formats
                                 import re
                                 kb_answer = re.sub(r'【\d+:\d+†[^】]*】', '', kb_answer)
                                 kb_answer = re.sub(r'【[^】]*】', '', kb_answer)
@@ -592,9 +484,55 @@ Please structure your response with clear sections and cite your sources."""
                                 kb_answer = f"📋 **Document Search Failed**\n\nCould not analyze uploaded documents (status: {run.status})"
                         else:
                             kb_answer = f"📋 **No Active Thread**\n\nPlease ask a question first to establish a conversation thread."
+                    
                     else:
-                        kb_answer = f"📋 **No Documents Uploaded**\n\nPlease upload documents using the file uploader in the sidebar to get document-based answers."
-                        print("📋 No uploaded files to search through")
+                        # KB SUMMARIES: Search through your indexed meeting summaries (not FAISS training docs)
+                        print("🔍 Searching KB summaries from meeting minutes and emails")
+                        
+                        try:
+                            import sys
+                            sys.path.append('PY Files')
+                            from kb_indexer import KBIndexer
+                            import os
+                            
+                            kb_path = os.getenv('KB_DBX_PATH', '/Project_Root/06_LLM_Knowledge_Base')
+                            data_path = os.getenv('DATA_DBX_PATH', '/Project_Root/04_Data')
+                            
+                            indexer = KBIndexer(kb_path, data_path)
+                            indexed_results = indexer.search_summaries(prompt, max_results=5)
+                            
+                            if indexed_results:
+                                kb_answer = f"Found {len(indexed_results)} relevant meeting documents:\n\n"
+                                kb_sources = []
+                                
+                                for result in indexed_results:
+                                    file_name = result.get('file_name', 'Unknown')
+                                    folder = result.get('folder', 'root')
+                                    summary = result.get('summary', 'No summary available')
+                                    relevance = result.get('relevance_score', 0)
+                                    
+                                    # Clean up any OpenAI citation formats in the summary
+                                    import re
+                                    summary = re.sub(r'【\d+:\d+†[^】]*】', '', summary)
+                                    summary = re.sub(r'【[^】]*】', '', summary)
+                                    
+                                    kb_answer += f"**From \"{file_name}\" (folder: {folder}):**\n"
+                                    kb_answer += f"{summary}\n\n"
+                                    
+                                    kb_sources.append({
+                                        "name": file_name,
+                                        "folder": folder,
+                                        "relevance": relevance
+                                    })
+                                
+                                print(f"✅ Found {len(indexed_results)} relevant meeting summaries")
+                            else:
+                                kb_answer = f"📋 **No Relevant Meeting Documents Found**\n\nNo meeting minutes or emails in the knowledge base match your query: '{prompt}'"
+                                print("📋 No relevant summaries found in KB_Summaries")
+                                
+                        except Exception as kb_error:
+                            kb_answer = f"📋 **KB Search Error**\n\nCould not search meeting summaries: {str(kb_error)}\n\nTip: Upload documents using the file uploader for document-based answers."
+                            print(f"❌ KB summary search failed: {kb_error}")
                         
                 except Exception as e:
                     kb_answer = f"📋 **Document Search Error**\n\nCould not search uploaded documents: {str(e)}"
@@ -603,32 +541,61 @@ Please structure your response with clear sections and cite your sources."""
                 # Combine responses with enhanced AI analysis
                 ai_answer = ai_response.get("answer", "No AI response available")
                 
-                # Enhance AI analysis to be contextual to KB findings
-                if kb_answer and kb_answer != "No relevant documents found in knowledge base." and "could not" not in kb_answer:
-                    # AI should enhance/contextualize KB findings
-                    enhanced_ai_prompt = f"""Based on the Knowledge Base findings below, provide additional context, analysis, or insights that relate specifically to the question: {prompt}
+                # Enhance AI analysis based on whether we have KB findings or not
+                if st.session_state.selected_files:
+                    # Files uploaded - AI can use the thread context
+                    ai_answer = ai_response.get("answer", "No AI response available")
+                elif kb_answer and "No Relevant Meeting Documents Found" not in kb_answer and "KB Search Error" not in kb_answer:
+                    # KB summaries found - provide contextual analysis
+                    enhanced_ai_prompt = f"""Based on the meeting summaries and documents from EthosEnergy below, provide additional context, analysis, or insights that relate specifically to the question: {prompt}
 
-Knowledge Base Findings:
+Meeting Documents Summary:
 {kb_answer}
 
 CRITICAL INSTRUCTIONS:
-- Build upon the KB findings, don't repeat them
-- Add relevant context or implications ONLY from your general business knowledge
-- NEVER reference external companies (like Pegasa, Nike, Apple, etc.) or their data
-- NEVER use specific dollar amounts, percentages, or data from other companies
+- Build upon the meeting findings, don't repeat them
+- Add relevant context or implications ONLY from your general business knowledge about S&OP, supply chain, and operations
+- NEVER reference external companies, their data, or training materials
+- NEVER cite documents like "Eckert_Lauren_S_OPDesignforaHighEndJewelryRetailer.pdf" or other training PDFs
 - Focus on general principles, best practices, or analytical frameworks
-- If you cannot provide relevant context without using external company data, simply state: "The KB findings above provide the specific information available."
-- Relate your analysis directly to the specific question asked
-- Do NOT use external company examples (like Pegasa or random manufacturers)
-- Focus on insights that would help with follow-up questions or decisions
-- If the KB findings are sufficient, acknowledge them and add minimal but relevant context"""
+- Do NOT use citations with 【4:0†source】 format
+- Relate your analysis directly to EthosEnergy's specific situation from the meeting documents
+- Focus on insights that would help with follow-up questions or decisions about EthosEnergy operations"""
                     
                     try:
-                        # Get contextual AI response
-                        ai_response_enhanced = run_query(enhanced_ai_prompt, thread_id=st.session_state.thread_id)
+                        # Get contextual AI response without file attachments to avoid FAISS training docs
+                        ai_response_enhanced = run_query(enhanced_ai_prompt)
                         ai_answer = ai_response_enhanced.get("answer", ai_answer)
+                        
+                        # Clean up any training document citations that might slip through
+                        import re
+                        ai_answer = re.sub(r'【\d+:\d+†[^】]*】', '', ai_answer)
+                        ai_answer = re.sub(r'【[^】]*】', '', ai_answer)
+                        
                     except:
-                        pass  # Fall back to original AI answer
+                        ai_answer = "The meeting documents above provide the specific information available."
+                else:
+                    # No KB findings - provide general response without training docs
+                    general_prompt = f"""Provide a brief, general response to this question: {prompt}
+
+CRITICAL INSTRUCTIONS:
+- Do NOT cite any training documents, PDFs, or external company examples
+- Do NOT use citations with 【4:0†source】 format
+- Provide only general business knowledge without specific company references
+- Keep response concise and focused on the question asked
+- If you don't have relevant general knowledge, state: "I don't have specific information to answer this question without access to relevant documents."
+"""
+                    
+                    try:
+                        ai_response_enhanced = run_query(general_prompt)
+                        ai_answer = ai_response_enhanced.get("answer", "I don't have specific information to answer this question without access to relevant documents.")
+                        
+                        # Clean up any citations
+                        import re
+                        ai_answer = re.sub(r'【\d+:\d+†[^】]*】', '', ai_answer)
+                        ai_answer = re.sub(r'【[^】]*】', '', ai_answer)
+                    except:
+                        ai_answer = "I don't have specific information to answer this question without access to relevant documents."
                 
                 # Create dual format answer
                 answer = f"""### 📚 Knowledge Base Answer
