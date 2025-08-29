@@ -167,10 +167,31 @@ def render_chat_assistant():
     # Enhanced Dark Mode CSS for ChatGPT-like appearance
     st.markdown("""
     <style>
-        /* Force dark theme for all elements */
-        .stApp {
+        /* Force dark theme for ALL elements - full coverage */
+        .stApp, .main, .block-container, body, html {
             background-color: #0E1117 !important;
             color: #FAFAFA !important;
+        }
+        
+        /* Force sidebar dark */
+        .css-1d391kg, .css-1aumxhk, .stSidebar, .sidebar .sidebar-content {
+            background-color: #262730 !important;
+        }
+        
+        /* Force main content area dark */
+        .main .block-container {
+            background-color: #0E1117 !important;
+            padding-top: 1rem !important;
+        }
+        
+        /* Force header dark */
+        .stAppHeader, header[data-testid="stHeader"] {
+            background-color: #0E1117 !important;
+        }
+        
+        /* Force footer dark */
+        .stAppFooter, footer {
+            background-color: #0E1117 !important;
         }
         
         /* Chat messages styling */
@@ -372,6 +393,25 @@ def render_chat_assistant():
         
         st.markdown("---")
         
+        # File Upload for Document Search
+        st.subheader("📎 Upload Documents")
+        uploaded_files = st.file_uploader(
+            "Upload documents for analysis",
+            type=['pdf', 'docx', 'pptx', 'txt', 'md', 'csv', 'xlsx'],
+            accept_multiple_files=True,
+            help="Upload documents to get specific answers from your files"
+        )
+        
+        if uploaded_files:
+            st.session_state.selected_files = uploaded_files
+            st.success(f"✅ {len(uploaded_files)} file(s) uploaded")
+            for file in uploaded_files:
+                st.write(f"📄 {file.name}")
+        else:
+            st.session_state.selected_files = []
+        
+        st.markdown("---")
+        
         # Model Selection (Auto - no user selection)
         st.subheader("🤖 Model Selection")
         model_choice = "Auto (Recommended)"  # Fixed - no user selection
@@ -488,12 +528,77 @@ def render_chat_assistant():
                         thread_id=st.session_state.thread_id
                     )
                 
-                                # TEMPORARILY DISABLE KB SEARCH - Focus on AI responses only
-                kb_answer = "📋 **KB Search Temporarily Disabled**\n\nFocusing on AI analysis of uploaded files for cleaner, more targeted responses."
+                                # DOCUMENT SEARCH - Search through uploaded documents (not KB folder)
+                kb_answer = "📋 **Searching uploaded documents...**"
                 kb_sources = []
+                
+                try:
+                    # Only search through documents that are uploaded to this chat session
+                    if st.session_state.selected_files:
+                        print(f"🔍 Searching through {len(st.session_state.selected_files)} uploaded files")
+                        
+                        # Use OpenAI to analyze the uploaded files for document-based answers
+                        from openai import OpenAI
+                        import os
+                        client = OpenAI()
+                        
+                        # Helper function to get assistant ID
+                        def _get_assistant_id():
+                            return os.getenv("ASSISTANT_ID", "asst_abc123")  # Replace with actual assistant ID
+                        
+                        # Create a focused document search prompt
+                        doc_search_prompt = f"""Based on the documents I've uploaded to this conversation, please provide a comprehensive answer to this question: {prompt}
 
-                # KB search is temporarily disabled - skip all KB functionality
-                print("📋 KB search temporarily disabled for cleaner responses")
+INSTRUCTIONS:
+- Use ONLY information from the uploaded documents
+- Provide specific details, names, dates, and numbers from the actual documents
+- Cite which document each piece of information comes from
+- If the documents don't contain relevant information, clearly state this
+- Focus on actionable, specific information that can be used for decision-making
+
+Question: {prompt}
+
+Please structure your response with clear sections and cite your sources."""
+                        
+                        # Get document-based response using the existing thread with uploaded files
+                        if st.session_state.thread_id:
+                            thread = client.beta.threads.retrieve(st.session_state.thread_id)
+                            
+                            client.beta.threads.messages.create(
+                                thread_id=thread.id,
+                                role="user",
+                                content=doc_search_prompt
+                            )
+                            
+                            run = client.beta.threads.runs.create_and_poll(
+                                thread_id=thread.id,
+                                assistant_id=_get_assistant_id(),
+                                temperature=0.2,
+                                max_completion_tokens=1500
+                            )
+                            
+                            if run.status == 'completed':
+                                messages = client.beta.threads.messages.list(thread_id=thread.id)
+                                kb_answer = messages.data[0].content[0].text.value
+                                
+                                # Clean up any OpenAI citation formats
+                                import re
+                                kb_answer = re.sub(r'【\d+:\d+†[^】]*】', '', kb_answer)
+                                kb_answer = re.sub(r'【[^】]*】', '', kb_answer)
+                                
+                                kb_sources = [{"name": f"Uploaded file {i+1}", "type": "document"} for i in range(len(st.session_state.selected_files))]
+                                print(f"✅ Document search complete: {len(kb_answer)} characters")
+                            else:
+                                kb_answer = f"📋 **Document Search Failed**\n\nCould not analyze uploaded documents (status: {run.status})"
+                        else:
+                            kb_answer = f"📋 **No Active Thread**\n\nPlease ask a question first to establish a conversation thread."
+                    else:
+                        kb_answer = f"📋 **No Documents Uploaded**\n\nPlease upload documents using the file uploader in the sidebar to get document-based answers."
+                        print("📋 No uploaded files to search through")
+                        
+                except Exception as e:
+                    kb_answer = f"📋 **Document Search Error**\n\nCould not search uploaded documents: {str(e)}"
+                    print(f"❌ Document search failed: {e}")
                 
                 # Combine responses with enhanced AI analysis
                 ai_answer = ai_response.get("answer", "No AI response available")
