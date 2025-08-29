@@ -1,19 +1,17 @@
-# chat_ui.py — Universal KB Summaries QA (no special-cases), deep-read default ON
-# Searches /Project_Root/06_LLM_Knowledge_Base/KB_Summaries and optionally /04_Data/03_Summaries,
-# ranks best summaries, composes one consolidated answer with citations,
-# and (by default) drills down into Meeting Minutes / Email source docs referenced by each summary.
-# This file is self-contained and does NOT touch DP mode or your other app modules.
+# chat_ui.py — Universal KB Summaries Q&A (no special cases), deep-read default ON
+# Compatible with existing main.py that calls `render_chat_assistant()`.
+# This module does NOT touch DP mode or your other orchestration.
 
 import os
 import re
 import json
 import math
 from pathlib import Path
-from collections import Counter, defaultdict
+from collections import Counter
 
 import streamlit as st
 
-# Optional deep-read libs (gracefully skipped if not installed)
+# Optional deep-read libs (gracefully skipped if missing)
 try:
     import pdfplumber  # PDF
 except Exception:
@@ -31,10 +29,8 @@ except Exception:
 
 
 # --------------------------------------------------------------------------------------
-# THEME-SAFE UI (no hardcoded light colors)
+# THEME-SAFE STYLING (no set_page_config; respect your config.toml)
 # --------------------------------------------------------------------------------------
-st.set_page_config(page_title="KB Summaries Q&A", layout="wide")
-
 bg  = st.get_option("theme.backgroundColor") or "#0e1117"
 sb  = st.get_option("theme.secondaryBackgroundColor") or "#1b1f24"
 tx  = st.get_option("theme.textColor") or "#e6edf3"
@@ -57,7 +53,6 @@ st.markdown(f"""
       margin-right:6px; font-size:0.8rem;
   }}
   .cite {{ color:{pc}; font-size:0.85rem; }}
-  .small {{ opacity:0.8; font-size:0.9rem; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -65,7 +60,7 @@ st.markdown(f"""
 # --------------------------------------------------------------------------------------
 # PATHS
 # --------------------------------------------------------------------------------------
-def detect_project_root() -> str:
+def _detect_project_root() -> str:
     pr = os.getenv("PROJECT_ROOT")
     if pr:
         return pr.rstrip("/")
@@ -74,8 +69,7 @@ def detect_project_root() -> str:
             return c
     return "."
 
-PROJECT_ROOT = detect_project_root()
-
+PROJECT_ROOT      = _detect_project_root()
 KB_ROOT           = Path(PROJECT_ROOT) / "06_LLM_Knowledge_Base"
 KB_SUMMARIES_DIR  = KB_ROOT / "KB_Summaries"
 KB_MEETING_DIR    = KB_ROOT / "Meeting Minutes"
@@ -88,45 +82,45 @@ OPTIONAL_SUMS_04  = Path(PROJECT_ROOT) / "04_Data" / "03_Summaries"
 # --------------------------------------------------------------------------------------
 _WORD = re.compile(r"[A-Za-z0-9]+")
 
-def tokenize(text: str):
+def _tokenize(text: str):
     return [w.lower() for w in _WORD.findall(text or "")]
 
-def bm25_score(query_tokens, doc_tokens, avgdl, k1=1.5, b=0.75):
+def _bm25_score(query_tokens, doc_tokens, avgdl, k1=1.5, b=0.75):
     tf = Counter(doc_tokens)
     score = 0.0
     dl = len(doc_tokens)
-    for qt, idf in query_tokens:  # query_tokens is list of (token, idf)
+    for qt, idf in query_tokens:  # query_tokens: list of (token, idf)
         f = tf.get(qt, 0)
         if f == 0:
             continue
         score += idf * ((f * (k1 + 1)) / (f + k1 * (1 - b + b * dl / avgdl)))
     return score
 
-def load_json(path: Path):
+def _load_json(path: Path):
     try:
         with path.open("r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return None
 
-def yield_summary_docs(root_dir: Path):
+def _yield_summary_docs(root_dir: Path):
     if not root_dir.exists():
         return
     for p in root_dir.rglob("*_summary.json"):
-        js = load_json(p)
+        js = _load_json(p)
         if not js or not isinstance(js, dict):
             continue
 
-        # Build a searchable string from all string content inside the JSON
+        # Build a searchable string from all string-like content inside the JSON
         text_fields = []
-        def collect(obj):
-            if isinstance(obj, str):
-                text_fields.append(obj)
-            elif isinstance(obj, dict):
-                for v in obj.values():
+        def collect(o):
+            if isinstance(o, str):
+                text_fields.append(o)
+            elif isinstance(o, dict):
+                for v in o.values():
                     collect(v)
-            elif isinstance(obj, list):
-                for v in obj:
+            elif isinstance(o, list):
+                for v in o:
                     collect(v)
         collect(js)
         searchable = "\n".join(text_fields)
@@ -141,20 +135,19 @@ def yield_summary_docs(root_dir: Path):
         }
 
 @st.cache_resource(show_spinner=False)
-def build_index(include_summaries_04: bool):
+def _build_index(include_summaries_04: bool):
     sources = [KB_SUMMARIES_DIR]
     if include_summaries_04 and OPTIONAL_SUMS_04.exists():
         sources.append(OPTIONAL_SUMS_04)
 
     docs = []
     for src in sources:
-        docs.extend(list(yield_summary_docs(src)))
+        docs.extend(list(_yield_summary_docs(src)))
 
-    # Tokenize & compute IDF
     tokenized_docs = []
     df = Counter()
     for d in docs:
-        toks = tokenize(d["search_text"])
+        toks = _tokenize(d["search_text"])
         tokenized_docs.append(toks)
         df.update(set(toks))
 
@@ -164,29 +157,25 @@ def build_index(include_summaries_04: bool):
 
     return {"docs": docs, "tokens": tokenized_docs, "idf": idf, "avgdl": avgdl, "N": N}
 
-def search_summaries(index, query: str, topk=6):
+def _search_summaries(index, query: str, topk=6):
     if index["N"] == 0:
         return []
-
-    qtoks_raw = tokenize(query)
+    qtoks_raw = _tokenize(query)
     if not qtoks_raw:
         return []
-
     query_tokens = [(t, index["idf"].get(t, 0.0)) for t in qtoks_raw]
     scores = []
     for i, toks in enumerate(index["tokens"]):
-        s = bm25_score(query_tokens, toks, index["avgdl"])
+        s = _bm25_score(query_tokens, toks, index["avgdl"])
         scores.append((s, i))
-
     scores.sort(reverse=True)
-    hits = [(index["docs"][i], s) for s, i in scores[:topk] if s > 0]
-    return hits
+    return [(index["docs"][i], s) for s, i in scores[:topk] if s > 0]
 
 
 # --------------------------------------------------------------------------------------
 # DEEP READ (DRILL-DOWN): PDFs, DOCX, MSG
 # --------------------------------------------------------------------------------------
-def deep_read_docx(path: Path, max_chars=3000) -> str:
+def _deep_read_docx(path: Path, max_chars=3000) -> str:
     if docx is None or not path.exists():
         return ""
     try:
@@ -196,19 +185,19 @@ def deep_read_docx(path: Path, max_chars=3000) -> str:
     except Exception:
         return ""
 
-def deep_read_pdf(path: Path, max_chars=3000) -> str:
+def _deep_read_pdf(path: Path, max_chars=3000) -> str:
     if pdfplumber is None or not path.exists():
         return ""
     out = []
     try:
         with pdfplumber.open(str(path)) as pdf:
-            for page in pdf.pages[:8]:  # a few pages is enough for enrichment
+            for page in pdf.pages[:8]:
                 out.append(page.extract_text() or "")
         return "\n".join(out)[:max_chars]
     except Exception:
         return ""
 
-def deep_read_msg(path: Path, max_chars=3000) -> str:
+def _deep_read_msg(path: Path, max_chars=3000) -> str:
     if extract_msg is None or not path.exists():
         return ""
     try:
@@ -219,7 +208,7 @@ def deep_read_msg(path: Path, max_chars=3000) -> str:
     except Exception:
         return ""
 
-def enrich_with_deep_read(summary_json: dict) -> str:
+def _enrich_with_deep_read(summary_json: dict) -> str:
     """
     Priority 1: Use summary_json['sources'] (relative to KB root).
     Priority 2: If absent, stem-match 'file_name' under Meeting Minutes & Email.
@@ -234,11 +223,11 @@ def enrich_with_deep_read(summary_json: dict) -> str:
                 p = (KB_ROOT / rel) if not Path(rel).is_absolute() else Path(rel)
                 suf = p.suffix.lower()
                 if suf == ".pdf":
-                    texts.append(deep_read_pdf(p))
+                    texts.append(_deep_read_pdf(p))
                 elif suf == ".docx":
-                    texts.append(deep_read_docx(p))
+                    texts.append(_deep_read_docx(p))
                 elif suf == ".msg":
-                    texts.append(deep_read_msg(p))
+                    texts.append(_deep_read_msg(p))
     if any(texts):
         return "\n".join(t for t in texts if t)
 
@@ -250,20 +239,20 @@ def enrich_with_deep_read(summary_json: dict) -> str:
                    list(folder.rglob(f"{stem}*.msg"))[:1]):
             suf = gp.suffix.lower()
             if suf == ".pdf":
-                return deep_read_pdf(gp)
+                return _deep_read_pdf(gp)
             if suf == ".docx":
-                return deep_read_docx(gp)
+                return _deep_read_docx(gp)
             if suf == ".msg":
-                return deep_read_msg(gp)
+                return _deep_read_msg(gp)
     return ""
 
 
 # --------------------------------------------------------------------------------------
 # COMPOSE CONSOLIDATED ANSWER (no special-cases)
 # --------------------------------------------------------------------------------------
-def compose_answer(query: str, hits, deep_read: bool):
+def _compose_answer(query: str, hits, deep_read: bool):
     """
-    Build one consolidated answer from the best summaries.
+    Build a consolidated answer from the best summaries.
     Pulls participants, actions, decisions, launch tables, frame summaries,
     and optionally short excerpts from source docs.
     """
@@ -275,12 +264,11 @@ def compose_answer(query: str, hits, deep_read: bool):
         sj = d["summary_json"]
         parts = []
 
-        # High-value fields first
+        # High-signal fields first
         participants = sj.get("participants")
         if participants:
             parts.append("**Participants:** " + ", ".join(participants))
 
-        # Decisions / actions
         decisions = sj.get("decisions")
         if decisions:
             parts.append("**Decisions:** " + json.dumps(decisions, ensure_ascii=False))
@@ -288,7 +276,7 @@ def compose_answer(query: str, hits, deep_read: bool):
         actions = sj.get("actions")
         if actions:
             act_lines = []
-            for a in actions[:8]:
+            for a in actions[:10]:
                 if isinstance(a, dict):
                     who = a.get("owner")
                     item = a.get("item") or a.get("action") or ""
@@ -306,7 +294,7 @@ def compose_answer(query: str, hits, deep_read: bool):
         lt = sj.get("launch_table") or sj.get("launch_table_manufactured") or sj.get("launch_table_traded") or []
         if lt:
             rows = []
-            for r in lt[:10]:
+            for r in lt[:12]:
                 rows.append(
                     f"{r.get('frame','')} {r.get('component','')}: "
                     f"{r.get('decision','')} x{r.get('sets','')}"
@@ -319,24 +307,23 @@ def compose_answer(query: str, hits, deep_read: bool):
             fs_text = "; ".join(f"{k}: {v}" for k, v in fs.items())
             parts.append("**Frame Summary:** " + fs_text)
 
-        # Financial/cash-flow (if present)
-        cf = sj.get("cash_flow") or sj.get("financials")
-        if cf:
-            cf_txt = json.dumps(cf, ensure_ascii=False)
-            parts.append("**Cash/Financials:** " + cf_txt)
+        # Financial / cash-flow if present
+        for money_key in ("cash_flow", "financials"):
+            cf = sj.get(money_key)
+            if cf:
+                parts.append(f"**{money_key.replace('_',' ').title()}:** " + json.dumps(cf, ensure_ascii=False))
 
         # Narrative summary
         summ = sj.get("summary")
         if summ:
             parts.append("**Summary:** " + summ)
 
-        # Optional deep-read excerpt
+        # Optional deep-read excerpt (default ON from UI)
         if deep_read:
-            extra = enrich_with_deep_read(sj)
+            extra = _enrich_with_deep_read(sj)
             if extra:
-                parts.append("**Source Excerpt:** " + extra[:800])
+                parts.append("**Source Excerpt:** " + extra[:1000])
 
-        # Wrap the block
         if parts:
             block = (
                 f"<div class='card'>"
@@ -353,37 +340,45 @@ def compose_answer(query: str, hits, deep_read: bool):
 
 
 # --------------------------------------------------------------------------------------
-# UI
+# PUBLIC ENTRYPOINT (expected by main.py)
 # --------------------------------------------------------------------------------------
-def run_summaries_qa_ui():
-    st.title("🔎 KB Summaries — Enterprise Q&A")
+def render_chat_assistant():
+    """
+    This is the entrypoint main.py imports and calls.
+    It renders a complete Q&A UI over KB Summaries (and optional 04_Data summaries),
+    with deep-read default ON. It does NOT interfere with DP mode or any other flows.
+    """
+    st.header("🔎 KB Summaries — Enterprise Q&A")
 
     with st.sidebar:
         st.subheader("Search Settings")
         include_04 = st.checkbox("Also search /04_Data/03_Summaries", value=False)
-        deep_read = st.checkbox("Deep-read source docs (Meeting Minutes / Email)", value=True)
-        st.caption("KB Root: " + str(KB_ROOT))
-        st.caption("KB Summaries: " + str(KB_SUMMARIES_DIR))
-        st.caption("Meeting Minutes: " + str(KB_MEETING_DIR))
-        st.caption("Email: " + str(KB_EMAIL_DIR))
+        deep_read  = st.checkbox("Deep-read source docs (Meeting Minutes / Email)", value=True)
+        st.caption(f"Project Root: {PROJECT_ROOT}")
+        st.caption(f"KB Summaries: {str(KB_SUMMARIES_DIR)}")
+        st.caption(f"Meeting Minutes: {str(KB_MEETING_DIR)}")
+        st.caption(f"Email: {str(KB_EMAIL_DIR)}")
         if include_04:
-            st.caption("04_Data Summaries: " + str(OPTIONAL_SUMS_04))
+            st.caption(f"04_Data Summaries: {str(OPTIONAL_SUMS_04)}")
 
     # Build index (cached)
-    index = build_index(include_04)
+    index = _build_index(include_04)
 
+    # Input
     query = st.text_input(
-        "Ask a question (e.g., 'what did we launch in 2024 Q2 for F7?', 'show cash approvals for Dec 2024 launch', 'list participants for last SIOP meeting')",
+        "Ask a question (e.g., 'what did we launch in 2024 Q2 for F7?', 'cash approvals for Dec 2024 launch', 'list participants for last SIOP')",
         placeholder="Type your question here…"
     )
 
+    # Action
     if st.button("Search") or query:
         with st.spinner("Searching KB Summaries…"):
-            hits = search_summaries(index, query, topk=8)
-            answer = compose_answer(query, hits, deep_read=deep_read)
+            hits = _search_summaries(index, query, topk=8)
+            answer = _compose_answer(query, hits, deep_read=deep_read)
 
         st.markdown(answer, unsafe_allow_html=True)
 
+        # Debug panel
         with st.expander("Debug • Ranked Matches"):
             if not hits:
                 st.write("No matches.")
@@ -397,8 +392,3 @@ def run_summaries_qa_ui():
                         "path": str(d["path"]),
                     })
                 st.dataframe(rows, use_container_width=True)
-
-
-# Run the UI
-if __name__ == "__main__":
-    run_summaries_qa_ui()
