@@ -547,32 +547,56 @@ Please structure your response with clear sections and cite your sources."""
                     ai_answer = ai_response.get("answer", "No AI response available")
                 elif kb_answer and "No Relevant Meeting Documents Found" not in kb_answer and "KB Search Error" not in kb_answer:
                     # KB summaries found - provide contextual analysis
-                    enhanced_ai_prompt = f"""Based on the meeting summaries and documents from EthosEnergy below, provide additional context, analysis, or insights that relate specifically to the question: {prompt}
+                    enhanced_ai_prompt = f"""Based on the EthosEnergy meeting summaries below, provide focused analysis and insights for: {prompt}
 
 Meeting Documents Summary:
 {kb_answer}
 
-CRITICAL INSTRUCTIONS:
-- Build upon the meeting findings, don't repeat them
-- Add relevant context or implications ONLY from your general business knowledge about S&OP, supply chain, and operations
-- NEVER reference external companies, their data, or training materials
-- NEVER cite documents like "Eckert_Lauren_S_OPDesignforaHighEndJewelryRetailer.pdf" or other training PDFs
-- Focus on general principles, best practices, or analytical frameworks
-- Do NOT use citations with 【4:0†source】 format
-- Relate your analysis directly to EthosEnergy's specific situation from the meeting documents
-- Focus on insights that would help with follow-up questions or decisions about EthosEnergy operations"""
+CRITICAL INSTRUCTIONS FOR GRANULAR ANALYSIS:
+- PRESERVE all specific details from the meetings (names, part numbers, dollar amounts, deadlines)
+- Build upon the meeting findings with relevant business context
+- Highlight key action items and responsible parties mentioned
+- Identify patterns or implications from the specific details provided
+- Focus on operational insights that support decision-making
+- Connect related details across different meetings if present
+- Suggest follow-up questions based on the specific information found
+
+ANALYSIS FOCUS:
+- Extract and emphasize specific people, roles, and responsibilities
+- Highlight exact dollar amounts, quantities, and timelines mentioned
+- Identify critical decisions and their business impact
+- Note any gaps or missing information that might need follow-up
+- Provide context on why these specific details matter operationally
+
+RESTRICTIONS:
+- NEVER reference external companies or training materials
+- Do NOT use citations with 【4:0†source】 format  
+- Base analysis ONLY on the EthosEnergy meeting content provided
+- Keep insights practical and actionable for EthosEnergy operations"""
                     
                     try:
-                        # Get contextual AI response without file attachments to avoid FAISS training docs
-                        ai_response_enhanced = run_query(enhanced_ai_prompt)
-                        ai_answer = ai_response_enhanced.get("answer", ai_answer)
+                        # Use Chat Completion API directly to avoid Assistant's attached training docs
+                        from openai import OpenAI
+                        client = OpenAI()
                         
-                        # Clean up any training document citations that might slip through
+                        response = client.chat.completions.create(
+                            model="gpt-4o",
+                            messages=[
+                                {"role": "system", "content": "You are a business analyst helping with EthosEnergy operations. Provide insights based only on the meeting information provided, without referencing external training materials or other companies."},
+                                {"role": "user", "content": enhanced_ai_prompt}
+                            ],
+                            temperature=0.3,
+                            max_tokens=800
+                        )
+                        
+                        ai_answer = response.choices[0].message.content
+                        
+                        # Clean up any citations that might slip through
                         import re
                         ai_answer = re.sub(r'【\d+:\d+†[^】]*】', '', ai_answer)
                         ai_answer = re.sub(r'【[^】]*】', '', ai_answer)
                         
-                    except:
+                    except Exception as e:
                         ai_answer = "The meeting documents above provide the specific information available."
                 else:
                     # No KB findings - provide general response without training docs
@@ -587,8 +611,21 @@ CRITICAL INSTRUCTIONS:
 """
                     
                     try:
-                        ai_response_enhanced = run_query(general_prompt)
-                        ai_answer = ai_response_enhanced.get("answer", "I don't have specific information to answer this question without access to relevant documents.")
+                        # Use Chat Completion API directly to avoid Assistant's training docs
+                        from openai import OpenAI
+                        client = OpenAI()
+                        
+                        response = client.chat.completions.create(
+                            model="gpt-4o",
+                            messages=[
+                                {"role": "system", "content": "You are a helpful assistant. Provide only general business knowledge without referencing specific training materials, documents, or external companies."},
+                                {"role": "user", "content": general_prompt}
+                            ],
+                            temperature=0.3,
+                            max_tokens=400
+                        )
+                        
+                        ai_answer = response.choices[0].message.content
                         
                         # Clean up any citations
                         import re
