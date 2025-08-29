@@ -555,46 +555,26 @@ Please structure your response with clear sections and cite your sources."""
                     ai_answer = ai_response.get("answer", "No AI response available")
                 elif kb_answer and "No Relevant Meeting Documents Found" not in kb_answer and "KB Search Error" not in kb_answer:
                     # KB summaries found - provide contextual analysis
-                    enhanced_ai_prompt = f"""Based on the EthosEnergy meeting summaries below, provide a comprehensive analyst-grade response for: {prompt}
+                    enhanced_ai_prompt = f"""Based on the EthosEnergy meeting summaries below, answer this question naturally and comprehensively: {prompt}
 
 Meeting Documents Summary:
 {kb_answer}
 
-RESPONSE FORMAT - ENTERPRISE ANALYSIS TEMPLATE:
+INSTRUCTIONS:
+- Answer the question directly and naturally, like ChatGPT would
+- Include ALL specific details from the documents: names, titles, departments, numbers, dates
+- If the user asks for "direct reports" - list the actual people and their roles/departments
+- Be conversational but thorough - don't use rigid templates or bullet points unless natural
+- Extract and present specific facts that answer the question
+- If information is missing from the documents, say so clearly
+- Focus on what the user actually asked for, not generic analysis
 
-**GRANULAR EVIDENCE:**
-- List ALL specific details found: names, titles, part numbers, dollar amounts, quantities, dates, deadlines
-- Include exact quotes or key phrases from meetings that support your analysis
-- Preserve technical specifications, project codes, and reference numbers
-- Note specific decisions made and who made them
-
-**ANALYST SUMMARY:**
-- Synthesize the evidence into business insights and implications
-- Identify patterns, trends, or relationships across the data points
-- Explain the operational significance of the findings
-- Connect the dots between different pieces of information
-- Assess risks, opportunities, and business impact
-
-**ACTION ITEMS & RECOMMENDATIONS:**
-- Extract all existing action items with owners and deadlines
-- Identify gaps where action items should exist but weren't assigned
-- Recommend next steps based on the analysis
-- Suggest follow-up questions to gather missing critical information
-- Prioritize actions by business impact and urgency
-
-CRITICAL GROUNDING REQUIREMENTS - NEVER VIOLATE:
-- PRESERVE every specific detail (no summarizing away important facts)
-- Use ONLY actual names, numbers, and dates from the meetings provided
-- Build analysis ONLY on factual evidence from the documents - NEVER assume or infer
-- If information is missing or unclear, explicitly state "Information not available in documents"
-- NEVER add external knowledge, examples, or assumptions
-- NEVER reference companies, people, or data not mentioned in the provided meetings
-- NEVER use general business knowledge to fill gaps - stick to document facts only
-- If asked about something not in the documents, say "This information is not covered in the available meeting summaries"
-- Do NOT use OpenAI citation formats 【4:0†source】
-- Base everything ONLY on the EthosEnergy meeting content provided
-
-STRICT RULE: If you cannot find specific information in the meeting summaries, do not invent or assume it. State clearly what information is missing."""
+CRITICAL RULES:
+- Use ONLY information from the EthosEnergy meeting summaries provided
+- Include specific names, roles, departments, and details when they exist in the documents
+- Don't make up information or use external knowledge
+- Answer naturally like ChatGPT, not like a rigid business report
+- If the documents don't contain the specific information requested, state that clearly"""
                     
                     try:
                         # Use Chat Completion API directly to avoid Assistant's attached training docs
@@ -604,11 +584,11 @@ STRICT RULE: If you cannot find specific information in the meeting summaries, d
                         response = client.chat.completions.create(
                             model="gpt-4o",
                             messages=[
-                                {"role": "system", "content": "You are a senior business analyst specializing in EthosEnergy operations. Provide detailed, analyst-grade intelligence based only on the meeting information provided. Follow the enterprise analysis template exactly."},
+                                {"role": "system", "content": "You are ChatGPT, a helpful AI assistant. Answer questions naturally and conversationally based on the provided information. Include specific details like names, roles, and departments when they exist in the documents. Be thorough but natural - don't use rigid templates."},
                                 {"role": "user", "content": enhanced_ai_prompt}
                             ],
-                            temperature=0.2,
-                            max_tokens=1200
+                            temperature=0.3,
+                            max_tokens=600
                         )
                         
                         ai_answer = response.choices[0].message.content
