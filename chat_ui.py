@@ -103,21 +103,32 @@ def _has_sufficient_detail(structured_data, query_type):
 def _create_structured_ai_prompt(prompt, query_type, structured_documents, drill_down_results):
     """Create specialized AI prompt based on query type and structured data."""
     
-    # Prepare structured data for AI
+    # Prepare structured data for AI with conversation context
     json_data_for_ai = []
     for doc in structured_documents:
         json_data_for_ai.append({
             "file_name": doc["file_name"],
             "folder": doc["folder"],
-            "data": doc["structured_data"]
+            "relevance": doc["relevance"],
+            "data": doc["structured_data"],
+            "summary": doc["summary"]
         })
     
-    # Add drill-down results if available
+    # Add comprehensive drill-down results for complete data
     drill_down_content = ""
     if drill_down_results:
-        drill_down_content = "\n\nADDITIONAL DRILL-DOWN ANALYSIS:\n"
+        drill_down_content = "\n\nCOMPLETE RAW DOCUMENT ANALYSIS (Use this for comprehensive answers):\n"
         for result in drill_down_results:
-            drill_down_content += f"\nFrom {result['source_file']}:\n{result['drill_down_content']}\n"
+            drill_down_content += f"\n=== COMPLETE DATA FROM {result['source_file']} (Analysis: {result['analysis_method']}) ===\n"
+            drill_down_content += f"{result['drill_down_content']}\n"
+        drill_down_content += "\nIMPORTANT: The raw document analysis above contains the most complete and detailed information available. Use this data to provide comprehensive, specific answers.\n"
+    
+    # Add conversation context for follow-up questions
+    conversation_context = ""
+    if st.session_state.get('chat_messages') and len(st.session_state.chat_messages) > 0:
+        recent_messages = [msg for msg in st.session_state.chat_messages[-4:] if msg["role"] == "user"]
+        if len(recent_messages) > 1:
+            conversation_context = f"\n\nCONVERSATION CONTEXT (for follow-up questions):\nPrevious questions: {' | '.join([msg['content'] for msg in recent_messages[:-1]])}\n"
     
     if query_type == 'direct_reports':
         return f"""You are ChatGPT analyzing EthosEnergy organizational data. Answer this question: {prompt}
@@ -125,17 +136,19 @@ def _create_structured_ai_prompt(prompt, query_type, structured_documents, drill
 STRUCTURED DATA FROM DOCUMENTS:
 {json.dumps(json_data_for_ai, indent=2)}
 
-{drill_down_content}
+{drill_down_content}{conversation_context}
 
-INSTRUCTIONS:
-- Extract and list ALL direct reports with their exact names and titles
-- Use the "direct_reports" field from the JSON data
+CRITICAL INSTRUCTIONS - NEVER VIOLATE:
+- Extract and list ALL direct reports with their exact names and titles from the JSON data
+- Use ONLY the "direct_reports" field and drill-down analysis provided
 - Present in a natural, readable format like ChatGPT would
 - Include the leader's name and title at the top
 - If multiple documents show the same org structure, consolidate the information
 - Be specific and complete - don't summarize away names or titles
+- NEVER generate dates, names, or details not present in the provided data
+- If information is missing, state "This information is not available in the documents"
 
-Answer the question directly and comprehensively using the structured data provided."""
+Answer the question directly using ONLY the structured data and drill-down analysis provided."""
 
     elif query_type == 'process_workflow':
         return f"""You are ChatGPT analyzing EthosEnergy business processes. Answer this question: {prompt}
@@ -172,23 +185,29 @@ INSTRUCTIONS:
 Use all the structured inventory and systems data to provide a comprehensive answer."""
 
     else:
-        # General structured response
+        # General structured response with strict grounding
         return f"""You are ChatGPT analyzing EthosEnergy business documents. Answer this question: {prompt}
 
 STRUCTURED DATA FROM DOCUMENTS:
 {json.dumps(json_data_for_ai, indent=2)}
 
-{drill_down_content}
+{drill_down_content}{conversation_context}
 
-INSTRUCTIONS:
-- Use ALL the structured data provided in the JSON format
-- Extract specific names, roles, processes, amounts, dates, and details
-- Answer naturally and comprehensively like ChatGPT would
-- Focus on what the user actually asked for
-- Include relevant details from participants, actions, deliverables, and other structured fields
-- If information is missing, state that clearly
+CRITICAL INSTRUCTIONS FOR COMPLETE ANSWERS:
+- PRIORITIZE the raw document analysis above - it contains the most complete information
+- Use ALL structured data provided in JSON format AND the comprehensive drill-down analysis
+- Extract ALL specific names, roles, processes, amounts, dates, and details from both sources
+- Answer naturally and comprehensively like ChatGPT would, but with complete detail
+- Focus on what the user actually asked for with maximum completeness
+- Include ALL relevant details from participants, actions, deliverables, and structured fields
+- Combine information from multiple documents to provide the most complete picture
+- NEVER generate dates, meetings, or details not present in the provided data
+- If asked about specific dates/meetings, only reference those explicitly mentioned in the data
+- If information is missing, state clearly "This information is not available in the provided documents"
+- For follow-up questions, use the conversation context to understand what the user is referring to
+- Make your answer as complete and detailed as possible using all available data
 
-Provide a thorough, natural response using the structured business data provided."""
+Provide a thorough, comprehensive, natural response using ALL the structured data and complete drill-down analysis provided."""
 
 def _create_adaptive_analysis_prompt(prompt, query_type, uploaded_files, file_list, conversation_context):
     """Create an adaptive prompt based on the query type."""
@@ -289,27 +308,19 @@ Organize information in a way that best serves the specific question asked.
 def render_chat_assistant():
     """Render the complete chat assistant UI inline."""
     
-    # Enhanced dark theme styling with stronger dark preferences
+    # Clean, minimal styling that works with Streamlit's native themes
     st.markdown("""
     <style>
-        /* Force dark theme elements */
-        .stApp {
-            background-color: #0E1117;
-            color: #FAFAFA;
-        }
-        
-        /* Chat messages styling - enhanced for dark theme */
+        /* Chat messages styling - adapts to user's theme choice */
         .stChatMessage {
             font-size: 1rem;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             border-radius: 12px;
             padding: 16px;
             margin: 8px 0;
-            border: 1px solid #262730;
-            background-color: #1E1E1E;
         }
         
-        /* Enhanced badges with better dark theme contrast */
+        /* Clean badges that work in any theme */
         .badge {
             padding: 4px 8px;
             border-radius: 8px;
@@ -319,7 +330,6 @@ def render_chat_assistant():
             font-weight: 600;
             display: inline-block;
             margin: 2px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
         }
         .confidence-high { background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%); }
         .confidence-medium { background: linear-gradient(135deg, #FF9800 0%, #f57c00 100%); }
@@ -328,74 +338,36 @@ def render_chat_assistant():
         .model-4o { background: linear-gradient(135deg, #9C27B0 0%, #7B1FA2 100%); }
         .model-assistant { background: linear-gradient(135deg, #00BCD4 0%, #0097A7 100%); }
         
-        /* Enhanced sources card for dark theme */
-        .sources-card {
-            background: #1E1E1E;
-            border: 1px solid #333;
-            border-radius: 8px;
-            padding: 12px;
-            margin: 8px 0;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-        }
-        
-        .service-level-badge {
-            background: linear-gradient(135deg, #FF6B6B 0%, #4ECDC4 100%);
-            color: white;
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 0.9rem;
-            font-weight: 600;
-            display: inline-block;
-            margin: 4px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-        }
-        
-        /* Enhanced button styling for dark theme */
+        /* Enhanced button styling */
         .stButton button {
             border-radius: 8px;
             transition: all 0.3s ease;
             font-weight: 500;
-            background-color: #262730;
-            border: 1px solid #444;
-            color: #FAFAFA;
         }
         
         .stButton button:hover {
             transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
-            background-color: #4CAF50;
-            border-color: #4CAF50;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
         }
         
-        /* Chat input styling for dark theme */
+        /* Chat input styling */
         .stChatInput input {
             border-radius: 20px;
-            background-color: #262730;
-            border: 1px solid #444;
-            color: #FAFAFA;
         }
         
-        /* Sidebar enhancements for dark theme */
-        .css-1d391kg {
-            background-color: #0E1117;
-        }
-        
-        /* Enhanced text areas and inputs */
-        .stTextInput input, .stTextArea textarea {
-            background-color: #262730;
-            border: 1px solid #444;
-            color: #FAFAFA;
-            border-radius: 8px;
-        }
-        
-        /* Dark theme tip box */
-        .dark-theme-tip {
-            background: linear-gradient(135deg, #1E1E1E 0%, #2D2D2D 100%);
-            border: 1px solid #4CAF50;
+        /* Document summary styling */
+        .document-summary {
+            background: var(--secondary-background-color);
             border-radius: 8px;
             padding: 12px;
             margin: 8px 0;
-            color: #FAFAFA;
+            border-left: 4px solid #4CAF50;
+        }
+        
+        .document-title {
+            font-weight: 600;
+            color: #4CAF50;
+            margin-bottom: 8px;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -665,14 +637,53 @@ Please structure your response with clear sections and cite your sources."""
                             data_path = os.getenv('DATA_DBX_PATH', '/Project_Root/04_Data')
                             
                             indexer = KBIndexer(kb_path, data_path)
-                            indexed_results = indexer.search_summaries(prompt, max_results=5)
+                            
+                            # Enhanced search with conversation context for follow-up questions
+                            search_query = prompt
+                            if st.session_state.thread_id and len(st.session_state.chat_messages) > 0:
+                                # Add context from recent conversation for follow-up questions
+                                recent_context = []
+                                for msg in st.session_state.chat_messages[-3:]:  # Last 3 messages
+                                    if msg["role"] == "user":
+                                        recent_context.append(msg["content"])
+                                
+                                if recent_context:
+                                    context_keywords = " ".join(recent_context[-2:])  # Last 2 user messages
+                                    search_query = f"{prompt} {context_keywords}"
+                                    print(f"🔄 Using conversation context for search: {context_keywords[:100]}...")
+                            
+                            # Search ALL documents - don't miss any data
+                            print("🔍 Searching through ALL available documents...")
+                            indexed_results = indexer.search_summaries(search_query, max_results=1000)  # High limit to get all
+                            
+                            print(f"📋 Initial search found {len(indexed_results)} documents")
+                            
+                            # Filter by relevance threshold but keep more results for completeness
+                            relevant_results = []
+                            for result in indexed_results:
+                                relevance = result.get('relevance_score', 0)
+                                # Lower thresholds to avoid missing relevant data
+                                min_relevance = 5 if any(term in prompt.lower() for term in ['who', 'what', 'when', 'where', 'how', 'show', 'list', 'detail', 'granular']) else 15
+                                if relevance >= min_relevance:
+                                    relevant_results.append(result)
+                            
+                            # Keep more results but prioritize by relevance (top 12 for comprehensive coverage)
+                            indexed_results = relevant_results[:12]
+                            
+                            print(f"🔍 Using {len(indexed_results)} relevant documents (filtered from {len(relevant_results)} with sufficient relevance)")
+                            
+                            # If still no relevant results, use any documents with minimal relevance
+                            if not indexed_results and len(indexed_results) > 0:
+                                print("📋 No highly relevant documents found, using top 5 with any relevance")
+                                indexed_results = indexed_results[:5]
                             
                             if indexed_results:
                                 kb_answer = f"Found {len(indexed_results)} relevant meeting documents:\n\n"
                                 kb_sources = []
                                 
-                                # Collect all structured JSON data for AI analysis
+                                # Collect all structured JSON data for AI processing
                                 structured_documents = []
+                                document_previews = []
                                 
                                 for result in indexed_results:
                                     file_name = result.get('file_name', 'Unknown')
@@ -697,25 +708,31 @@ Please structure your response with clear sections and cite your sources."""
                                         "summary": summary
                                     })
                                     
-                                    # Enhanced display with drill-down capability
-                                    kb_answer += f"**📄 From \"{file_name}\"**\n"
-                                    kb_answer += f"*Location: {folder}*\n"
-                                    if original_path:
-                                        kb_answer += f"*Raw Document: `{original_path}`*\n"
-                                    kb_answer += f"*Relevance: {relevance:.1%}*\n\n"
+                                    # Create clean document preview for collapsible section
+                                    preview = f"**📄 {file_name}** (Relevance: {relevance:.0f}%)\n"
+                                    preview += f"*📁 {folder}*\n"
                                     
-                                    # Show structured data preview if available
+                                    # Show key structured data highlights
+                                    highlights = []
                                     if original_json:
                                         if 'direct_reports' in original_json:
-                                            kb_answer += f"**👥 DIRECT REPORTS FOUND:** {len(original_json['direct_reports'])} people\n"
+                                            highlights.append(f"👥 {len(original_json['direct_reports'])} direct reports")
                                         if 'participants' in original_json:
-                                            kb_answer += f"**👥 PARTICIPANTS:** {', '.join(original_json['participants'][:3])}{'...' if len(original_json['participants']) > 3 else ''}\n"
+                                            highlights.append(f"👥 {len(original_json['participants'])} participants")
                                         if 'actions' in original_json:
-                                            kb_answer += f"**✅ ACTIONS:** {len(original_json['actions'])} action items\n"
+                                            highlights.append(f"✅ {len(original_json['actions'])} actions")
                                     
-                                    kb_answer += f"**📋 SUMMARY:**\n{summary}\n\n"
-                                    kb_answer += f"💡 *Drill-down available to raw document*\n\n"
-                                    kb_answer += "---\n\n"
+                                    if highlights:
+                                        preview += f"*{' | '.join(highlights)}*\n"
+                                    
+                                    # Add brief summary
+                                    if summary and summary != 'No summary available':
+                                        preview += f"\n{summary[:200]}{'...' if len(summary) > 200 else ''}\n"
+                                    
+                                    if original_path:
+                                        preview += f"\n💡 *Raw document available for drill-down*"
+                                    
+                                    document_previews.append(preview)
                                     
                                     kb_sources.append({
                                         "name": file_name,
@@ -725,6 +742,13 @@ Please structure your response with clear sections and cite your sources."""
                                         "drill_down_available": bool(original_path),
                                         "structured_data": original_json
                                     })
+                                
+                                # Create clean, collapsible document summary
+                                kb_answer = f"**Found {len(indexed_results)} relevant documents:**\n\n"
+                                for i, preview in enumerate(document_previews, 1):
+                                    kb_answer += f"{preview}\n\n"
+                                    if i < len(document_previews):
+                                        kb_answer += "---\n\n"
                                 
                                 print(f"✅ Found {len(indexed_results)} relevant meeting summaries")
                             else:
@@ -752,15 +776,24 @@ Please structure your response with clear sections and cite your sources."""
                     # Determine query type for specialized prompting
                     query_type = _classify_query_type(prompt)
                     
-                    # Check if drill-down is needed
+                    # COMPREHENSIVE DRILL-DOWN: Always get complete data from raw documents
                     drill_down_results = []
-                    if query_type in ['direct_reports', 'specific_details'] and structured_documents:
-                        for doc in structured_documents[:2]:  # Drill down top 2 most relevant
-                            if doc['original_path'] and not _has_sufficient_detail(doc['structured_data'], query_type):
-                                print(f"🔍 Drilling down to {doc['file_name']} for more detail...")
+                    
+                    print("🔍 Performing comprehensive drill-down analysis for complete data...")
+                    
+                    # Drill down on ALL relevant documents to ensure complete answers
+                    if structured_documents:
+                        for doc in structured_documents[:5]:  # Drill down top 5 most relevant for comprehensive coverage
+                            if doc['original_path']:
+                                print(f"🔍 Drilling down to {doc['file_name']} for complete data extraction...")
                                 drill_result = indexer.drill_down_to_raw_document(doc['original_path'], prompt)
                                 if drill_result:
                                     drill_down_results.append(drill_result)
+                                    print(f"✅ Successfully extracted complete details from {doc['file_name']}")
+                                else:
+                                    print(f"⚠️ Drill-down failed for {doc['file_name']} - using summary only")
+                    
+                    print(f"📋 Comprehensive drill-down completed: {len(drill_down_results)} documents analyzed for complete data")
                     
                     # Create structured prompt with JSON data
                     enhanced_ai_prompt = _create_structured_ai_prompt(
