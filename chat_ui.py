@@ -164,13 +164,39 @@ Organize information in a way that best serves the specific question asked.
 def render_chat_assistant():
     """Render the complete chat assistant UI inline."""
     
-    # Custom CSS for ChatGPT-like appearance
+    # Enhanced Dark Mode CSS for ChatGPT-like appearance
     st.markdown("""
     <style>
+        /* Force dark theme for all elements */
+        .stApp {
+            background-color: #0E1117 !important;
+            color: #FAFAFA !important;
+        }
+        
+        /* Chat messages styling */
         .stChatMessage {
             font-size: 1rem;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #262730 !important;
+            border-radius: 12px !important;
+            padding: 16px !important;
+            margin: 8px 0 !important;
+            border: 1px solid #333 !important;
         }
+        
+        /* User messages - slightly different color */
+        .stChatMessage[data-testid="user-message"] {
+            background-color: #1E2A5E !important;
+            border: 1px solid #4CAF50 !important;
+        }
+        
+        /* Assistant messages */
+        .stChatMessage[data-testid="assistant-message"] {
+            background-color: #2D2D35 !important;
+            border: 1px solid #555 !important;
+        }
+        
+        /* Badges */
         .badge {
             padding: 4px 8px;
             border-radius: 8px;
@@ -187,13 +213,17 @@ def render_chat_assistant():
         .model-mini { background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%); }
         .model-4o { background: linear-gradient(135deg, #9C27B0 0%, #7B1FA2 100%); }
         .model-assistant { background: linear-gradient(135deg, #00BCD4 0%, #0097A7 100%); }
+        
+        /* Dark mode sources card */
         .sources-card {
-            background: #f8f9fa;
-            border: 1px solid #e9ecef;
+            background: #262730 !important;
+            border: 1px solid #444 !important;
             border-radius: 8px;
             padding: 12px;
             margin: 8px 0;
+            color: #FAFAFA !important;
         }
+        
         .service-level-badge {
             background: linear-gradient(135deg, #FF6B6B 0%, #4ECDC4 100%);
             color: white;
@@ -203,6 +233,88 @@ def render_chat_assistant():
             font-weight: 600;
             display: inline-block;
             margin: 4px;
+        }
+        
+        /* Sidebar dark styling */
+        .css-1d391kg {
+            background-color: #262730 !important;
+        }
+        
+        /* Input fields dark mode */
+        .stTextInput input {
+            background-color: #262730 !important;
+            color: #FAFAFA !important;
+            border: 1px solid #444 !important;
+        }
+        
+        /* Chat input dark mode */
+        .stChatInput input {
+            background-color: #262730 !important;
+            color: #FAFAFA !important;
+            border: 1px solid #4CAF50 !important;
+            border-radius: 20px !important;
+        }
+        
+        /* Buttons dark mode */
+        .stButton button {
+            background-color: #4CAF50 !important;
+            color: white !important;
+            border: none !important;
+            border-radius: 8px !important;
+            transition: all 0.3s ease !important;
+        }
+        
+        .stButton button:hover {
+            background-color: #45a049 !important;
+            box-shadow: 0 4px 8px rgba(76, 175, 80, 0.3) !important;
+        }
+        
+        /* Success/Error messages dark mode */
+        .stSuccess {
+            background-color: #1B4332 !important;
+            color: #4CAF50 !important;
+        }
+        
+        .stError {
+            background-color: #4A1A1A !important;
+            color: #f44336 !important;
+        }
+        
+        .stInfo {
+            background-color: #1A2332 !important;
+            color: #2196F3 !important;
+        }
+        
+        /* Expander dark mode */
+        .streamlit-expanderHeader {
+            background-color: #262730 !important;
+            color: #FAFAFA !important;
+        }
+        
+        .streamlit-expanderContent {
+            background-color: #1E1E1E !important;
+            border: 1px solid #444 !important;
+        }
+        
+        /* Code blocks dark mode */
+        .stCode {
+            background-color: #1E1E1E !important;
+            color: #FAFAFA !important;
+            border: 1px solid #444 !important;
+        }
+        
+        /* Markdown text dark mode */
+        .stMarkdown {
+            color: #FAFAFA !important;
+        }
+        
+        .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+            color: #4CAF50 !important;
+        }
+        
+        /* Radio button dark mode */
+        .stRadio label {
+            color: #FAFAFA !important;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -380,282 +492,8 @@ def render_chat_assistant():
                 kb_answer = "📋 **KB Search Temporarily Disabled**\n\nFocusing on AI analysis of uploaded files for cleaner, more targeted responses."
                 kb_sources = []
 
-                try:
-                    # KB search disabled for now
-                    indexed_results = None
-                    if False:  # Disabled block
-                        import sys
-                        sys.path.append('PY Files')
-                        from kb_indexer import KBIndexer
-                        import os
-                        
-                        kb_path = os.getenv('KB_DBX_PATH', '/Project_Root/06_LLM_Knowledge_Base')
-                        data_path = os.getenv('DATA_DBX_PATH', '/Project_Root/04_Data')
-                        
-                        indexer = KBIndexer(kb_path, data_path)
-                        indexed_results = indexer.search_summaries(prompt, max_results=8)
-                        
-                        if indexed_results:
-                            kb_answer = f"Found {len(indexed_results)} relevant documents with detailed summaries:\n\n"
-                            kb_sources = []
-                            
-                            for result in indexed_results:
-                                file_name = result.get('file_name', 'Unknown')
-                                folder = result.get('folder', 'root')
-                                summary = result.get('summary', 'No summary available')
-                                relevance = result.get('relevance_score', 0)
-                                
-                                # Clean up any OpenAI citation formats in the summary
-                                import re
-                                summary = re.sub(r'【\d+:\d+†[^】]*】', '', summary)
-                                summary = re.sub(r'【[^】]*】', '', summary)
-                                
-                                kb_answer += f"From \"{file_name}\" (folder: {folder}):\n"
-                                kb_answer += f"{summary}\n\n"
-                                
-                                kb_sources.append({
-                                    "name": file_name,
-                                    "folder": folder,
-                                    "relevance": relevance
-                                })
-                            
-                            # Successfully found indexed results - skip the rest
-                            print(f"✅ Using indexed summaries: found {len(indexed_results)} documents")
-                            
-                        else:
-                            print("⚠️ No indexed results found, falling back to file search")
-                            raise Exception("No indexed results - use fallback")
-                            
-                    except Exception as indexer_error:
-                        print(f"❌ KB Indexer search failed: {indexer_error}, using fallback file search")
-                        # Continue to original file search method below
-                        from dropbox_kb_sync import list_kb_candidates, get_folder_structure
-                        
-                        # Get KB files
-                        kb_path = os.getenv("KB_DBX_PATH", "/Project_Root/06_LLM_Knowledge_Base")
-                        data_path = os.getenv("DATA_DBX_PATH", "/Project_Root/04_Data")
-                        
-                        candidates = list_kb_candidates(kb_path, data_path)
-                        kb_files = candidates.get('kb_docs', [])
-                        data_files = candidates.get('data_files', [])
-                        
-                        # Add data files to search scope
-                        all_files = kb_files + data_files
-                        
-                        if all_files:
-                            # Enhanced relevance check with folder prioritization
-                            keywords = prompt.lower().split()
-                        # Add special cases for common terms with quarterly meeting focus
-                        if "s&op" in prompt.lower() or "siop" in prompt.lower():
-                            keywords.extend(["siop", "s&op", "sales", "operations", "planning", "quarterly", "meeting", "mom", "minutes"])
-                        if "quarterly" in prompt.lower() or "quarter" in prompt.lower():
-                            keywords.extend(["quarterly", "quarter", "q1", "q2", "q3", "q4", "meeting", "minutes", "mom", "siop", "s&op", "202406", "2024", "june"])
-                        if "meeting" in prompt.lower():
-                            keywords.extend(["meeting", "minutes", "mom", "discussion", "agenda", "quarterly"])
-                        if "launch" in prompt.lower():
-                            keywords.extend(["launch", "launching", "product"])
-                        if "wip" in prompt.lower() or "work in progress" in prompt.lower():
-                            keywords.extend(["wip", "work", "progress", "inventory", "manufacturing"])
-                        if "inventory" in prompt.lower():
-                            keywords.extend(["inventory", "stock", "on hand", "oh"])
-                        if any(word in prompt.lower() for word in ["us", "united states", "america"]):
-                            keywords.extend(["us", "usa", "america", "united", "states"])
-                        if any(word in prompt.lower() for word in ["team", "leadership", "people", "photo", "image"]):
-                            keywords.extend(["team", "leadership", "people", "photo", "global", "management"])
-                        
-                        # Define folder priorities (1 = highest priority)
-                        # Boost data file priority for data-specific queries
-                        is_data_query = any(term in prompt.lower() for term in ["wip", "inventory", "stock", "data", "numbers", "chart", "table"])
-                        
-                        folder_priorities = {
-                            "meeting minutes": 1,
-                            "meetings": 1, 
-                            "live events": 2,
-                            "quarterly": 2,
-                            "email": 2,
-                            "data": 1 if is_data_query else 3,  # Higher priority for data queries
-                            "cleansed": 1 if is_data_query else 3,  # Data folder variants
-                            "training": 4,
-                            "apics": 4,
-                            "source_docs": 5,
-                            "root": 6
-                        }
-                        
-                        scored_files = []
-                        
-                        for file_info in all_files[:15]:  # Check more files
-                            file_name = file_info['name'].lower()
-                            folder_name = file_info.get('folder', '').lower()
-                            
-                            # Calculate relevance score
-                            relevance_score = 0
-                            keyword_matches = 0
-                            
-                            # Check keyword matching
-                            for keyword in keywords:
-                                if len(keyword) > 2:
-                                    if keyword in file_name:
-                                        keyword_matches += 2  # Higher weight for filename matches
-                                    elif keyword in folder_name:
-                                        keyword_matches += 1
-                            
-                            if keyword_matches > 0:
-                                # Get folder priority (lower number = higher priority)
-                                folder_priority = 6  # Default lowest priority
-                                for folder_key, priority in folder_priorities.items():
-                                    if folder_key in folder_name:
-                                        folder_priority = min(folder_priority, priority)
-                                        break
-                                
-                                # Calculate final score (higher = better)
-                                relevance_score = keyword_matches * 10 - folder_priority
-                                
-                                # Bonus for exact matches or multiple keywords
-                                if any(keyword in file_name for keyword in keywords if len(keyword) > 4):
-                                    relevance_score += 5
-                                
-                                scored_files.append({
-                                    **file_info,
-                                    'relevance_score': relevance_score,
-                                    'keyword_matches': keyword_matches,
-                                    'folder_priority': folder_priority
-                                })
-                        
-                        # Sort by relevance score (highest first)
-                        relevant_files = sorted(scored_files, key=lambda x: x['relevance_score'], reverse=True)
-                        
-                        if relevant_files:
-                            kb_sources = [{"name": f["name"], "folder": f.get("folder", "root")} for f in relevant_files[:5]]
-                            
-                            # Try to upload and get content from the most relevant files
-                            try:
-                                from dbx_utils import upload_dropbox_file_to_openai
-                                from openai import OpenAI
-                                
-                                client = OpenAI()
-                                uploaded_files = []
-                                
-                                # Upload top relevant files with priority weighting (filter out unsupported formats)
-                                supported_extensions = {'.pdf', '.docx', '.doc', '.txt', '.md', '.csv', '.xlsx', '.pptx', '.zip', '.jpg', '.jpeg', '.png', '.gif', '.webp'}
-                                
-                                # Separate by priority groups
-                                high_priority = [f for f in relevant_files if f.get('folder_priority', 6) <= 2]
-                                medium_priority = [f for f in relevant_files if f.get('folder_priority', 6) == 3]
-                                low_priority = [f for f in relevant_files if f.get('folder_priority', 6) > 3]
-                                
-                                # Use ALL relevant files - no artificial limits
-                                # Prioritize by relevance but don't cap the number of files
-                                files_to_try = high_priority + medium_priority + low_priority
-                                
-                                for file_info in files_to_try:
-                                    file_ext = os.path.splitext(file_info['name'])[1].lower()
-                                    
-                                    if file_ext in supported_extensions:
-                                        try:
-                                            file_id = upload_dropbox_file_to_openai(file_info['path'], purpose="assistants")
-                                            if file_id:
-                                                uploaded_files.append({
-                                                    "file_id": file_id, 
-                                                    "name": file_info['name'],
-                                                    "folder": file_info.get('folder', 'root'),
-                                                    "priority": file_info.get('folder_priority', 6),
-                                                    "score": file_info.get('relevance_score', 0)
-                                                })
-                                                # No artificial limit - upload ALL relevant files
-                                        except Exception as e:
-                                            print(f"Failed to upload {file_info['name']}: {e}")
-                                    else:
-                                        print(f"Skipping {file_info['name']} - unsupported format ({file_ext})")
-                                
-                                if uploaded_files:
-                                    # Create a thread and ask for summary
-                                    thread = client.beta.threads.create()
-                                    
-                                    # Get assistant ID
-                                    try:
-                                        with open("prompts/assistant.json", "r", encoding="utf-8") as f:
-                                            meta = json.load(f)
-                                            assistant_id = meta["assistant_id"]
-                                    except:
-                                        assistant_id = os.getenv("ASSISTANT_ID")
-                                    
-                                    if assistant_id:
-                                        # Create detailed prompt for multi-document analysis
-                                        file_list = "\n".join([f"- {f['name']} (from {f['folder']} folder, priority {f['priority']})" for f in uploaded_files])
-                                        
-                                        # Add conversation context for follow-up questions
-                                        conversation_context = ""
-                                        if len(st.session_state.chat_messages) > 2:  # Has previous conversation
-                                            recent_messages = st.session_state.chat_messages[-4:]  # Last 2 Q&A pairs
-                                            conversation_context = "\nRECENT CONVERSATION CONTEXT:\n"
-                                            for msg in recent_messages:
-                                                role = msg.get('role', 'unknown')
-                                                content = msg.get('content', '')[:200]  # Limit length
-                                                conversation_context += f"{role.upper()}: {content}...\n"
-                                            conversation_context += "\nUse this context to understand follow-up questions.\n"
-                                        
-                                        # Create adaptive prompt based on query type
-                                        query_type = _analyze_query_type(prompt)
-                                        analysis_prompt = _create_adaptive_analysis_prompt(prompt, query_type, uploaded_files, file_list, conversation_context)
-
-                                        client.beta.threads.messages.create(
-                                            thread_id=thread.id,
-                                            role="user",
-                                            content=analysis_prompt
-                                        )
-                                        
-                                        # Run the assistant
-                                        run = client.beta.threads.runs.create(
-                                            thread_id=thread.id,
-                                            assistant_id=assistant_id
-                                        )
-                                        
-                                        # Wait for completion (simple polling)
-                                        max_wait = 30  # 30 second timeout
-                                        waited = 0
-                                        while run.status not in ["completed", "failed", "cancelled", "expired"] and waited < max_wait:
-                                            time.sleep(2)
-                                            run = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
-                                            waited += 2
-                                        
-                                        if run.status == "completed":
-                                            # Get the response
-                                            messages = client.beta.threads.messages.list(thread_id=thread.id, order="desc")
-                                            if messages.data:
-                                                latest_message = messages.data[0]
-                                                if hasattr(latest_message, 'content') and latest_message.content:
-                                                    content_block = latest_message.content[0]
-                                                    if hasattr(content_block, 'text'):
-                                                        kb_answer = content_block.text.value
-                                                        
-                                                        # Clean up any OpenAI citation formats that slip through
-                                                        import re
-                                                        kb_answer = re.sub(r'【\d+:\d+†[^】]*】', '', kb_answer)
-                                                        kb_answer = re.sub(r'【[^】]*】', '', kb_answer)
-                                                    else:
-                                                        kb_answer = f"Found {len(relevant_files)} relevant documents but could not extract summary."
-                                                else:
-                                                    kb_answer = f"Found {len(relevant_files)} relevant documents but received empty response."
-                                        else:
-                                            kb_answer = f"Found {len(relevant_files)} relevant documents but processing timed out."
-                                    else:
-                                        kb_answer = f"Found {len(relevant_files)} relevant documents but no assistant configured."
-                                else:
-                                    kb_answer = f"Found {len(relevant_files)} relevant documents but could not process them:\n"
-                                    for f in relevant_files[:3]:
-                                        file_ext = os.path.splitext(f['name'])[1].lower()
-                                        status = "unsupported format" if file_ext not in supported_extensions else "upload failed"
-                                        kb_answer += f"• {f['name']} (in {f.get('folder', 'root')}) - {status}\n"
-                                        
-                            except Exception as e:
-                                kb_answer = f"Found {len(relevant_files)} relevant documents but could not process them: {str(e)}\n"
-                                for f in relevant_files[:3]:
-                                    kb_answer += f"• {f['name']} (in {f.get('folder', 'root')})\n"
-                        else:
-                            kb_answer = "No documents found matching your query keywords."
-                    
-                except Exception as e:
-                    kb_answer = f"Knowledge base search unavailable: {str(e)}"
+                # KB search is temporarily disabled - skip all KB functionality
+                print("📋 KB search temporarily disabled for cleaner responses")
                 
                 # Combine responses with enhanced AI analysis
                 ai_answer = ai_response.get("answer", "No AI response available")
