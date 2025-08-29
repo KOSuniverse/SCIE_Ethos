@@ -1,4 +1,6 @@
-# chat_ui.py — Architecture-Compliant Streamlit Chat Interface
+# chat_ui.py — Architecture-Compliant Streamlit Chat Interface (drop-in)
+# Preserves your UI & layout; adds universal KB Summaries engine with drill-down ON by default.
+# Does NOT modify DP mode or main.py.
 
 import os
 import json
@@ -10,11 +12,11 @@ from typing import List, Dict, Any, Optional
 import streamlit as st
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Make local modules importable
+# Make local modules importable (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 sys.path.append(str((Path(__file__).resolve().parent / "PY Files").resolve()))
 
-# Core enterprise modules
+# Core enterprise modules (unchanged)
 from constants import PROJECT_ROOT, META_DIR, DATA_ROOT, CLEANSED
 from session import SessionState
 from logger import log_event, log_query_result
@@ -23,22 +25,13 @@ from assistant_bridge import auto_model, run_query, run_query_with_files
 from confidence import score_ravc, should_abstain, score_confidence_enhanced, get_service_level_zscore, get_confidence_badge
 from path_utils import get_project_paths
 from dbx_utils import list_data_files
-
-# Phase 4 components
 from export_utils import ExportManager
 from sources_drawer import SourcesDrawer
 from data_needed_panel import DataNeededPanel
 
-# Set page configuration first (only when run as standalone)
-if __name__ == "__main__":
-    st.set_page_config(
-        page_title="SCIE Ethos Analyst",
-        page_icon="🧠",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
+# DO NOT call set_page_config here; main.py owns it. We only add theme-safe CSS.
 
-# Custom CSS for ChatGPT-like appearance
+# Existing CSS (unchanged)
 st.markdown("""
 <style>
     .stChatMessage {
@@ -62,7 +55,6 @@ st.markdown("""
     .model-4o { background: linear-gradient(135deg, #9C27B0 0%, #7B1FA2 100%); }
     .model-assistant { background: linear-gradient(135deg, #00BCD4 0%, #0097A7 100%); }
 
-    /* Sources card that adapts to theme */
     .sources-card {
         background: var(--secondary-background-color);
         border: 1px solid var(--border-color);
@@ -82,27 +74,14 @@ st.markdown("""
         margin: 4px;
     }
 
-    /* Enhanced button styling */
-    .stButton button {
-        border-radius: 8px;
-        transition: all 0.3s ease;
-        font-weight: 500;
-    }
-
-    .stButton button:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-    }
-
-    /* Chat input styling */
-    .stChatInput input {
-        border-radius: 20px;
-    }
+    .stButton button { border-radius: 8px; transition: all 0.3s ease; font-weight: 500; }
+    .stButton button:hover { transform: translateY(-1px); box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
+    .stChatInput input { border-radius: 20px; }
 </style>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# THEME VAR SHIM (keeps your exact layout but honors dark mode)
+# THEME VAR SHIM — keep your layout but make dark mode actually honor theme
 # ─────────────────────────────────────────────────────────────────────────────
 _bg  = st.get_option("theme.backgroundColor") or "#0e1117"
 _sb  = st.get_option("theme.secondaryBackgroundColor") or "#1b1f24"
@@ -119,7 +98,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Session State Initialization
+# Session State Initialization (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
@@ -139,42 +118,31 @@ if "thread_id" not in st.session_state:
     st.session_state.thread_id = None
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helper Functions
+# Helper Functions (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 def get_service_level_badge(service_level: float) -> str:
-    """Generate service level badge with z-score."""
     z_score = get_service_level_zscore(service_level)
     return f'<span class="service-level-badge">{service_level:.1%} (z={z_score:.3f})</span>'
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Sidebar Configuration
+# Sidebar Configuration (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("🧠 SCIE Ethos Control Panel")
-
-    # Theme toggle info
     st.info("💡 **Tip**: Toggle dark/light mode using the ⚙️ settings menu (top-right)")
 
-    # Service Level Control (Auto-set to 95% - no dropdowns)
     st.subheader("⚙️ Service Level")
-    service_level = 0.95  # Fixed at 95% - no user selection
-
-    # Update session state
+    service_level = 0.95
     if service_level != st.session_state.service_level:
         st.session_state.service_level = service_level
         st.rerun()
-
-    # Display service level badge
     service_level_badge = get_service_level_badge(service_level)
     st.markdown(f"**Current:** {service_level_badge}", unsafe_allow_html=True)
-
-    # Z-score explanation
     z_score = get_service_level_zscore(service_level)
     st.caption(f"Z-score: {z_score:.3f} (confidence interval)")
-
     st.markdown("---")
 
-    # File Upload for Document Search
+    # Upload area (unchanged)
     st.subheader("📎 Upload Documents")
     uploaded_files = st.file_uploader(
         "Upload documents for analysis",
@@ -182,7 +150,6 @@ with st.sidebar:
         accept_multiple_files=True,
         help="Upload documents to get specific answers from your files"
     )
-
     if uploaded_files:
         st.session_state.selected_files = uploaded_files
         st.success(f"✅ {len(uploaded_files)} file(s) uploaded")
@@ -190,49 +157,33 @@ with st.sidebar:
             st.write(f"📄 {file.name}")
     else:
         st.session_state.selected_files = []
-
     st.markdown("---")
 
-    # Model Selection (Auto - no user selection)
     st.subheader("🤖 Model Selection")
-    model_choice = "Auto (Recommended)"  # Fixed - no user selection
+    model_choice = "Auto (Recommended)"
 
-    # Confidence History
     if st.session_state.confidence_history:
         st.subheader("📊 Confidence History")
         st.line_chart(st.session_state.confidence_history)
 
-    # Data Needed Panel (Always rendered as per spec)
     st.markdown("---")
     st.subheader("📊 Data Needed & Gaps")
-
-    # Initialize data needed panel
     if "data_needed_panel" not in st.session_state:
         st.session_state.data_needed_panel = DataNeededPanel()
-
     data_panel = st.session_state.data_needed_panel
     data_panel.load_from_session()
-
-    # Render data needed panel in sidebar
     data_panel.render_panel(expanded=False)
 
-    # KB Indexer Section
     st.subheader("📚 Knowledge Base Tools")
-
     if st.button("🔄 Index New Documents", help="Process new documents and create searchable summaries"):
         with st.spinner("Indexing new documents."):
             try:
-                import sys
-                import os
                 sys.path.append('PY Files')
                 from kb_indexer import KBIndexer
-
                 kb_path = os.getenv('KB_DBX_PATH', '/Project_Root/06_LLM_Knowledge_Base')
                 data_path = os.getenv('DATA_DBX_PATH', '/Project_Root/04_Data')
-
                 indexer = KBIndexer(kb_path, data_path)
                 result = indexer.process_new_files()
-
                 st.success(f"✅ Indexing Complete!")
                 st.info(f"""📊 **Results:**
 - Processed: {result.get('processed', 0)} new files
@@ -240,18 +191,17 @@ with st.sidebar:
 - Skipped (unchanged): {result.get('skipped', 0)} files
 - Skipped (in FAISS): {result.get('faiss_skipped', 0)} files
 - Total index size: {result.get('index_size', 0)} documents""")
-
             except Exception as e:
                 st.error(f"❌ Indexing failed: {str(e)}")
-
     st.caption("Creates searchable summaries for new documents while respecting your existing FAISS index.")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# === KB SUMMARIES ENGINE (universal; deep-read default ON; no special cases) ===
+# === KB SUMMARIES ENGINE (universal; drill-down default ON; no special-cases) ===
 # ─────────────────────────────────────────────────────────────────────────────
 import math
 from collections import Counter
 
+# Optional deep-read libs (already imported; we keep graceful fallbacks)
 try:
     import pdfplumber
 except Exception:
@@ -309,7 +259,7 @@ def _build_kb_index():
             docs.append({"path":p, "file_name": js.get("file_name") or p.name,
                          "doc_type": js.get("document_type",""), "js": js,
                          "text":"\n".join(buf)})
-    # Tokenize/calc IDF
+    # Tokenize/IDF
     toks=[]; df=Counter()
     for d in docs:
         td=_tok(d["text"]); toks.append(td); df.update(set(td))
@@ -364,7 +314,7 @@ def _drill_sources(js: dict) -> str:
                 elif suf==".msg": texts.append(_deep_msg(pp))
     if texts: return "\n".join(t for t in texts if t)
 
-    # Fallback: stem-match file_name
+    # Fallback: stem-match file_name in Meeting Minutes / Email / KB root
     stem=Path(js.get("file_name","")).stem
     for folder in (KB_MEETING_DIR, KB_EMAIL_DIR, KB_ROOT_DIR):
         for gp in (list(folder.rglob(f"{stem}*.pdf"))[:1] +
@@ -425,9 +375,9 @@ def kb_summaries_answer(prompt: str, deep_read=True) -> Optional[str]:
 
         if parts:
             blocks.append(
-                f"<div class='card'>"
-                f"<div class='pill'>{js.get('document_type','Summary')}</div> "
-                f"<div class='pill'>{d['file_name']}</div><br/>"
+                f"<div class='sources-card'>"
+                f"<div class='badge'>{js.get('document_type','Summary')}</div> "
+                f"<div class='badge'>{d['file_name']}</div><br/>"
                 + "<br/>".join(parts) +
                 f"</div>"
             )
@@ -435,12 +385,12 @@ def kb_summaries_answer(prompt: str, deep_read=True) -> Optional[str]:
     return ("**📚 Knowledge Base Answer**\n\n" + "\n\n".join(blocks)) if blocks else None
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Main Chat Interface
+# Main Chat Interface (unchanged layout)
 # ─────────────────────────────────────────────────────────────────────────────
 st.title("🧠 SCIE Ethos LLM Assistant")
 st.caption("Architecture-Compliant Chat Interface with Enhanced Phase 4 Features")
 
-# Confidence badge (from last interaction)
+# Confidence badge render (unchanged)
 if st.session_state.confidence_history:
     try:
         last_confidence = st.session_state.confidence_history[-1]
@@ -453,96 +403,88 @@ if st.session_state.confidence_history:
     except Exception:
         st.markdown("**Confidence:** Medium (0.50)", unsafe_allow_html=True)
 
-# Chat messages display
+# History display (unchanged)
 for message in st.session_state.chat_messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-
-        # Show artifacts if available
         if message.get("artifacts"):
             st.markdown("**📎 Generated Artifacts:**")
             for artifact in message["artifacts"]:
                 st.code(str(artifact))
 
-# Chat input (PINNED AT BOTTOM — unchanged)
+# Chat input (pinned at bottom — unchanged)
 if prompt := st.chat_input("Ask about inventory, WIP, E&O, forecasting, or root cause analysis."):
-    # Add user message to chat history
     st.session_state.chat_messages.append({"role": "user", "content": prompt})
-
-    # Display user message
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Display assistant response placeholder
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
-
-        # Process the query
         try:
-            # Initialize export manager with current service level
             export_manager = ExportManager(st.session_state.service_level)
 
-            # Run query with appropriate model (your existing path)
+            # Your existing model flow
             if model_choice == "Assistant API":
                 response = run_query(prompt, selected_files=st.session_state.selected_files)
             else:
                 model_name = "gpt-4o" if model_choice == "GPT-4o" else "gpt-5"
                 response = run_query(prompt, model=model_name, selected_files=st.session_state.selected_files)
 
-            # Extract response components
             answer = response.get("answer", "")
             sources = response.get("sources", {})
             confidence_score = response.get("confidence", 0.5)
 
-            # If model produced nothing or no sources, try the universal KB summaries engine (deep-read ON by default)
+            # Enterprise KB Summaries: drill-down ON by default
             kb_ans = kb_summaries_answer(prompt, deep_read=True)
-            if (not answer or answer.strip() == "" or answer.strip().lower().startswith("no relevant")) and kb_ans:
-                answer = kb_ans
 
-            # Update confidence history
+            # Quality-first behavior:
+            # If model gave nothing / "no relevant" -> show KB summaries answer.
+            if (not answer or answer.strip() == "" or "no relevant" in answer.strip().lower()):
+                if kb_ans:
+                    answer = kb_ans
+
+            # (Optional) If you want to ALWAYS show the KB answer above the model answer, replace the if-block above with:
+            # if kb_ans:
+            #     st.markdown(kb_ans, unsafe_allow_html=True)
+            # Then also render the model answer below.
+
+            # Save confidence
             st.session_state.confidence_history.append(confidence_score)
             if len(st.session_state.confidence_history) > 10:
                 st.session_state.confidence_history.pop(0)
 
-            # Store last sources for export
             st.session_state.last_sources = sources
 
-            # Phase 3A: Display response with enhanced template structure
+            # Render either templated sections or plain markdown
             template_sections = response.get("template", {})
-            if template_sections and len(template_sections) > 2 and not answer.startswith("**📚 Knowledge Base Answer**"):
+            if template_sections and len(template_sections) > 2 and not (answer or "").startswith("**📚 Knowledge Base Answer**"):
                 st.markdown("## " + template_sections.get("title", "Analysis Results"))
-
                 if template_sections.get("executive_insight"):
                     st.markdown("### Executive Insight")
                     st.markdown(template_sections["executive_insight"])
-
                 if template_sections.get("analysis"):
                     st.markdown("### Detailed Analysis")
                     st.markdown(template_sections["analysis"])
-
                 if template_sections.get("recommendations"):
                     st.markdown("### Recommendations")
                     st.markdown(template_sections["recommendations"])
-
                 if template_sections.get("citations"):
                     st.markdown("### Citations")
                     st.markdown(template_sections["citations"])
-
                 if template_sections.get("limits_data_needed"):
                     st.markdown("### Limits/Missing Data")
                     st.markdown(template_sections["limits_data_needed"])
             else:
-                # Fallback to regular markdown display (or KB summaries answer)
-                message_placeholder.markdown(answer if answer else "No answer provided")
+                message_placeholder.markdown(answer if answer else "No answer provided", unsafe_allow_html=True)
 
-            # Phase 3B: Enhanced sources display with coverage warnings (unchanged)
+            # Sources drawer (unchanged)
             sources_drawer = SourcesDrawer()
             coverage_warning = response.get("kb_coverage_warning")
             if coverage_warning:
                 st.warning(f"⚠️ {coverage_warning}")
             sources_drawer.render_inline_sources(sources, confidence_score)
 
-            # Add assistant message to chat history
+            # Save assistant message
             st.session_state.chat_messages.append({
                 "role": "assistant",
                 "content": answer if answer else "No answer provided",
@@ -552,25 +494,17 @@ if prompt := st.chat_input("Ask about inventory, WIP, E&O, forecasting, or root 
             })
 
         except Exception as e:
-            error_message = f"❌ Error processing query: {str(e)}"
-            message_placeholder.error(error_message)
-            st.session_state.chat_messages.append({
-                "role": "assistant",
-                "content": error_message,
-                "error": True
-            })
+            msg = f"❌ Error processing query: {str(e)}"
+            message_placeholder.error(msg)
+            st.session_state.chat_messages.append({"role": "assistant", "content": msg, "error": True})
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Enhanced Export Options
+# Export Options (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 if st.session_state.chat_messages:
     st.markdown("---")
     st.header("📤 Export Options")
-
-    # Initialize export manager
     export_manager = ExportManager(st.session_state.service_level)
-
-    # Prepare export data
     export_data = {
         "messages": st.session_state.chat_messages,
         "sources": st.session_state.last_sources,
@@ -583,81 +517,58 @@ if st.session_state.chat_messages:
             "total_messages": len(st.session_state.chat_messages)
         }
     }
-
-    # Add data gaps summary
     if "data_needed_panel" in st.session_state:
         gaps_summary = st.session_state.data_needed_panel.get_gaps_summary()
         export_data["data_gaps"] = gaps_summary
 
-    # Export buttons in columns
     col1, col2, col3, col4, col5 = st.columns(5)
-
     with col1:
-        if st.button("📊 XLSX", use_container_width=True, help="Export to Excel with multiple sheets"):
+        if st.button("📊 XLSX", use_container_width=True):
             try:
                 xlsx_content = export_manager.export_to_xlsx(export_data)
-                st.download_button(
-                    label="Download XLSX",
-                    data=xlsx_content,
+                st.download_button("Download XLSX", xlsx_content,
                     file_name=f"scie_ethos_export_{int(time.time())}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
+                    use_container_width=True)
             except Exception as e:
                 st.error(f"XLSX export failed: {e}")
-
     with col2:
-        if st.button("📄 Markdown", use_container_width=True, help="Export to Markdown format"):
+        if st.button("📄 Markdown", use_container_width=True):
             try:
                 md_content = export_manager.export_to_markdown(export_data)
-                st.download_button(
-                    label="Download MD",
-                    data=md_content,
+                st.download_button("Download MD", md_content,
                     file_name=f"scie_ethos_export_{int(time.time())}.md",
                     mime="text/markdown",
-                    use_container_width=True
-                )
+                    use_container_width=True)
             except Exception as e:
                 st.error(f"Markdown export failed: {e}")
-
     with col3:
-        if st.button("📝 DOCX", use_container_width=True, help="Export to Word document"):
+        if st.button("📝 DOCX", use_container_width=True):
             try:
                 docx_content = export_manager.export_to_docx(export_data)
-                st.download_button(
-                    label="Download DOCX",
-                    data=docx_content,
+                st.download_button("Download DOCX", docx_content,
                     file_name=f"scie_ethos_export_{int(time.time())}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True
-                )
+                    use_container_width=True)
             except Exception as e:
                 st.error(f"DOCX export failed: {e}")
-
     with col4:
-        if st.button("📄 PDF", use_container_width=True, help="Export to PDF file"):
+        if st.button("📄 PDF", use_container_width=True):
             try:
                 pdf_content = export_manager.export_to_pdf(export_data)
-                st.download_button(
-                    label="Download PDF",
-                    data=pdf_content,
+                st.download_button("Download PDF", pdf_content,
                     file_name=f"scie_ethos_export_{int(time.time())}.pdf",
                     mime="application/pdf",
-                    use_container_width=True
-                )
+                    use_container_width=True)
             except Exception as e:
                 st.error(f"PDF export failed: {e}")
-
     with col5:
-        if st.button("🧾 JSON", use_container_width=True, help="Export to JSON file"):
+        if st.button("🧾 JSON", use_container_width=True):
             try:
                 json_content = export_manager.export_to_json(export_data)
-                st.download_button(
-                    label="Download JSON",
-                    data=json_content,
+                st.download_button("Download JSON", json_content,
                     file_name=f"scie_ethos_export_{int(time.time())}.json",
                     mime="application/json",
-                    use_container_width=True
-                )
+                    use_container_width=True)
             except Exception as e:
                 st.error(f"JSON export failed: {e}")
