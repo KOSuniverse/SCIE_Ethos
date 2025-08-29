@@ -1,10 +1,7 @@
 [theme]
-# Force dark mode - users can still toggle in app settings (☰ menu → Settings → Theme)
-base = "dark"
+# Let users choose their preferred theme in Settings (☰ menu → Settings → Theme)
 primaryColor = "#4CAF50"
-backgroundColor = "#0E1117"
-secondaryBackgroundColor = "#262730"
-textColor = "#FAFAFA"
+base = "light"
 
 # Font
 font = "sans serif"
