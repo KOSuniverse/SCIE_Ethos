@@ -567,6 +567,48 @@ DO NOT make up generic content. ONLY use information that actually appears in th
             print(f"No existing master index found: {e}")
             
         return []
+
+    def _load_all_summary_files_from_dropbox(self) -> List[Dict[str, Any]]:
+        """Universal loader: Find and load ALL *_summary.json files from KB_Summaries folder."""
+        if not DROPBOX_AVAILABLE:
+            print("⚠️ Dropbox not available for universal summary search")
+            return []
+            
+        try:
+            from dbx_utils import list_files_recursive, read_file_bytes
+            import json
+            
+            # List all files in the KB_Summaries folder
+            summaries_folder = "/Project_Root/06_LLM_Knowledge_Base/KB_Summaries"
+            print(f"🔍 Scanning {summaries_folder} for *_summary.json files...")
+            
+            all_files = list_files_recursive(summaries_folder)
+            summary_files = [f for f in all_files if f['name'].endswith('_summary.json')]
+            
+            print(f"📋 Found {len(summary_files)} summary files to search")
+            
+            all_summaries = []
+            for file_info in summary_files:
+                try:
+                    file_path = file_info['path_lower']
+                    file_bytes = read_file_bytes(file_path)
+                    
+                    if file_bytes:
+                        summary_data = json.loads(file_bytes.decode('utf-8'))
+                        # Ensure we have the file location for drill-down capability
+                        summary_data['summary_file_path'] = file_path
+                        all_summaries.append(summary_data)
+                        
+                except Exception as file_error:
+                    print(f"❌ Failed to load summary file {file_info['name']}: {file_error}")
+                    continue
+            
+            print(f"✅ Successfully loaded {len(all_summaries)} summary files for search")
+            return all_summaries
+            
+        except Exception as e:
+            print(f"❌ Universal summary search failed: {e}")
+            return []
     
     def _summarize_email_file(self, file_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Summarize email files (.msg, .eml) without OpenAI file upload."""
@@ -1458,7 +1500,7 @@ Format: Product by product with all technical details and specifications."""
         }
     
     def search_summaries(self, query: str, max_results: int = 10) -> List[Dict[str, Any]]:
-        """Advanced search through document summaries with intelligent query analysis."""
+        """Universal search through ALL *_summary.json files in KB_Summaries folder."""
         import re
         from datetime import datetime, timedelta
         
@@ -1468,9 +1510,12 @@ Format: Product by product with all technical details and specifications."""
         # Analyze query type for better search strategy
         query_analysis = self._analyze_query(query_lower)
         
-        # Load master index from Dropbox if available
-        master_summaries = self._load_master_index_from_dropbox()
-        all_summaries = master_summaries if master_summaries else list(self.document_index.values())
+        # UNIVERSAL SEARCH: Load ALL *_summary.json files directly from Dropbox
+        all_summaries = self._load_all_summary_files_from_dropbox()
+        
+        if not all_summaries:
+            print("⚠️ No summary files found in KB_Summaries folder")
+            return []
         
         for summary_data in all_summaries:
             summary_text = summary_data.get('summary', '').lower()
