@@ -58,6 +58,138 @@ def _analyze_query_type(prompt):
     
     return 'general_query'
 
+def _classify_query_type(prompt):
+    """Classify query type for specialized processing."""
+    prompt_lower = prompt.lower()
+    
+    # Direct reports / org chart queries
+    if any(term in prompt_lower for term in ['direct reports', 'reports to', 'org chart', 'team members', 'staff']):
+        return 'direct_reports'
+    
+    # Process/workflow queries
+    if any(term in prompt_lower for term in ['ltsa', 'process', 'workflow', 'how does', 'procedure']):
+        return 'process_workflow'
+    
+    # Inventory/systems queries
+    if any(term in prompt_lower for term in ['inventory', 'system', 'erp', 'policy', 'provision']):
+        return 'inventory_systems'
+    
+    # Meeting/participant queries
+    if any(term in prompt_lower for term in ['meeting', 'participants', 'attendees', 'discussed']):
+        return 'meeting_details'
+    
+    # Specific detail queries
+    if any(term in prompt_lower for term in ['who', 'what', 'when', 'where', 'how much', 'details']):
+        return 'specific_details'
+    
+    return 'general_query'
+
+def _has_sufficient_detail(structured_data, query_type):
+    """Check if structured data has sufficient detail for the query type."""
+    if query_type == 'direct_reports':
+        return 'direct_reports' in structured_data and len(structured_data.get('direct_reports', [])) > 0
+    
+    if query_type == 'process_workflow':
+        return any(field in structured_data for field in ['ito_otr_flow', 'process', 'governance', 'operations_controls'])
+    
+    if query_type == 'inventory_systems':
+        return any(field in structured_data for field in ['systems', 'policies', 'erps', 'entities'])
+    
+    if query_type == 'meeting_details':
+        return 'participants' in structured_data and len(structured_data.get('participants', [])) > 0
+    
+    return True  # Assume sufficient for other types
+
+def _create_structured_ai_prompt(prompt, query_type, structured_documents, drill_down_results):
+    """Create specialized AI prompt based on query type and structured data."""
+    
+    # Prepare structured data for AI
+    json_data_for_ai = []
+    for doc in structured_documents:
+        json_data_for_ai.append({
+            "file_name": doc["file_name"],
+            "folder": doc["folder"],
+            "data": doc["structured_data"]
+        })
+    
+    # Add drill-down results if available
+    drill_down_content = ""
+    if drill_down_results:
+        drill_down_content = "\n\nADDITIONAL DRILL-DOWN ANALYSIS:\n"
+        for result in drill_down_results:
+            drill_down_content += f"\nFrom {result['source_file']}:\n{result['drill_down_content']}\n"
+    
+    if query_type == 'direct_reports':
+        return f"""You are ChatGPT analyzing EthosEnergy organizational data. Answer this question: {prompt}
+
+STRUCTURED DATA FROM DOCUMENTS:
+{json.dumps(json_data_for_ai, indent=2)}
+
+{drill_down_content}
+
+INSTRUCTIONS:
+- Extract and list ALL direct reports with their exact names and titles
+- Use the "direct_reports" field from the JSON data
+- Present in a natural, readable format like ChatGPT would
+- Include the leader's name and title at the top
+- If multiple documents show the same org structure, consolidate the information
+- Be specific and complete - don't summarize away names or titles
+
+Answer the question directly and comprehensively using the structured data provided."""
+
+    elif query_type == 'process_workflow':
+        return f"""You are ChatGPT analyzing EthosEnergy business processes. Answer this question: {prompt}
+
+STRUCTURED DATA FROM DOCUMENTS:
+{json.dumps(json_data_for_ai, indent=2)}
+
+{drill_down_content}
+
+INSTRUCTIONS:
+- Extract process flows, workflows, and operational details from the JSON data
+- Look for fields like "ito_otr_flow", "contract_economics", "operations_controls", "process", "governance"
+- Present information in clear sections (flow, economics, controls, risks, actions)
+- Include specific details like timelines, responsibilities, and procedures
+- Be comprehensive but well-organized like ChatGPT would structure it
+
+Answer naturally using all the structured process information provided."""
+
+    elif query_type == 'inventory_systems':
+        return f"""You are ChatGPT analyzing EthosEnergy inventory and systems data. Answer this question: {prompt}
+
+STRUCTURED DATA FROM DOCUMENTS:
+{json.dumps(json_data_for_ai, indent=2)}
+
+{drill_down_content}
+
+INSTRUCTIONS:
+- Extract inventory policies, systems, entities, and operational details
+- Look for "systems", "entities", "policies", "erps", "scope", "challenges" in the JSON data
+- Organize by scope, policies, systems, challenges, and actions
+- Include specific system names, entities, and policy details
+- Present in a structured but natural ChatGPT-style response
+
+Use all the structured inventory and systems data to provide a comprehensive answer."""
+
+    else:
+        # General structured response
+        return f"""You are ChatGPT analyzing EthosEnergy business documents. Answer this question: {prompt}
+
+STRUCTURED DATA FROM DOCUMENTS:
+{json.dumps(json_data_for_ai, indent=2)}
+
+{drill_down_content}
+
+INSTRUCTIONS:
+- Use ALL the structured data provided in the JSON format
+- Extract specific names, roles, processes, amounts, dates, and details
+- Answer naturally and comprehensively like ChatGPT would
+- Focus on what the user actually asked for
+- Include relevant details from participants, actions, deliverables, and other structured fields
+- If information is missing, state that clearly
+
+Provide a thorough, natural response using the structured business data provided."""
+
 def _create_adaptive_analysis_prompt(prompt, query_type, uploaded_files, file_list, conversation_context):
     """Create an adaptive prompt based on the query type."""
     
@@ -157,20 +289,27 @@ Organize information in a way that best serves the specific question asked.
 def render_chat_assistant():
     """Render the complete chat assistant UI inline."""
     
-    # Enhanced styling that works with both light and dark themes
+    # Enhanced dark theme styling with stronger dark preferences
     st.markdown("""
     <style>
-        /* Chat messages styling - adapts to theme */
+        /* Force dark theme elements */
+        .stApp {
+            background-color: #0E1117;
+            color: #FAFAFA;
+        }
+        
+        /* Chat messages styling - enhanced for dark theme */
         .stChatMessage {
             font-size: 1rem;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             border-radius: 12px;
             padding: 16px;
             margin: 8px 0;
-            border: 1px solid var(--secondary-background-color);
+            border: 1px solid #262730;
+            background-color: #1E1E1E;
         }
         
-        /* Badges that work in both themes */
+        /* Enhanced badges with better dark theme contrast */
         .badge {
             padding: 4px 8px;
             border-radius: 8px;
@@ -180,6 +319,7 @@ def render_chat_assistant():
             font-weight: 600;
             display: inline-block;
             margin: 2px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
         }
         .confidence-high { background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%); }
         .confidence-medium { background: linear-gradient(135deg, #FF9800 0%, #f57c00 100%); }
@@ -188,13 +328,14 @@ def render_chat_assistant():
         .model-4o { background: linear-gradient(135deg, #9C27B0 0%, #7B1FA2 100%); }
         .model-assistant { background: linear-gradient(135deg, #00BCD4 0%, #0097A7 100%); }
         
-        /* Sources card that adapts to theme */
+        /* Enhanced sources card for dark theme */
         .sources-card {
-            background: var(--secondary-background-color);
-            border: 1px solid var(--border-color);
+            background: #1E1E1E;
+            border: 1px solid #333;
             border-radius: 8px;
             padding: 12px;
             margin: 8px 0;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
         }
         
         .service-level-badge {
@@ -206,23 +347,55 @@ def render_chat_assistant():
             font-weight: 600;
             display: inline-block;
             margin: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
         }
         
-        /* Enhanced button styling */
+        /* Enhanced button styling for dark theme */
         .stButton button {
             border-radius: 8px;
             transition: all 0.3s ease;
             font-weight: 500;
+            background-color: #262730;
+            border: 1px solid #444;
+            color: #FAFAFA;
         }
         
         .stButton button:hover {
             transform: translateY(-1px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+            background-color: #4CAF50;
+            border-color: #4CAF50;
         }
         
-        /* Chat input styling */
+        /* Chat input styling for dark theme */
         .stChatInput input {
             border-radius: 20px;
+            background-color: #262730;
+            border: 1px solid #444;
+            color: #FAFAFA;
+        }
+        
+        /* Sidebar enhancements for dark theme */
+        .css-1d391kg {
+            background-color: #0E1117;
+        }
+        
+        /* Enhanced text areas and inputs */
+        .stTextInput input, .stTextArea textarea {
+            background-color: #262730;
+            border: 1px solid #444;
+            color: #FAFAFA;
+            border-radius: 8px;
+        }
+        
+        /* Dark theme tip box */
+        .dark-theme-tip {
+            background: linear-gradient(135deg, #1E1E1E 0%, #2D2D2D 100%);
+            border: 1px solid #4CAF50;
+            border-radius: 8px;
+            padding: 12px;
+            margin: 8px 0;
+            color: #FAFAFA;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -498,17 +671,31 @@ Please structure your response with clear sections and cite your sources."""
                                 kb_answer = f"Found {len(indexed_results)} relevant meeting documents:\n\n"
                                 kb_sources = []
                                 
+                                # Collect all structured JSON data for AI analysis
+                                structured_documents = []
+                                
                                 for result in indexed_results:
                                     file_name = result.get('file_name', 'Unknown')
                                     folder = result.get('folder', 'root')
                                     summary = result.get('summary', 'No summary available')
                                     relevance = result.get('relevance_score', 0)
-                                    original_path = result.get('file_path', '')  # Original document location
+                                    original_path = result.get('file_path', '')
+                                    original_json = result.get('original_json', {})
                                     
                                     # Clean up any OpenAI citation formats in the summary
                                     import re
                                     summary = re.sub(r'【\d+:\d+†[^】]*】', '', summary)
                                     summary = re.sub(r'【[^】]*】', '', summary)
+                                    
+                                    # Store structured data for AI processing
+                                    structured_documents.append({
+                                        "file_name": file_name,
+                                        "folder": folder,
+                                        "original_path": original_path,
+                                        "relevance": relevance,
+                                        "structured_data": original_json,
+                                        "summary": summary
+                                    })
                                     
                                     # Enhanced display with drill-down capability
                                     kb_answer += f"**📄 From \"{file_name}\"**\n"
@@ -517,12 +704,17 @@ Please structure your response with clear sections and cite your sources."""
                                         kb_answer += f"*Raw Document: `{original_path}`*\n"
                                     kb_answer += f"*Relevance: {relevance:.1%}*\n\n"
                                     
-                                    # Extract key details for enterprise-level granularity
-                                    kb_answer += f"**📋 GRANULAR DETAILS:**\n"
-                                    kb_answer += f"{summary}\n\n"
+                                    # Show structured data preview if available
+                                    if original_json:
+                                        if 'direct_reports' in original_json:
+                                            kb_answer += f"**👥 DIRECT REPORTS FOUND:** {len(original_json['direct_reports'])} people\n"
+                                        if 'participants' in original_json:
+                                            kb_answer += f"**👥 PARTICIPANTS:** {', '.join(original_json['participants'][:3])}{'...' if len(original_json['participants']) > 3 else ''}\n"
+                                        if 'actions' in original_json:
+                                            kb_answer += f"**✅ ACTIONS:** {len(original_json['actions'])} action items\n"
                                     
-                                    # Add drill-down note
-                                    kb_answer += f"💡 *Drill-down available: This summary is extracted from the full document at the location above.*\n\n"
+                                    kb_answer += f"**📋 SUMMARY:**\n{summary}\n\n"
+                                    kb_answer += f"💡 *Drill-down available to raw document*\n\n"
                                     kb_answer += "---\n\n"
                                     
                                     kb_sources.append({
@@ -530,7 +722,8 @@ Please structure your response with clear sections and cite your sources."""
                                         "folder": folder,
                                         "relevance": relevance,
                                         "original_path": original_path,
-                                        "drill_down_available": bool(original_path)
+                                        "drill_down_available": bool(original_path),
+                                        "structured_data": original_json
                                     })
                                 
                                 print(f"✅ Found {len(indexed_results)} relevant meeting summaries")
@@ -554,27 +747,25 @@ Please structure your response with clear sections and cite your sources."""
                     # Files uploaded - AI can use the thread context
                     ai_answer = ai_response.get("answer", "No AI response available")
                 elif kb_answer and "No Relevant Meeting Documents Found" not in kb_answer and "KB Search Error" not in kb_answer:
-                    # KB summaries found - provide contextual analysis
-                    enhanced_ai_prompt = f"""Based on the EthosEnergy meeting summaries below, answer this question naturally and comprehensively: {prompt}
-
-Meeting Documents Summary:
-{kb_answer}
-
-INSTRUCTIONS:
-- Answer the question directly and naturally, like ChatGPT would
-- Include ALL specific details from the documents: names, titles, departments, numbers, dates
-- If the user asks for "direct reports" - list the actual people and their roles/departments
-- Be conversational but thorough - don't use rigid templates or bullet points unless natural
-- Extract and present specific facts that answer the question
-- If information is missing from the documents, say so clearly
-- Focus on what the user actually asked for, not generic analysis
-
-CRITICAL RULES:
-- Use ONLY information from the EthosEnergy meeting summaries provided
-- Include specific names, roles, departments, and details when they exist in the documents
-- Don't make up information or use external knowledge
-- Answer naturally like ChatGPT, not like a rigid business report
-- If the documents don't contain the specific information requested, state that clearly"""
+                    # KB summaries found - use structured JSON data for AI analysis
+                    
+                    # Determine query type for specialized prompting
+                    query_type = _classify_query_type(prompt)
+                    
+                    # Check if drill-down is needed
+                    drill_down_results = []
+                    if query_type in ['direct_reports', 'specific_details'] and structured_documents:
+                        for doc in structured_documents[:2]:  # Drill down top 2 most relevant
+                            if doc['original_path'] and not _has_sufficient_detail(doc['structured_data'], query_type):
+                                print(f"🔍 Drilling down to {doc['file_name']} for more detail...")
+                                drill_result = indexer.drill_down_to_raw_document(doc['original_path'], prompt)
+                                if drill_result:
+                                    drill_down_results.append(drill_result)
+                    
+                    # Create structured prompt with JSON data
+                    enhanced_ai_prompt = _create_structured_ai_prompt(
+                        prompt, query_type, structured_documents, drill_down_results
+                    )
                     
                     try:
                         # Use Chat Completion API directly to avoid Assistant's attached training docs
@@ -641,12 +832,24 @@ Remember: You should be as helpful and comprehensive as ChatGPT, while avoiding 
                     except:
                         ai_answer = "I don't have specific information to answer this question without access to relevant documents."
                 
-                # Create dual format answer
-                answer = f"""### 📚 Knowledge Base Answer
+                # Create dual format answer with clear labeling
+                if kb_answer and "No Relevant Meeting Documents Found" not in kb_answer:
+                    answer = f"""### 📚 Document-Based Answer
+*Based on your EthosEnergy meeting summaries and documents*
+
 {kb_answer}
 
 ### 🤖 AI Analysis
+*Synthesized insights from your documents*
+
 {ai_answer}"""
+                else:
+                    answer = f"""### 🧠 General Knowledge Response
+*This answer uses general business knowledge as no relevant documents were found*
+
+{ai_answer}
+
+💡 **Note**: This response is based on general knowledge, not your specific EthosEnergy documents. To get document-based answers, try uploading relevant files or ensure your question matches content in your knowledge base."""
                 
                 # Combine sources
                 ai_sources = ai_response.get("sources", {})
