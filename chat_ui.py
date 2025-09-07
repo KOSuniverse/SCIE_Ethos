@@ -532,8 +532,16 @@ def render_chat_assistant():
                 for artifact in message["artifacts"]:
                     st.code(str(artifact))
 
-    # Chat input
-    if prompt := st.chat_input("Ask about inventory, WIP, E&O, forecasting, or root cause analysis..."):
+    # Chat input with dynamic label based on pending clarifier
+    label = "Ask about inventory, WIP, E&O, forecasting, or root cause analysis..."
+    pending = st.session_state.get("_router_pending")
+    if pending:
+        # assistant_bridge stores the last Router contract here
+        miss = ((pending.get("contract") or {}).get("missing") or [])
+        if miss:
+            label = f"Clarify: {miss[0]}"
+    
+    if prompt := st.chat_input(label):
         # Add user message to chat history
         st.session_state.chat_messages.append({"role": "user", "content": prompt})
         
@@ -551,6 +559,9 @@ def render_chat_assistant():
                 export_manager = ExportManager(st.session_state.service_level)
                 
                 # Get AI response (working)
+                # Feature flag for Router integration (reversible)
+                USE_ROUTER = bool(os.getenv("USE_ROUTER", "").strip())
+                
                 if st.session_state.selected_files:
                     ai_response = run_query_with_files(
                         prompt,
@@ -558,10 +569,22 @@ def render_chat_assistant():
                         thread_id=st.session_state.thread_id
                     )
                 else:
-                    ai_response = run_query(
-                        prompt,
-                        thread_id=st.session_state.thread_id
-                    )
+                    if USE_ROUTER:
+                        from assistant_bridge import run_via_router
+                        ai_response = run_via_router(prompt, session_state=st.session_state)
+                    else:
+                        ai_response = run_query(
+                            prompt,
+                            thread_id=st.session_state.thread_id
+                        )
+                
+                # Log Router metadata if available (usage dashboard)
+                router_meta = ai_response.get("_router_meta")
+                if router_meta:
+                    try:
+                        log_event("router_meta", router_meta)  # already imported at top of chat_ui.py
+                    except Exception:
+                        pass  # logging should never break the UI
                 
                                 # DOCUMENT SEARCH - Search through uploaded documents (not KB folder)
                 kb_answer = "📋 **Searching uploaded documents...**"
@@ -959,8 +982,15 @@ Remember: You should be as helpful and comprehensive as ChatGPT, while avoiding 
                                 st.write(f"**V**ariance: {breakdown.get('variance', 0):.2f}")
                                 st.write(f"**C**overage: {breakdown.get('coverage', 0):.2f}")
                 
-                # Hidden debug caption (Intent=<auto_routed_intent> | Mode=<resolved_mode>)
+                # Show awaiting clarification banner if needed
                 intent = ai_response.get("intent", "unknown")
+                if intent == "clarifier":
+                    _p = st.session_state.get("_router_pending")
+                    _miss = ((_p or {}).get("contract") or {}).get("missing") or []
+                    if _miss:
+                        st.info(f"Awaiting clarification: {_miss[0]}")
+                
+                # Hidden debug caption (Intent=<auto_routed_intent> | Mode=<resolved_mode>)
                 mode = "chat"  # This is chat mode
                 st.caption(f"Intent={intent} | Mode={mode}")
                 
