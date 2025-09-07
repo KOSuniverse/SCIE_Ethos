@@ -102,6 +102,50 @@ except Exception:
     _external_classify_intent = None
 
 
+# ── Router dispatcher (do not call OpenAI here) ──────────────────────────────
+def route_from_router(contract: Dict[str, Any], session_state=None):
+    """
+    Dispatch a Router JSON contract to the correct analysis path.
+    Stateless. No external API calls here.
+    """
+    intent = (contract.get("intent") or "").lower()
+    if intent == "rca":
+        return answer_root_cause(contract, session_state)
+    elif intent == "forecast":
+        return answer_forecast(contract, session_state)
+    elif intent == "doc_reader":
+        return answer_doc_reader(contract, session_state)
+    return {"error": f"Unknown intent: {intent}", "contract": contract}
+
+
+def _contract_to_prompt(c: Dict[str, Any], header: str) -> str:
+    p = c.get("params") or {}
+    parts = [header]
+    if c.get("files_hint"): parts.append("Files hint: " + ", ".join(c["files_hint"]))
+    if p.get("entity"):     parts.append(f"Entity: {p['entity']}")
+    if p.get("period"):     parts.append(f"Period: {p['period']}")
+    if p.get("granularity"):parts.append(f"Granularity: {p['granularity']}")
+    return " | ".join(parts)
+
+def answer_doc_reader(contract: Dict[str, Any], session_state=None):
+    q = _contract_to_prompt(contract, "Summarize relevant documents with evidence and actions.")
+    from dp_orchestrator import DataProcessingOrchestrator
+    dp_orchestrator = DataProcessingOrchestrator()
+    return dp_orchestrator.process_dp_query(q, session_state, router_contract=contract)
+
+def answer_forecast(contract: Dict[str, Any], session_state=None):
+    q = _contract_to_prompt(contract, "Forecast demand; compute SS/ROP/Par with rationale.")
+    from dp_orchestrator import DataProcessingOrchestrator
+    dp_orchestrator = DataProcessingOrchestrator()
+    return dp_orchestrator.process_dp_query(q, session_state, router_contract=contract)
+
+def answer_root_cause(contract: Dict[str, Any], session_state=None):
+    q = _contract_to_prompt(contract, "Root-cause analysis; include drivers, $ impact, actions.")
+    from dp_orchestrator import DataProcessingOrchestrator
+    dp_orchestrator = DataProcessingOrchestrator()
+    return dp_orchestrator.process_dp_query(q, session_state, router_contract=contract)
+
+
 # =============================================================================
 # Public: thin wrapper for Phase 1 ingest (unchanged)
 # =============================================================================

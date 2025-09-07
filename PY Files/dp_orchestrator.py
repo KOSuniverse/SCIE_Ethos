@@ -66,7 +66,7 @@ class DataProcessingOrchestrator:
             "/Apps/Ethos LLM/project_root/04_data/01_cleansed_files"
         ]
         
-    def resolve_files_metadata_first(self, query: str, intent: str) -> Dict[str, Any]:
+    def resolve_files_metadata_first(self, query: str, intent: str, hints: list[str] | None = None) -> Dict[str, Any]:
         """
         Resolve files using metadata-first approach with shorthand interpretation
         """
@@ -84,7 +84,7 @@ class DataProcessingOrchestrator:
             # Rank and select files
             ranked_files = self._rank_files_by_metadata(
                 cleansed_files, file_identifiers, period_filters, 
-                country_filters, erp_filters, sheet_type_filters
+                country_filters, erp_filters, sheet_type_filters, hints
             )
             
             # Apply version deduplication
@@ -264,7 +264,7 @@ class DataProcessingOrchestrator:
     
     def _rank_files_by_metadata(self, files: List[Dict], identifiers: List[str], 
                                periods: List[str], countries: List[str], 
-                               erps: List[str], sheet_types: List[str]) -> List[Dict]:
+                               erps: List[str], sheet_types: List[str], hints: list[str] | None = None) -> List[Dict]:
         """Rank files by metadata match quality"""
         ranked_files = []
         
@@ -326,6 +326,20 @@ class DataProcessingOrchestrator:
                     score += boost
                     reasons.append(f"Summary token overlap ({overlap_count} matches)")
             
+            # Router hints boost (conservative +8 per hit)
+            hints = [h.strip().lower() for h in (hints or []) if h and isinstance(h, str)]
+            if hints:
+                blob = " ".join([
+                    str(file_info.get("name", "")), str(file_info.get("title", "")), 
+                    str(metadata.get("tags", "")), str(metadata.get("period", "")), 
+                    str(metadata.get("country", "")), str(metadata.get("erp", ""))
+                ]).lower()
+                hint_hits = sum(1 for h in hints if h and h in blob)
+                if hint_hits > 0:
+                    hint_boost = hint_hits * 8  # Conservative boost per hint match
+                    score += hint_boost
+                    reasons.append(f"Router hint matches ({hint_hits} hits)")
+            
             file_info["ranking_score"] = score
             file_info["ranking_reason"] = "; ".join(reasons) if reasons else "No specific matches"
             
@@ -383,12 +397,26 @@ class DataProcessingOrchestrator:
             # Default: use top ranked file(s)
             return ranked_files[:min(2, len(ranked_files))]
     
-    def process_dp_query(self, query: str, session_state: Any = None) -> Dict[str, Any]:
+    def process_dp_query(self, query: str, session_state: Any = None, router_contract: dict | None = None) -> Dict[str, Any]:
         """
         Process Data Processing query with full enterprise parity
         """
         # Store query for downstream use (country/intent cues)
         self.last_query = query
+        
+        # Extract router hints for file selection boosting
+        router_hints = (router_contract or {}).get("files_hint", []) or []
+        
+        # Extract router actions and set preferred intent
+        router_actions = set((router_contract or {}).get("actions", []))
+        preferred_intent = None
+        if "forecast_demand" in router_actions:
+            preferred_intent = "forecasting"   # gentle nudge only
+        
+        # Store for logs/telemetry (non-breaking)
+        if session_state is not None:
+            session_state["router_actions"] = list(router_actions)
+            session_state["router_preferred_intent"] = preferred_intent
         
         try:
             # Step 1: Classify intent using master instructions
@@ -396,8 +424,12 @@ class DataProcessingOrchestrator:
             intent = intent_result.get("intent", "eda")
             confidence = intent_result.get("confidence", 0.5)
             
+            # Apply router preferred intent if appropriate (gentle nudge)
+            if preferred_intent and intent in (None, "eda", "general"):
+                intent = preferred_intent
+            
             # Step 2: Resolve files using metadata-first approach
-            file_resolution = self.resolve_files_metadata_first(query, intent)
+            file_resolution = self.resolve_files_metadata_first(query, intent, hints=router_hints)
             
             # Step 3: Check if clarification is needed
             if file_resolution.get("needs_clarification"):

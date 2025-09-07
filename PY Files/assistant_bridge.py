@@ -558,3 +558,81 @@ I apologize, but I encountered an error processing your question. Please try aga
                 "ai_confidence": 0.0
             }
 
+
+# ── Router Bridge Function ──────────────────────────────────────────────────
+from typing import Any, Dict
+import os
+from router_client import RouterClient
+from orchestrator import route_from_router
+
+CONF_MIN = float(os.getenv("ROUTER_CONF_MIN", "0.55"))
+
+def run_via_router(user_text: str, session_state: Any = None) -> Dict[str, Any]:
+    """
+    Classify with Router → hand off to orchestrator.route_from_router().
+    Zero UI changes elsewhere; call this only when feature flag is on.
+    """
+    # If we asked a clarifier last turn, merge with original (Step 8)
+    if session_state is not None and session_state.get("_router_pending"):
+        base = session_state["_router_pending"].get("original_text", "")
+        user_text = f"{base}\nClarification: {user_text}".strip()
+
+    # SAFETY: try Router; on failure, run DP directly with original text
+    try:
+        contract = RouterClient().classify(user_text)
+        conf = float(contract.get("confidence", 0.0) or 0.0)
+    except Exception as e:
+        # Record error for telemetry; then fall back to DP
+        if session_state is not None:
+            session_state["_router_error"] = str(e)[:200]
+        from dp_orchestrator import DataProcessingOrchestrator
+        dp_orchestrator = DataProcessingOrchestrator()
+        res = dp_orchestrator.process_dp_query(user_text, session_state)
+        # flag the fallback for logs
+        res.setdefault("_router_meta", {})["fallback"] = True
+        res["_router_meta"]["original_text"] = user_text
+        return res
+
+    # Low-confidence clarifier (Step 6)
+    if conf < CONF_MIN:
+        missing = contract.get("missing") or []
+        intent  = (contract.get("intent") or "unknown").lower()
+        hints   = contract.get("files_hint") or []
+        if session_state is not None:
+            session_state["_router_pending"] = {"original_text": user_text, "contract": contract}
+
+        lines = []
+        if missing: 
+            lines.append("• " + "\n• ".join(str(m) for m in missing[:3]))
+        else:
+            lines.append(
+                "Which SKU/plant/period should I forecast?" if intent=="forecast"
+                else "Which file(s) or period (e.g., R401 Q2-2025) should I analyze?" if intent=="rca"
+                else "Which document(s) should I read?"
+            )
+        if hints: 
+            lines.append(f"(I'll prioritize: {', '.join(hints[:3])})")
+
+        return {"answer": "I can run this, but need a quick confirmation:\n" + "\n".join(lines),
+                "intent": "clarifier", "confidence": conf,
+                "_router_meta": {"contract": contract, "confidence": conf}}
+
+    # Confidence OK → clear pending and run DP
+    if session_state is not None and session_state.get("_router_pending"):
+        session_state.pop("_router_pending", None)
+
+    res = route_from_router(contract, session_state)
+    # attach Router meta for UI logger
+    res.setdefault("_router_meta", {})
+    res["_router_meta"]["contract"] = contract
+    res["_router_meta"]["confidence"] = conf
+    
+    # Learn from successful DP runs (feature-flagged)
+    try:
+        if os.getenv("MEMORY_ENABLED","0") in ("1","true","True"):
+            from memory_store import learn_router_success
+            learn_router_success(contract, res, conf_min=float(os.getenv("MEMORY_CONF_MIN","0.70")))
+    except Exception:
+        pass  # learning must never affect responses
+    
+    return res
