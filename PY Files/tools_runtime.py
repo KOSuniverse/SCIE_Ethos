@@ -454,88 +454,89 @@ def chart(
 def kb_search(query: str, k: int = 5) -> Dict[str, Any]:
     """
     Phase 3B: Enhanced KB search with k≥4 enforcement and coverage warnings.
+    Uses external Hugging Face Space KB API only (no local fallback).
     """
+    import requests
+    
     # Enforce k≥4 requirement from Phase 3B
     if k < 4:
         k = 4
     
-    try:
-        # Try to use the actual KB retrieval system
-        from phase4_knowledge.knowledgebase_retriever import search_topk
-        from pathlib import Path
-        
-        project_root = str(Path(__file__).parent.parent)
-        hits = search_topk(
-            project_root=project_root,
-            query=query,
-            k=k,
-            dedupe_by_doc=True
-        )
-        
-        # Extract citations from hits
-        citations = []
-        chunks = []
-        for hit in hits:
-            if hasattr(hit, 'meta') and hasattr(hit, 'text'):
+    # Try external HF Space KB API first
+    KB_API_KEY = os.getenv("KB_API_KEY")
+    if KB_API_KEY:
+        try:
+            url = "https://danskemp11-scie-kb-api.hf.space/kb_search"
+            headers = {"x-api-key": KB_API_KEY}
+            params = {"q": query, "top_k": k}
+            resp = requests.get(url, headers=headers, params=params, timeout=30)
+            resp.raise_for_status()
+            
+            # Parse HF Space response
+            hf_data = resp.json()
+            
+            # Convert HF Space format to expected format
+            citations = []
+            chunks = []
+            
+            # Handle both possible response formats
+            if "results" in hf_data:
+                results = hf_data["results"]
+            elif isinstance(hf_data, list):
+                results = hf_data
+            else:
+                results = []
+            
+            for i, result in enumerate(results):
                 citations.append({
-                    "doc_title": hit.meta.get("doc_id", "Unknown Document"),
-                    "section": hit.meta.get("section", "Unknown Section"),
-                    "score": hit.score,
-                    "source_type": hit.meta.get("source_type", "kb_doc")
+                    "doc_title": result.get("doc_id", f"Document_{i+1}"),
+                    "section": result.get("section", "Unknown Section"),
+                    "score": result.get("score", 0.0),
+                    "source_type": "hf_space_kb"
                 })
-                chunks.append(hit.text)
-        
-        result = {
-            "chunks": chunks,
-            "citations": citations,
-            "k": k,
-            "query": query,
-            "hits_found": len(hits)
-        }
-        
-        # Phase 3B: Add coverage warning if < 2 hits
-        if len(citations) < 2:
-            result["coverage_warning"] = f"Low KB coverage: only {len(citations)} sources found (minimum 2 recommended)"
-        
-        return result
-        
-    except ImportError:
-        # Fallback when KB system not available - return mock data for testing
-        mock_citations = [
-            {
-                "doc_title": "Supply Chain Best Practices Guide",
-                "section": "Inventory Management",
-                "score": 0.85,
-                "source_type": "kb_doc"
-            },
-            {
-                "doc_title": "ERP Implementation Manual",
-                "section": "Data Quality Standards",
-                "score": 0.78,
-                "source_type": "kb_doc"
-            },
-            {
-                "doc_title": "Warehouse Operations Handbook",
-                "section": "Stock Control Procedures",
-                "score": 0.72,
-                "source_type": "kb_doc"
-            },
-            {
-                "doc_title": "Financial Controls Framework",
-                "section": "Inventory Valuation",
-                "score": 0.68,
-                "source_type": "kb_doc"
+                chunks.append(result.get("text", result.get("content", "")))
+            
+            result = {
+                "chunks": chunks,
+                "citations": citations,
+                "k": k,
+                "query": query,
+                "hits_found": len(results)
             }
-        ]
-        
-        return {
-            "chunks": [f"Mock KB content for query: {query}" for _ in range(k)],
-            "citations": mock_citations[:k],
-            "k": k,
-            "query": query,
-            "hits_found": k,
-            "mock_data": True
-        }
+            
+            # Phase 3B: Add coverage warning if < 2 hits
+            if len(citations) < 2:
+                result["coverage_warning"] = f"Low KB coverage: only {len(citations)} sources found (minimum 2 recommended)"
+            
+            return result
+            
+        except Exception as e:
+            print(f"HF Space KB API failed: {e}")
+            # Return error - external API only
+            return {
+                "chunks": [],
+                "citations": [
+                    {"doc_title": "KB API Error", "section": "External Service", "score": 0.0, "source_type": "error"},
+                    {"doc_title": f"Error: {str(e)[:100]}", "section": "Details", "score": 0.0, "source_type": "error"}
+                ],
+                "k": k,
+                "query": query,
+                "hits_found": 0,
+                "error": f"KB API unavailable: {e}"
+            }
+    
+    # No KB_API_KEY set - return configuration error
+    return {
+        "chunks": [],
+        "citations": [
+            {"doc_title": "KB Configuration Missing", "section": "Setup Required", "score": 0.0, "source_type": "config_error"},
+            {"doc_title": "Set KB_API_KEY environment variable", "section": "Instructions", "score": 0.0, "source_type": "config_error"}
+        ],
+        "k": k,
+        "query": query,
+        "hits_found": 0,
+        "error": "KB_API_KEY not configured"
+    }
 
 # Phase 4A: Forecasting and Policy Tools
 def forecast_demand(
