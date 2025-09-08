@@ -102,6 +102,60 @@ except Exception:
     _external_classify_intent = None
 
 
+# === GPT Router → Skill dispatcher (non-breaking add-on) ======================
+from openai import OpenAI
+
+_oai = OpenAI()  # uses OPENAI_API_KEY
+
+# Paste your final system prompts here (same ones you used in the Business GPTs)
+ROUTER_SYS = """You are the Router GPT... (JSON-only)"""
+DOC_SYS    = """You are DocGPT... (JSON-only schema: insights, actions, participants, evidence, limits, confidence)"""
+FORECAST_SYS = """You are ForecastGPT... (JSON-only)"""
+MOVEMENT_SYS = """You are MovementGPT... (JSON-only)"""
+RCA_SYS    = """You are RCAGPT... (JSON-only)"""
+COMP_SYS   = """You are ComparisonGPT... (JSON-only)"""
+OPT_SYS    = """You are OptimizationGPT... (JSON-only)"""
+SCEN_SYS   = """You are ScenarioGPT... (JSON-only)"""
+EXEC_SYS   = """You are ExecutiveSummaryGPT... (JSON-only)"""
+GAP_SYS    = """You are GapCheckGPT... (JSON-only)"""
+PM_SYS     = """You are PredictiveModelGPT... (JSON-only)"""
+
+def _chat(system_txt: str, user_txt: str, model: str = "gpt-5.1-mini", json_only: bool = True) -> dict:
+    msgs = [{"role":"system","content":system_txt},{"role":"user","content":user_txt}]
+    resp = _oai.chat.completions.create(
+        model=model,
+        messages=msgs,
+        response_format={"type": "json_object"} if json_only else None
+    )
+    return json.loads(resp.choices[0].message.content)
+
+def route_then_answer(query: str) -> dict:
+    """Routes a query and executes the selected skill. Safe to call from Streamlit."""
+    route = _chat(ROUTER_SYS, query, model="gpt-5.1-mini", json_only=True)
+    intent = (route.get("intent") or "").lower()
+    # Map intent → system prompt + model
+    skill_map = {
+        "document_reader": (DOC_SYS, "gpt-5.1"),
+        "forecasting_policy": (FORECAST_SYS, "gpt-5.1"),
+        "movement_analysis": (MOVEMENT_SYS, "gpt-5.1"),
+        "root_cause": (RCA_SYS, "gpt-5.1"),
+        "comparison": (COMP_SYS, "gpt-5.1"),
+        "optimization": (OPT_SYS, "gpt-5.1"),
+        "scenario_analysis": (SCEN_SYS, "gpt-5.1"),
+        "executive_summary": (EXEC_SYS, "gpt-5.1"),
+        "gap_check": (GAP_SYS, "gpt-5.1"),
+        "predictivemodel": (PM_SYS, "gpt-5.1"),
+    }
+    if intent not in skill_map:
+        return {"router": route,
+                "answer": {"insights": [], "evidence": [], "limits": f"Unsupported or abstain: {intent}",
+                           "confidence": {"R":0.1,"A":0.1,"V":0.1,"C":0.1}}}
+
+    sys_txt, mdl = skill_map[intent]
+    answer = _chat(sys_txt, query, model=mdl, json_only=True)
+    return {"router": route, "answer": answer}
+# ==============================================================================
+
 # ── Router dispatcher (do not call OpenAI here) ──────────────────────────────
 def route_from_router(contract: Dict[str, Any], session_state=None):
     """
