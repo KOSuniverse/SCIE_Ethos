@@ -13,7 +13,7 @@ from phase1_ingest.pipeline import PIPELINE_VERSION
 st.caption(f"Pipeline: {PIPELINE_VERSION}")
 
 # Orchestrator & session
-from orchestrator import ingest_streamlit_bytes_5  # add at top of file or above this block
+from orchestrator import ingest_streamlit_bytes_5, route_then_answer  # add at top of file or above this block
 from session import SessionState
 from confidence import get_confidence_badge
 
@@ -1745,6 +1745,51 @@ with st.expander("🧭 Project manifest (repo snapshot)"):
             st.caption(f"Saved to S3: s3://{bucket}/{key}")
         except Exception as e:
             st.warning(f"S3 save failed: {e}")
+
+# =============================================================================
+# Unified Router (beta)
+# =============================================================================
+
+# Tiny renderer for any skill's JSON contract (insights/actions/evidence/limits...)
+def _render_contract(ans: dict):
+    # Exec-style bullets
+    for key in ["executive_summary", "insights", "recommendations", "actions"]:
+        vals = ans.get(key) or []
+        if vals:
+            st.subheader(key.replace("_", " ").title())
+            for b in vals:
+                st.write(f"• {b}")
+
+    # Tables of comparisons/drivers/gaps/balances
+    for key in ["comparisons", "drivers_ranked", "gaps", "balances", "trail", "kpis", "forecast"]:
+        rows = ans.get(key) or []
+        if rows:
+            st.subheader(key.replace("_", " ").title())
+            st.dataframe(rows)
+
+    # Evidence / limits / confidence
+    ev = ans.get("evidence") or []
+    if ev:
+        st.markdown("**Evidence**")
+        st.json(ev)
+    if ans.get("limits"):
+        st.markdown("**Limits**")
+        st.write(ans["limits"])
+    if ans.get("confidence"):
+        c = ans["confidence"]
+        st.markdown(f"**Confidence (R/A/V/C):** {c.get('R')}/{c.get('A')}/{c.get('V')}/{c.get('C')}")
+
+st.markdown("---")
+st.markdown("## 🔀 Unified Router (beta)")
+q = st.text_input("Ask a question (it will auto-route to the right skill)")
+if st.button("Run via Router") and q:
+    with st.spinner("Routing and executing…"):
+        result = route_then_answer(q)
+    # Optional debug: show router classification
+    with st.expander("Router classification (debug)"):
+        st.json(result.get("router", {}))
+    # Human-friendly render of the skill output
+    _render_contract(result.get("answer", {}))
 
 # =============================================================================
 # Required Charts Generation (Phase 1C)
