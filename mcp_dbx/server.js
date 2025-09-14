@@ -52,18 +52,47 @@ app.get("/mcp/search", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.response?.data || e.message }); }
 });
 
+// fetch file bytes (JSON base64 if client asks for JSON; otherwise raw octet-stream)
 app.post("/mcp/get", async (req, res) => {
   try {
     const path = req.body?.path;
     if (!path) return res.status(400).json({ error: "path required" });
-    const r = await axios.post("https://content.dropboxapi.com/2/files/download", null, {
-      headers: { Authorization: `Bearer ${DROPBOX_ACCESS_TOKEN}`, "Dropbox-API-Arg": JSON.stringify({ path }) },
-      responseType: "arraybuffer"
-    });
+
+    const r = await axios.post(
+      "https://content.dropboxapi.com/2/files/download",
+      null,
+      {
+        headers: {
+          Authorization: `Bearer ${DROPBOX_ACCESS_TOKEN}`,
+          "Dropbox-API-Arg": JSON.stringify({ path })
+        },
+        responseType: "arraybuffer"
+      }
+    );
+
+    const wantsJson =
+      (req.headers.accept || "").toLowerCase().includes("application/json") ||
+      (req.query.format || "").toString().toLowerCase() === "base64";
+
+    if (wantsJson) {
+      // Safe for Actions: JSON with base64 payload
+      return res.json({
+        ok: true,
+        path,
+        content_type: r.headers["content-type"] || "application/octet-stream",
+        size_bytes: r.data?.byteLength ?? null,
+        data_base64: Buffer.from(r.data).toString("base64")
+      });
+    }
+
+    // Raw binary fallback
     res.setHeader("Content-Type", "application/octet-stream");
     res.send(r.data);
-  } catch (e) { res.status(500).json({ error: e.response?.data || e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.response?.data || e.message });
+  }
 });
+
 
 app.listen(PORT, () => console.log(`DBX REST on ${PORT} root=${DBX_ROOT_PREFIX}`));
 
