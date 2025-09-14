@@ -41,12 +41,26 @@ const dbxRPC = axios.create({
 });
 
 // ----- list (recursive, with pagination) -----
+// ----- list (recursive, with pagination) -----
+// supports ?path=/Some/Folder; "/" is normalized to "" (root)
 app.get("/mcp/list", async (req, res) => {
   try {
-    const basePath = req.query.path ? req.query.path : "/" + DBX_ROOT_PREFIX;
+    // normalize input path
+    const q = (req.query.path ?? "").toString().trim();
+    const cfg = (DBX_ROOT_PREFIX ?? "").toString().trim();
+
+    // pick base path: query > env
+    let p = q.length ? q : cfg;
+
+    // normalize for Dropbox API:
+    // - root must be "" (empty)
+    // - otherwise must start with a single "/"
+    if (p === "/" || p === "") p = "";
+    else if (!p.startsWith("/")) p = "/" + p;
+
     let entries = [];
     let { data } = await dbxRPC.post("/files/list_folder", {
-      path: basePath,
+      path: p,
       recursive: true,
       include_deleted: false,
     });
@@ -58,7 +72,7 @@ app.get("/mcp/list", async (req, res) => {
       data = cont.data;
       entries = entries.concat(data.entries || []);
     }
-    res.json({ entries });
+    res.json({ base_path: p || "(root)", entries });
   } catch (e) {
     res.status(500).json({ error: e.response?.data || e.message });
   }
