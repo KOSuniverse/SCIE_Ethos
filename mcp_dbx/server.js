@@ -86,24 +86,23 @@ app.post("/mcp/get", async (req, res) => {
     const path = req.body?.path;
     if (!path) return res.status(400).json({ error: "path required" });
 
-    // IMPORTANT: for files/download do NOT set Content-Type
-    const r = await axios.post(
-      "https://content.dropboxapi.com/2/files/download",
-      undefined,
-      {
-        headers: {
-          Authorization: `Bearer ${DROPBOX_ACCESS_TOKEN}`,
-          "Dropbox-API-Arg": JSON.stringify({ path })
-        },
-        responseType: "arraybuffer",
-        transformRequest: [(data, headers) => {
-          // strip any default content-type that axios might inject
-          if (headers && headers.common) delete headers.common["Content-Type"];
-          if (headers && headers.post) delete headers.post["Content-Type"];
-          return data;
-        }]
-      }
-    );
+    const r = await axios({
+      url: "https://content.dropboxapi.com/2/files/download",
+      method: "POST",
+      responseType: "arraybuffer",
+      headers: {
+        Authorization: `Bearer ${DROPBOX_ACCESS_TOKEN}`,
+        "Dropbox-API-Arg": JSON.stringify({ path })
+      },
+      // absolutely no data/body, no content-type
+      data: undefined,
+      transformRequest: [(data, headers) => {
+        delete headers["Content-Type"];
+        if (headers?.common) delete headers.common["Content-Type"];
+        if (headers?.post)   delete headers.post["Content-Type"];
+        return data;
+      }]
+    });
 
     res.json({
       ok: true,
