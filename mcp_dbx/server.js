@@ -81,40 +81,32 @@ app.get("/mcp/search", async (req, res) => {
 });
 
 // -------- GET (JSON with base64) --------
+// -------- GET (JSON with base64) via get_temporary_link --------
 app.post("/mcp/get", async (req, res) => {
   try {
     const path = req.body?.path;
     if (!path) return res.status(400).json({ error: "path required" });
 
-    const r = await axios({
-      url: "https://content.dropboxapi.com/2/files/download",
-      method: "POST",
-      responseType: "arraybuffer",
-      headers: {
-        Authorization: `Bearer ${DROPBOX_ACCESS_TOKEN}`,
-        "Dropbox-API-Arg": JSON.stringify({ path })
-      },
-      // absolutely no data/body, no content-type
-      data: undefined,
-      transformRequest: [(data, headers) => {
-        delete headers["Content-Type"];
-        if (headers?.common) delete headers.common["Content-Type"];
-        if (headers?.post)   delete headers.post["Content-Type"];
-        return data;
-      }]
-    });
+    // Step 1: ask Dropbox for a temporary HTTPS link (RPC JSON; safe headers)
+    const { data: linkResp } = await dbxRPC.post("/files/get_temporary_link", { path });
+    const tempLink = linkResp?.link;
+    if (!tempLink) return res.status(502).json({ error: "no temporary link returned" });
+
+    // Step 2: download the file bytes from the temp link (no special headers)
+    const dl = await axios.get(tempLink, { responseType: "arraybuffer" });
 
     res.json({
       ok: true,
       path,
-      content_type: r.headers["content-type"] || "application/octet-stream",
-      size_bytes: r.data?.byteLength ?? null,
-      data_base64: Buffer.from(r.data).toString("base64")
+      content_type: dl.headers["content-type"] || "application/octet-stream",
+      size_bytes: dl.data?.byteLength ?? null,
+      data_base64: Buffer.from(dl.data).toString("base64")
     });
   } catch (e) {
     res.status(500).json({ error: e.response?.data || e.message });
   }
 });
+
 
 app.listen(PORT, () => {
   console.log(`DBX REST on ${PORT} root=${DBX_ROOT_PREFIX}`);
