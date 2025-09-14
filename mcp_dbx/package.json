@@ -1,12 +1,12 @@
 {
-  "name": "dbx-mcp-server",
+  "name": "dbx-mcp-sse",
   "version": "1.0.0",
   "type": "module",
-  "main": "server.js",
-  "scripts": { "start": "node server.js" },
+  "main": "index.js",
+  "scripts": { "start": "node index.js" },
   "dependencies": {
-    "axios": "^1.6.7",
-    "body-parser": "^1.20.2",
-    "express": "^4.18.2"
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "axios": "^1.6.7"
   }
 }
+
