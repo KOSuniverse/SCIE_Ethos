@@ -41,12 +41,12 @@ const dbxRPC = axios.create({
 });
 
 // ----- list (recursive, with pagination) -----
-app.get("/mcp/list", async (_req, res) => {
+app.get("/mcp/list", async (req, res) => {
   try {
-    const path = "/" + DBX_ROOT_PREFIX;
+    const basePath = req.query.path ? req.query.path : "/" + DBX_ROOT_PREFIX;
     let entries = [];
     let { data } = await dbxRPC.post("/files/list_folder", {
-      path,
+      path: basePath,
       recursive: true,
       include_deleted: false,
     });
