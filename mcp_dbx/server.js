@@ -53,37 +53,44 @@ app.get("/mcp/search", async (req, res) => {
 });
 
 // fetch file bytes (JSON base64 if client asks for JSON; otherwise raw octet-stream)
+// /mcp/get — returns JSON with base64; fixes Dropbox Content-Type complaint
 app.post("/mcp/get", async (req, res) => {
   try {
     const path = req.body?.path;
     if (!path) return res.status(400).json({ error: "path required" });
 
+    // IMPORTANT: do NOT set Content-Type for files/download; only Auth + Dropbox-API-Arg
     const r = await axios.post(
       "https://content.dropboxapi.com/2/files/download",
-      null,
+      undefined, // no body
       {
         headers: {
           Authorization: `Bearer ${DROPBOX_ACCESS_TOKEN}`,
           "Dropbox-API-Arg": JSON.stringify({ path })
+          // no 'Content-Type' header here
         },
-        responseType: "arraybuffer"
+        responseType: "arraybuffer",
+        // guard against proxies that inject defaults
+        transformRequest: [(data, headers) => {
+          delete headers.common?.["Content-Type"];
+          delete headers.post?.["Content-Type"];
+          return data;
+        }],
       }
     );
 
-    const wantsJson =
-      (req.headers.accept || "").toLowerCase().includes("application/json") ||
-      (req.query.format || "").toString().toLowerCase() === "base64";
+    res.json({
+      ok: true,
+      path,
+      content_type: r.headers["content-type"] || "application/octet-stream",
+      size_bytes: r.data?.byteLength ?? null,
+      data_base64: Buffer.from(r.data).toString("base64"),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.response?.data || e.message });
+  }
+});
 
-    if (wantsJson) {
-      // Safe for Actions: JSON with base64 payload
-      return res.json({
-        ok: true,
-        path,
-        content_type: r.headers["content-type"] || "application/octet-stream",
-        size_bytes: r.data?.byteLength ?? null,
-        data_base64: Buffer.from(r.data).toString("base64")
-      });
-    }
 
     // Raw binary fallback
     res.setHeader("Content-Type", "application/octet-stream");
