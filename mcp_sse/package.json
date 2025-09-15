@@ -4,9 +4,10 @@
   "type": "module",
   "main": "index.js",
   "scripts": { "start": "node index.js" },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "0.6.2",
-    "axios": "^1.6.7"
-  }
+"dependencies": {
+  "@modelcontextprotocol/sdk": "0.6.2",
+  "axios": "^1.6.7",
+  "express": "^4.19.2",
+  "node-fetch": "^3.3.2"
 }
 
