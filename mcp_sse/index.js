@@ -1,3 +1,4 @@
+// Dropbox REST + GPT Actions server (refresh-token enabled)
 import express from "express";
 import axios from "axios";
 
@@ -7,7 +8,7 @@ const {
   DROPBOX_APP_SECRET,
   DROPBOX_REFRESH_TOKEN,
   SERVER_API_KEY,
-  PORT = process.env.PORT || 3000
+  PORT = process.env.PORT || 10000
 } = process.env;
 
 if (!DROPBOX_APP_KEY || !DROPBOX_APP_SECRET || !DROPBOX_REFRESH_TOKEN) {
@@ -15,7 +16,10 @@ if (!DROPBOX_APP_KEY || !DROPBOX_APP_SECRET || !DROPBOX_REFRESH_TOKEN) {
   process.exit(1);
 }
 
-const TOKEN_URL = "https://api.dropboxapi.com/oauth2/token";
+const TOKEN_URL   = "https://api.dropboxapi.com/oauth2/token";
+const DBX_RPC     = "https://api.dropboxapi.com/2";
+const DBX_CONTENT = "https://content.dropboxapi.com/2";
+
 let _accessToken = null;
 
 async function refreshAccessToken() {
@@ -49,9 +53,6 @@ async function withAuth(fn) {
   }
 }
 
-const DBX_RPC = "https://api.dropboxapi.com/2";
-const DBX_CONTENT = "https://content.dropboxapi.com/2";
-
 function normPath(p) {
   let s = String(p || "").trim();
   if (s === "/" || s === "") return "";
@@ -68,31 +69,26 @@ function normalizeEntries(entries) {
   }));
 }
 
-async function dbxListFolder({ path, recursive, limit }) {
-  return withAuth(token =>
-    axios.post(
-      `${DBX_RPC}/files/list_folder`,
+// RPC wrappers
+const dbxListFolder = ({ path, recursive, limit }) =>
+  withAuth(token =>
+    axios.post(`${DBX_RPC}/files/list_folder`,
       { path, recursive: !!recursive, include_deleted: false, limit },
-      { headers: { Authorization: `Bearer ${token}` }, timeout: 60000 }
-    )
+      { headers: { Authorization: `Bearer ${token}` }, timeout: 60000 })
   );
-}
-async function dbxListContinue(cursor) {
-  return withAuth(token =>
-    axios.post(`${DBX_RPC}/files/list_folder/continue`, { cursor }, { headers: { Authorization: `Bearer ${token}` }, timeout: 60000 })
+const dbxListContinue = (cursor) =>
+  withAuth(token =>
+    axios.post(`${DBX_RPC}/files/list_folder/continue`,
+      { cursor }, { headers: { Authorization: `Bearer ${token}` }, timeout: 60000 })
   );
-}
-async function dbxGetMetadata(path) {
-  return withAuth(token =>
-    axios.post(
-      `${DBX_RPC}/files/get_metadata`,
+const dbxGetMetadata = (path) =>
+  withAuth(token =>
+    axios.post(`${DBX_RPC}/files/get_metadata`,
       { path, include_media_info: false, include_deleted: false },
-      { headers: { Authorization: `Bearer ${token}` }, timeout: 30000 }
-    )
+      { headers: { Authorization: `Bearer ${token}` }, timeout: 30000 })
   );
-}
-async function dbxDownload({ path, rangeStart = null, rangeEnd = null }) {
-  return withAuth(token =>
+const dbxDownload = ({ path, rangeStart = null, rangeEnd = null }) =>
+  withAuth(token =>
     axios.post(`${DBX_CONTENT}/files/download`, null, {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -103,21 +99,22 @@ async function dbxDownload({ path, rangeStart = null, rangeEnd = null }) {
       timeout: 120000
     })
   );
-}
 
+// App
 const app = express();
 app.use(express.json());
 
-// Simple API key gate for all /mcp/* and /sse
+// API key gate for /mcp/* (and /sse if you add it later)
 app.use((req, res, next) => {
   if (!SERVER_API_KEY) return next();
-  if (req.path.startsWith("/mcp") || req.path === "/sse") {
+  if (req.path.startsWith("/mcp")) {
     const key = req.headers["x-api-key"];
     if (key !== SERVER_API_KEY) return res.status(403).json({ error: "Forbidden" });
   }
   next();
 });
 
+// Routes
 app.get("/mcp/healthz", (_req, res) => res.json({ ok: true, root: DBX_ROOT_PREFIX }));
 
 app.post("/mcp/walk", async (req, res) => {
@@ -169,15 +166,9 @@ app.post("/mcp/get", async (req, res) => {
   } catch (e) { res.status(502).json({ ok:false, message:e.message, data:e?.response?.data || null }); }
 });
 
-// (Optional) keep your SSE MCP endpoint if you still use it:
-import { SSEServer } from "@modelcontextprotocol/sdk/server/sse/index.js";
-const sse = new SSEServer({ name: "dbx-mcp-sse", version: "1.1.0" }, { tools: [] });
-app.get("/sse", (req, res) => {
-  if (SERVER_API_KEY && req.headers["x-api-key"] !== SERVER_API_KEY) return res.status(403).end("Forbidden");
-  sse.handle(req, res);
-});
-
-app.listen(PORT, () => console.log(`DBX REST on ${PORT} root=${DBX_ROOT_PREFIX} ROUTES: /mcp/healthz /mcp/walk /mcp/list /mcp/meta /mcp/get /sse`));
+app.listen(PORT, () =>
+  console.log(`DBX REST on ${PORT} root=${DBX_ROOT_PREFIX} ROUTES: /mcp/healthz /mcp/walk /mcp/list /mcp/meta /mcp/get`)
+);
 
 
 
