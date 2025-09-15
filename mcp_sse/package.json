@@ -1,14 +1,14 @@
 {
-  "name": "dbx-mcp-sse",
+  "name": "dbx-api",
   "version": "1.0.0",
   "type": "module",
   "main": "index.js",
   "scripts": { "start": "node index.js" },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "0.6.2",
     "axios": "^1.6.7",
     "express": "^4.19.2"
   }
 }
+
 
 
