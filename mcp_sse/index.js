@@ -1,7 +1,6 @@
 // Dropbox REST API for GPT Actions (refresh-token enabled)
 import express from "express";
 import axios from "axios";
-import fetch from "node-fetch"; // make sure you have node-fetch in package.json if Node <18
 
 const {
   DBX_ROOT_PREFIX = "/Project_Root/GPT_Files",
