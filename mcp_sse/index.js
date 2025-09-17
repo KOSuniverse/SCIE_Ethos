@@ -254,6 +254,97 @@ app.post("/mcp/head", async (req, res) => {
   }
 });
 
+// --- Orchestrator: routeThenAnswer (NL query -> skills) ---
+app.post("/routeThenAnswer", async (req, res) => {
+  try {
+    const { query, context = {} } = req.body || {};
+    if (!query || typeof query !== "string") return res.status(400).json({ error: "query required" });
+
+    const q = query.trim().toLowerCase();
+    const path_prefix = context.path_prefix || DBX_ROOT_PREFIX;
+
+    // classify (minimal rules; extend later)
+    let intent = "Browse";
+    if (/(list|show)\s+(folders|files)/.test(q)) intent = "Browse";
+    else if (/(search|find)/.test(q)) intent = "Search";
+    else if (/(open|view|preview)/.test(q)) intent = "Preview";
+    else if (/(download|get file|fetch)/.test(q)) intent = "Download";
+    else if (/(forecast|service level|lead time|demand)/.test(q)) intent = "Forecasting_Policy";
+    else if (/(root cause|why|driver|rca)/.test(q)) intent = "Root_Cause";
+    else if (/(compare|delta|shift)/.test(q)) intent = "Comparison";
+
+    const used_ops = [];
+    let text = "Unsupported intent for now.";
+    let artifacts = [];
+
+    if (intent === "Browse") {
+      // top-level by default
+      const r = await dbxListFolder({ path: normPath(path_prefix), recursive: false, limit: 2000 });
+      const entries = normalizeEntries(r.data.entries || []).slice(0, 50);
+      used_ops.push("list");
+      text = `Top entries in ${path_prefix} (showing ${entries.length}):\n` + entries.map(e => `• ${e.name} (${e.mime})`).join("\n");
+      artifacts = entries;
+    }
+
+    else if (intent === "Search") {
+      // pull a term from the query (very simple)
+      const m = q.match(/(?:search|find)\s+(.+)/);
+      const term = m ? m[1].trim() : q;
+      const r = await dbxListFolder({ path: normPath(path_prefix), recursive: true, limit: 2000 });
+      const all = normalizeEntries(r.data.entries || []);
+      const hits = all.filter(e => (e.name||"").toLowerCase().includes(term) || (e.path||"").toLowerCase().includes(term)).slice(0, 50);
+      used_ops.push("walk");
+      text = hits.length ? `Found ${hits.length} match(es) for “${term}” (showing ${hits.length <= 50 ? hits.length : 50}).` : `No matches for “${term}”.`;
+      artifacts = hits;
+    }
+
+    else if (intent === "Preview") {
+      // try to extract a path from quotes or assume the last token looks like a path
+      const m = query.match(/["“](.+?)["”]/);
+      const path = m ? m[1] : null;
+      if (!path) {
+        text = 'Preview needs a path in quotes, e.g., preview "/project_root/gpt_files/05_Alias_Map.yaml".';
+      } else {
+        const r = await dbxDownload({ path: String(path), rangeStart: 0, rangeEnd: 200000 });
+        used_ops.push("head");
+        if (!r.ok) return res.json({ text: `Preview failed (${r.status}).`, answer: { intent, used_ops, artifacts: [] }});
+        const ct = r.headers["content-type"] || "application/octet-stream";
+        let preview = null, note = null;
+        if (/^text\/|json|yaml|csv/i.test(ct)) preview = r.data.toString("utf8");
+        else if (/excel|spreadsheet|octet-stream/i.test(ct)) note = "binary (excel?) – showing bytes only";
+        else if (/pdf/i.test(ct)) note = "pdf – not parsed";
+        text = `Preview of ${path} (${ct}):` + (preview ? `\n\n${preview.slice(0, 2000)}` : `\n(${note || "binary"})`);
+        artifacts = [{ path, content_type: ct, size_bytes: r.data.length }];
+      }
+    }
+
+    else if (intent === "Download") {
+      const m = query.match(/["“](.+?)["”]/);
+      const path = m ? m[1] : null;
+      if (!path) {
+        text = 'Download needs a path in quotes, e.g., download "/project_root/gpt_files/05_Alias_Map.yaml".';
+      } else {
+        const r = await dbxDownload({ path: String(path) });
+        used_ops.push("get");
+        if (!r.ok) return res.json({ text: `Download failed (${r.status}).`, answer: { intent, used_ops, artifacts: [] }});
+        text = `Downloaded ${path} (${r.data.length} bytes).`;
+        artifacts = [{ path, size_bytes: r.data.length, content_type: r.headers["content-type"] || null, data_base64: r.data.toString("base64") }];
+      }
+    }
+
+    // stubs for later (keep the contract; return abstain so Jarvis can hand off to specialist GPTs if you want)
+    else if (intent === "Forecasting_Policy" || intent === "Root_Cause" || intent === "Comparison") {
+      text = `Orchestrator: intent detected = ${intent}. Backend skill not wired yet. Provide target file(s)/SKU/period and I’ll run it next.`;
+    }
+
+    return res.json({ text, answer: { intent, used_ops, artifacts } });
+  } catch (e) {
+    console.error("routeThenAnswer error", e?.message);
+    res.status(500).json({ error: "router_error", message: e?.message });
+  }
+});
+
+
 /* ---------- Start ---------- */
 app.listen(PORT, () =>
   console.log(`DBX REST on ${PORT} root=${DBX_ROOT_PREFIX} ROUTES: /mcp/healthz /mcp/walk /mcp/list /mcp/meta /mcp/get /mcp/search_names /mcp/head`)
