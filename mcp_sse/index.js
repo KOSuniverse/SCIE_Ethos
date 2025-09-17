@@ -1,4 +1,4 @@
-// Dropbox REST for GPT Actions (refresh-token enabled)
+// Dropbox REST API for GPT Actions (refresh-token enabled)
 import express from "express";
 import axios from "axios";
 
@@ -22,6 +22,7 @@ const DBX_CONTENT = "https://content.dropboxapi.com/2";
 
 let _accessToken = null;
 
+// ---- Refresh access token ----
 async function refreshAccessToken() {
   const r = await axios.post(
     TOKEN_URL,
@@ -38,6 +39,7 @@ async function refreshAccessToken() {
   return _accessToken;
 }
 
+// ---- Wrapper to auto-refresh on 401/expired ----
 async function withAuth(fn) {
   if (!_accessToken) await refreshAccessToken();
   try {
@@ -56,21 +58,24 @@ async function withAuth(fn) {
   }
 }
 
+// ---- Helpers ----
 const normPath = (p) => {
   let s = String(p || "").trim();
   if (s === "/" || s === "") return "";
   if (!s.startsWith("/")) s = "/" + s;
   return s;
 };
+
 const normalizeEntries = (entries) =>
   (entries || []).map((e) => ({
     path: e.path_display || e.path_lower,
     name: e.name,
     size: e.size ?? null,
     modified: e.server_modified ?? null,
-    mime: e[".tag"] === "file" ? e.mime_type ?? null : "folder",
+    mime: e[".tag"] === "file" ? e.mime_type ?? null : "folder"
   }));
 
+// ---- Dropbox RPC wrappers ----
 const dbxListFolder = ({ path, recursive, limit }) =>
   withAuth((token) =>
     axios.post(
@@ -79,6 +84,7 @@ const dbxListFolder = ({ path, recursive, limit }) =>
       { headers: { Authorization: `Bearer ${token}` }, timeout: 60000 }
     )
   );
+
 const dbxListContinue = (cursor) =>
   withAuth((token) =>
     axios.post(
@@ -87,6 +93,7 @@ const dbxListContinue = (cursor) =>
       { headers: { Authorization: `Bearer ${token}` }, timeout: 60000 }
     )
   );
+
 const dbxGetMetadata = (path) =>
   withAuth((token) =>
     axios.post(
@@ -95,26 +102,32 @@ const dbxGetMetadata = (path) =>
       { headers: { Authorization: `Bearer ${token}` }, timeout: 30000 }
     )
   );
+
 const dbxDownload = ({ path, rangeStart = null, rangeEnd = null }) =>
   withAuth((token) =>
-    axios.post(`${DBX_CONTENT}/files/download`, null, {
+    axios.post(`${DBX_CONTENT}/files/download`, undefined, {
       headers: {
         Authorization: `Bearer ${token}`,
         "Dropbox-API-Arg": JSON.stringify({ path }),
         ...(rangeStart != null && rangeEnd != null
           ? { Range: `bytes=${rangeStart}-${rangeEnd - 1}` }
-          : {}),
+          : {})
       },
       responseType: "arraybuffer",
-      timeout: 120000,
+      // strip any accidental content-type header
+      transformRequest: [(data, headers) => {
+        delete headers["Content-Type"];
+        return data;
+      }],
+      timeout: 120000
     })
   );
 
-// --- Express app ---
+// ---- Express app ----
 const app = express();
 app.use(express.json());
 
-// Gate /mcp/* with API key
+// API key gate for /mcp/*
 app.use((req, res, next) => {
   if (!SERVER_API_KEY) return next();
   if (req.path.startsWith("/mcp")) {
@@ -125,24 +138,32 @@ app.use((req, res, next) => {
 });
 
 // Health
-app.get("/mcp/healthz", (_req, res) => res.json({ ok: true, root: DBX_ROOT_PREFIX }));
+app.get("/mcp/healthz", (_req, res) =>
+  res.json({ ok: true, root: DBX_ROOT_PREFIX })
+);
 
 // Recursive walk
 app.post("/mcp/walk", async (req, res) => {
   try {
     const { path_prefix = DBX_ROOT_PREFIX, max_items = 2000, cursor } = req.body || {};
     let entries = [], next = cursor || null;
+
     if (!next) {
       const r = await dbxListFolder({
         path: normPath(path_prefix),
         recursive: true,
-        limit: Math.min(max_items, 2000),
+        limit: Math.min(max_items, 2000)
       });
-      const j = r.data; entries = j.entries || []; next = j.has_more ? j.cursor : null;
+      const j = r.data;
+      entries = j.entries || [];
+      next = j.has_more ? j.cursor : null;
     } else {
       const r = await dbxListContinue(next);
-      const j = r.data; entries = j.entries || []; next = j.has_more ? j.cursor : null;
+      const j = r.data;
+      entries = j.entries || [];
+      next = j.has_more ? j.cursor : null;
     }
+
     res.json({ entries: normalizeEntries(entries), next_cursor: next, truncated: !!next });
   } catch (e) {
     res.status(502).json({ ok: false, message: e.message, data: e?.response?.data || null });
@@ -158,7 +179,7 @@ app.get("/mcp/list", async (req, res) => {
     res.json({
       entries: normalizeEntries(j.entries || []),
       truncated: j.has_more,
-      next_cursor: j.has_more ? j.cursor : null,
+      next_cursor: j.has_more ? j.cursor : null
     });
   } catch (e) {
     res.status(502).json({ ok: false, message: e.message, data: e?.response?.data || null });
@@ -183,20 +204,9 @@ app.post("/mcp/get", async (req, res) => {
     const { path, range_start = null, range_end = null } = req.body || {};
     if (!path) return res.status(400).json({ error: "path required" });
 
-    const r = await withAuth((token) =>
-      axios.post("https://content.dropboxapi.com/2/files/download", null, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Dropbox-API-Arg": JSON.stringify({ path }),
-          ...(range_start != null && range_end != null
-            ? { Range: `bytes=${range_start}-${range_end - 1}` }
-            : {})
-        },
-        responseType: "arraybuffer"
-      })
-    );
-
+    const r = await dbxDownload({ path: String(path), rangeStart: range_start, rangeEnd: range_end });
     const buf = Buffer.from(r.data);
+
     res.json({
       ok: true,
       path,
@@ -207,7 +217,7 @@ app.post("/mcp/get", async (req, res) => {
   } catch (e) {
     const status = e?.response?.status;
     const data = e?.response?.data;
-    console.error("DROPBOX GET error", status, data);  // 👈 add this
+    console.error("DROPBOX GET error", status, data);
     res.status(502).json({
       ok: false,
       message: e.message,
@@ -217,11 +227,11 @@ app.post("/mcp/get", async (req, res) => {
   }
 });
 
+// ---- Start server ----
 app.listen(PORT, () =>
-  console.log(
-    `DBX REST on ${PORT} root=${DBX_ROOT_PREFIX} ROUTES: /mcp/healthz /mcp/walk /mcp/list /mcp/meta /mcp/get`
-  )
+  console.log(`DBX REST on ${PORT} root=${DBX_ROOT_PREFIX} ROUTES: /mcp/healthz /mcp/walk /mcp/list /mcp/meta /mcp/get`)
 );
+
 
 
 
