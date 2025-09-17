@@ -183,18 +183,15 @@ app.post("/mcp/get", async (req, res) => {
     const { path, range_start = null, range_end = null } = req.body || {};
     if (!path) return res.status(400).json({ error: "path required" });
 
-    const headers = {
-      Authorization: `Bearer ${_accessToken}`,
-      "Dropbox-API-Arg": JSON.stringify({ path })
-    };
-
-    if (range_start != null && range_end != null) {
-      headers.Range = `bytes=${range_start}-${range_end - 1}`;
-    }
-
-    const r = await withAuth(token =>
+    const r = await withAuth(async (token) =>
       axios.post("https://content.dropboxapi.com/2/files/download", null, {
-        headers: { ...headers, Authorization: `Bearer ${token}` },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Dropbox-API-Arg": JSON.stringify({ path }),
+          ...(range_start != null && range_end != null
+            ? { Range: `bytes=${range_start}-${range_end - 1}` }
+            : {})
+        },
         responseType: "arraybuffer"
       })
     );
@@ -203,12 +200,15 @@ app.post("/mcp/get", async (req, res) => {
     res.json({
       ok: true,
       path,
-      size_bytes: buf.length,
       content_type: r.headers["content-type"] || null,
+      size_bytes: buf.length,
       data_base64: buf.toString("base64")
     });
   } catch (e) {
-    res.status(502).json({ ok: false, message: e.message, data: e?.response?.data || null });
+    const status = e?.response?.status || null;
+    const data   = e?.response?.data || e?.message;
+    console.error("DROPBOX GET error", status, data);
+    res.status(502).json({ ok: false, status, data });
   }
 });
 
