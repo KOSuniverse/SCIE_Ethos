@@ -1,6 +1,7 @@
 // Dropbox REST API for GPT Actions (refresh-token enabled)
 import express from "express";
 import axios from "axios";
+import fetch from "node-fetch"; // make sure you have node-fetch in package.json if Node <18
 
 const {
   DBX_ROOT_PREFIX = "/Project_Root/GPT_Files",
@@ -103,25 +104,32 @@ const dbxGetMetadata = (path) =>
     )
   );
 
-const dbxDownload = ({ path, rangeStart = null, rangeEnd = null }) =>
-  withAuth((token) =>
-    axios.post(`${DBX_CONTENT}/files/download`, undefined, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Dropbox-API-Arg": JSON.stringify({ path }),
-        ...(rangeStart != null && rangeEnd != null
-          ? { Range: `bytes=${rangeStart}-${rangeEnd - 1}` }
-          : {})
-      },
-      responseType: "arraybuffer",
-      // strip any accidental content-type header
-      transformRequest: [(data, headers) => {
-        delete headers["Content-Type"];
-        return data;
-      }],
-      timeout: 120000
-    })
-  );
+// ---- Dropbox download via fetch ----
+const dbxDownload = async ({ path, rangeStart = null, rangeEnd = null }) =>
+  withAuth(async (token) => {
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      "Dropbox-API-Arg": JSON.stringify({ path })
+    };
+    if (rangeStart != null && rangeEnd != null) {
+      headers.Range = `bytes=${rangeStart}-${rangeEnd - 1}`;
+    }
+
+    const r = await fetch(`${DBX_CONTENT}/files/download`, {
+      method: "POST",
+      headers,
+      body: null
+    });
+
+    const ab = await r.arrayBuffer();
+    return {
+      ok: r.ok,
+      status: r.status,
+      headers: { "content-type": r.headers.get("content-type") },
+      data: Buffer.from(ab),
+      text: r.ok ? null : (await r.text().catch(() => null))
+    };
+  });
 
 // ---- Express app ----
 const app = express();
@@ -205,25 +213,24 @@ app.post("/mcp/get", async (req, res) => {
     if (!path) return res.status(400).json({ error: "path required" });
 
     const r = await dbxDownload({ path: String(path), rangeStart: range_start, rangeEnd: range_end });
-    const buf = Buffer.from(r.data);
+
+    if (!r.ok) {
+      console.error("DROPBOX GET non-2xx", r.status, r.text);
+      return res.status(502).json({ ok: false, status: r.status, data: r.text });
+    }
 
     res.json({
       ok: true,
       path,
       content_type: r.headers["content-type"] || null,
-      size_bytes: buf.length,
-      data_base64: buf.toString("base64")
+      size_bytes: r.data.length,
+      data_base64: r.data.toString("base64")
     });
   } catch (e) {
-    const status = e?.response?.status;
-    const data = e?.response?.data;
+    const status = e?.response?.status ?? null;
+    const data = e?.response?.data ?? e.message;
     console.error("DROPBOX GET error", status, data);
-    res.status(502).json({
-      ok: false,
-      message: e.message,
-      status,
-      data
-    });
+    res.status(502).json({ ok: false, status, data });
   }
 });
 
@@ -231,6 +238,7 @@ app.post("/mcp/get", async (req, res) => {
 app.listen(PORT, () =>
   console.log(`DBX REST on ${PORT} root=${DBX_ROOT_PREFIX} ROUTES: /mcp/healthz /mcp/walk /mcp/list /mcp/meta /mcp/get`)
 );
+
 
 
 
