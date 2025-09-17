@@ -182,14 +182,30 @@ app.post("/mcp/get", async (req, res) => {
   try {
     const { path, range_start = null, range_end = null } = req.body || {};
     if (!path) return res.status(400).json({ error: "path required" });
-    const r = await dbxDownload({ path: String(path), rangeStart: range_start, rangeEnd: range_end });
+
+    const headers = {
+      Authorization: `Bearer ${_accessToken}`,
+      "Dropbox-API-Arg": JSON.stringify({ path })
+    };
+
+    if (range_start != null && range_end != null) {
+      headers.Range = `bytes=${range_start}-${range_end - 1}`;
+    }
+
+    const r = await withAuth(token =>
+      axios.post("https://content.dropboxapi.com/2/files/download", null, {
+        headers: { ...headers, Authorization: `Bearer ${token}` },
+        responseType: "arraybuffer"
+      })
+    );
+
     const buf = Buffer.from(r.data);
     res.json({
       ok: true,
       path,
-      content_type: r.headers["content-type"] || null,
       size_bytes: buf.length,
-      data_base64: buf.toString("base64"),
+      content_type: r.headers["content-type"] || null,
+      data_base64: buf.toString("base64")
     });
   } catch (e) {
     res.status(502).json({ ok: false, message: e.message, data: e?.response?.data || null });
