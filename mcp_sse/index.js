@@ -1,4 +1,4 @@
-// Dropbox REST API for GPT Actions (refresh-token enabled) — COMPLETE DROP-IN
+// Dropbox REST API for GPT Actions (refresh-token enabled) — COMPLETE DROP-IN + INDEX BUILDER
 import express from "express";
 import axios from "axios";
 
@@ -99,7 +99,7 @@ const dbxGetMetadata = (path) =>
     )
   );
 
-/* ---------- Dropbox download via global fetch (no Content-Type) ---------- */
+/* ---------- Dropbox CONTENT helpers (global fetch; no Content-Type) ---------- */
 const dbxDownload = async ({ path, rangeStart = null, rangeEnd = null }) =>
   withAuth(async (token) => {
     const headers = {
@@ -120,14 +120,29 @@ const dbxDownload = async ({ path, rangeStart = null, rangeEnd = null }) =>
     };
   });
 
+const dbxUpload = ({ path, bytes }) =>
+  withAuth(async (token) => {
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      "Dropbox-API-Arg": JSON.stringify({ path, mode: "overwrite", mute: true, autorename: false }),
+      "Content-Type": "application/octet-stream"
+    };
+    const r = await fetch(`${DBX_CONTENT}/files/upload`, { method: "POST", headers, body: bytes });
+    if (!r.ok) {
+      const t = await r.text().catch(() => null);
+      throw new Error(`upload_failed: ${r.status} ${t || ""}`);
+    }
+    return r.json();
+  });
+
 /* ---------- Express app ---------- */
 const app = express();
 app.use(express.json());
 
-// API key gate for /mcp/*
+// API key gate for /mcp/* and /routeThenAnswer
 app.use((req, res, next) => {
   if (!SERVER_API_KEY) return next();
-  if (req.path.startsWith("/mcp")) {
+  if (req.path.startsWith("/mcp") || req.path === "/routeThenAnswer") {
     const key = req.headers["x-api-key"];
     if (key !== SERVER_API_KEY) return res.status(403).json({ error: "Forbidden" });
   }
@@ -209,7 +224,6 @@ app.post("/mcp/get", async (req, res) => {
   }
 });
 
-/* ---------- OPTIONAL: Query helpers ---------- */
 // Fast name/path search within a subtree
 app.post("/mcp/search_names", async (req, res) => {
   try {
@@ -218,7 +232,10 @@ app.post("/mcp/search_names", async (req, res) => {
     const r = await dbxListFolder({ path: normPath(path_prefix), recursive: true, limit: 2000 });
     const all = normalizeEntries(r.data.entries || []);
     const qq = String(q).toLowerCase();
-    const hits = all.filter(e => (e.name||"").toLowerCase().includes(qq) || (e.path||"").toLowerCase().includes(qq));
+    const hits = all.filter(e =>
+      (e.name || "").toLowerCase().includes(qq) ||
+      (e.path || "").toLowerCase().includes(qq)
+    );
     res.json({ entries: hits.slice(0, limit), total: hits.length });
   } catch (e) {
     res.status(502).json({ ok: false, message: e.message, data: e?.response?.data || null });
@@ -254,7 +271,67 @@ app.post("/mcp/head", async (req, res) => {
   }
 });
 
-// --- Orchestrator: routeThenAnswer (NL query -> skills) ---
+/* ---------- INDEX BUILDER (recurses nested; skips .zip) ---------- */
+app.post("/mcp/index", async (req, res) => {
+  try {
+    const {
+      path_prefix = DBX_ROOT_PREFIX,
+      output_csv_path = null,
+      output_json_path = null,
+      limit = 200000
+    } = req.body || {};
+
+    // page whole subtree
+    let cursor = null, raw = [];
+    {
+      const r = await dbxListFolder({ path: normPath(path_prefix), recursive: true, limit: 2000 });
+      const j = r.data; raw.push(...(j.entries || [])); cursor = j.has_more ? j.cursor : null;
+    }
+    while (cursor && raw.length < limit) {
+      const r = await dbxListContinue(cursor);
+      const j = r.data; raw.push(...(j.entries || [])); cursor = j.has_more ? j.cursor : null;
+    }
+
+    // normalize + skip .zip
+    const entries = normalizeEntries(raw).filter(e => {
+      if (!e.path) return false;
+      return !/\.zip$/i.test(e.path); // skip zip files
+    });
+
+    // make rows
+    const rows = entries.map(e => ({
+      name: e.name, path: e.path, mime: e.mime, size: e.size, modified: e.modified
+    }));
+
+    // CSV (safe quoting)
+    const csvHeader = "name,path,mime,size,modified\n";
+    const csvBody = rows.map(r => [
+      r.name, r.path, r.mime || "", r.size || "", r.modified || ""
+    ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const csvBytes = Buffer.from(csvHeader + csvBody, "utf8");
+    const jsonBytes = Buffer.from(JSON.stringify(rows), "utf8");
+
+    const artifacts = { total: rows.length, truncated: !!cursor, path_prefix };
+    if (output_csv_path) {
+      await dbxUpload({ path: output_csv_path, bytes: csvBytes });
+      artifacts.csv_saved = output_csv_path;
+    }
+    if (output_json_path) {
+      await dbxUpload({ path: output_json_path, bytes: jsonBytes });
+      artifacts.json_saved = output_json_path;
+    }
+
+    res.json({
+      ok: true,
+      stats: artifacts,
+      csv_head: (csvHeader + csvBody).slice(0, 2000)
+    });
+  } catch (e) {
+    res.status(502).json({ ok:false, message: e.message, data: e?.response?.data || null });
+  }
+});
+
+/* ---------- Orchestrator: routeThenAnswer (NL query -> skills) ---------- */
 app.post("/routeThenAnswer", async (req, res) => {
   try {
     const { query, context = {} } = req.body || {};
@@ -278,16 +355,12 @@ app.post("/routeThenAnswer", async (req, res) => {
     let artifacts = [];
 
     if (intent === "Browse") {
-      // top-level by default
       const r = await dbxListFolder({ path: normPath(path_prefix), recursive: false, limit: 2000 });
       const entries = normalizeEntries(r.data.entries || []).slice(0, 50);
       used_ops.push("list");
       text = `Top entries in ${path_prefix} (showing ${entries.length}):\n` + entries.map(e => `• ${e.name} (${e.mime})`).join("\n");
       artifacts = entries;
-    }
-
-    else if (intent === "Search") {
-      // pull a term from the query (very simple)
+    } else if (intent === "Search") {
       const m = q.match(/(?:search|find)\s+(.+)/);
       const term = m ? m[1].trim() : q;
       const r = await dbxListFolder({ path: normPath(path_prefix), recursive: true, limit: 2000 });
@@ -296,10 +369,7 @@ app.post("/routeThenAnswer", async (req, res) => {
       used_ops.push("walk");
       text = hits.length ? `Found ${hits.length} match(es) for “${term}” (showing ${hits.length <= 50 ? hits.length : 50}).` : `No matches for “${term}”.`;
       artifacts = hits;
-    }
-
-    else if (intent === "Preview") {
-      // try to extract a path from quotes or assume the last token looks like a path
+    } else if (intent === "Preview") {
       const m = query.match(/["“](.+?)["”]/);
       const path = m ? m[1] : null;
       if (!path) {
@@ -316,9 +386,7 @@ app.post("/routeThenAnswer", async (req, res) => {
         text = `Preview of ${path} (${ct}):` + (preview ? `\n\n${preview.slice(0, 2000)}` : `\n(${note || "binary"})`);
         artifacts = [{ path, content_type: ct, size_bytes: r.data.length }];
       }
-    }
-
-    else if (intent === "Download") {
+    } else if (intent === "Download") {
       const m = query.match(/["“](.+?)["”]/);
       const path = m ? m[1] : null;
       if (!path) {
@@ -330,10 +398,7 @@ app.post("/routeThenAnswer", async (req, res) => {
         text = `Downloaded ${path} (${r.data.length} bytes).`;
         artifacts = [{ path, size_bytes: r.data.length, content_type: r.headers["content-type"] || null, data_base64: r.data.toString("base64") }];
       }
-    }
-
-    // stubs for later (keep the contract; return abstain so Jarvis can hand off to specialist GPTs if you want)
-    else if (intent === "Forecasting_Policy" || intent === "Root_Cause" || intent === "Comparison") {
+    } else if (intent === "Forecasting_Policy" || intent === "Root_Cause" || intent === "Comparison") {
       text = `Orchestrator: intent detected = ${intent}. Backend skill not wired yet. Provide target file(s)/SKU/period and I’ll run it next.`;
     }
 
@@ -344,9 +409,11 @@ app.post("/routeThenAnswer", async (req, res) => {
   }
 });
 
-
 /* ---------- Start ---------- */
 app.listen(PORT, () =>
-  console.log(`DBX REST on ${PORT} root=${DBX_ROOT_PREFIX} ROUTES: /mcp/healthz /mcp/walk /mcp/list /mcp/meta /mcp/get /mcp/search_names /mcp/head`)
+  console.log(
+    `DBX REST on ${PORT} root=${DBX_ROOT_PREFIX} ROUTES: /mcp/healthz /mcp/walk /mcp/list /mcp/meta /mcp/get /mcp/search_names /mcp/head /mcp/index`
+  )
 );
+
 
