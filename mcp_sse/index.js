@@ -183,7 +183,7 @@ app.post("/mcp/get", async (req, res) => {
     const { path, range_start = null, range_end = null } = req.body || {};
     if (!path) return res.status(400).json({ error: "path required" });
 
-    const r = await withAuth(async (token) =>
+    const r = await withAuth((token) =>
       axios.post("https://content.dropboxapi.com/2/files/download", null, {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -205,10 +205,15 @@ app.post("/mcp/get", async (req, res) => {
       data_base64: buf.toString("base64")
     });
   } catch (e) {
-    const status = e?.response?.status || null;
-    const data   = e?.response?.data || e?.message;
-    console.error("DROPBOX GET error", status, data);
-    res.status(502).json({ ok: false, status, data });
+    const status = e?.response?.status;
+    const data = e?.response?.data;
+    console.error("DROPBOX GET error", status, data);  // 👈 add this
+    res.status(502).json({
+      ok: false,
+      message: e.message,
+      status,
+      data
+    });
   }
 });
 
