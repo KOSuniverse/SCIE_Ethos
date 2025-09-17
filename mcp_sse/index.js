@@ -1,4 +1,4 @@
-// Dropbox REST API for GPT Actions (refresh-token enabled)
+// Dropbox REST API for GPT Actions (refresh-token enabled) — COMPLETE DROP-IN
 import express from "express";
 import axios from "axios";
 
@@ -22,7 +22,7 @@ const DBX_CONTENT = "https://content.dropboxapi.com/2";
 
 let _accessToken = null;
 
-// ---- Refresh access token ----
+/* ---------- OAuth refresh ---------- */
 async function refreshAccessToken() {
   const r = await axios.post(
     TOKEN_URL,
@@ -39,7 +39,6 @@ async function refreshAccessToken() {
   return _accessToken;
 }
 
-// ---- Wrapper to auto-refresh on 401/expired ----
 async function withAuth(fn) {
   if (!_accessToken) await refreshAccessToken();
   try {
@@ -48,17 +47,14 @@ async function withAuth(fn) {
     const body = e?.response?.data;
     const txt = typeof body === "string" ? body : JSON.stringify(body || {});
     const status = e?.response?.status;
-    const expired =
-      status === 401 ||
-      (status === 400 && txt.includes("expired_access_token")) ||
-      txt.includes("invalid_access_token");
+    const expired = status === 401 || (status === 400 && txt.includes("expired_access_token")) || txt.includes("invalid_access_token");
     if (!expired) throw e;
     await refreshAccessToken();
     return fn(_accessToken);
   }
 }
 
-// ---- Helpers ----
+/* ---------- Helpers ---------- */
 const normPath = (p) => {
   let s = String(p || "").trim();
   if (s === "/" || s === "") return "";
@@ -75,7 +71,7 @@ const normalizeEntries = (entries) =>
     mime: e[".tag"] === "file" ? e.mime_type ?? null : "folder"
   }));
 
-// ---- Dropbox RPC wrappers ----
+/* ---------- Dropbox RPC wrappers ---------- */
 const dbxListFolder = ({ path, recursive, limit }) =>
   withAuth((token) =>
     axios.post(
@@ -103,7 +99,7 @@ const dbxGetMetadata = (path) =>
     )
   );
 
-// ---- Dropbox download via fetch ----
+/* ---------- Dropbox download via global fetch (no Content-Type) ---------- */
 const dbxDownload = async ({ path, rangeStart = null, rangeEnd = null }) =>
   withAuth(async (token) => {
     const headers = {
@@ -113,13 +109,7 @@ const dbxDownload = async ({ path, rangeStart = null, rangeEnd = null }) =>
     if (rangeStart != null && rangeEnd != null) {
       headers.Range = `bytes=${rangeStart}-${rangeEnd - 1}`;
     }
-
-    const r = await fetch(`${DBX_CONTENT}/files/download`, {
-      method: "POST",
-      headers,
-      body: null
-    });
-
+    const r = await fetch(`${DBX_CONTENT}/files/download`, { method: "POST", headers, body: null });
     const ab = await r.arrayBuffer();
     return {
       ok: r.ok,
@@ -130,7 +120,7 @@ const dbxDownload = async ({ path, rangeStart = null, rangeEnd = null }) =>
     };
   });
 
-// ---- Express app ----
+/* ---------- Express app ---------- */
 const app = express();
 app.use(express.json());
 
@@ -144,31 +134,22 @@ app.use((req, res, next) => {
   next();
 });
 
+/* ---------- Routes ---------- */
 // Health
-app.get("/mcp/healthz", (_req, res) =>
-  res.json({ ok: true, root: DBX_ROOT_PREFIX })
-);
+app.get("/mcp/healthz", (_req, res) => res.json({ ok: true, root: DBX_ROOT_PREFIX }));
 
-// Recursive walk
+// Recursive walk (paged via cursor)
 app.post("/mcp/walk", async (req, res) => {
   try {
     const { path_prefix = DBX_ROOT_PREFIX, max_items = 2000, cursor } = req.body || {};
     let entries = [], next = cursor || null;
 
     if (!next) {
-      const r = await dbxListFolder({
-        path: normPath(path_prefix),
-        recursive: true,
-        limit: Math.min(max_items, 2000)
-      });
-      const j = r.data;
-      entries = j.entries || [];
-      next = j.has_more ? j.cursor : null;
+      const r = await dbxListFolder({ path: normPath(path_prefix), recursive: true, limit: Math.min(max_items, 2000) });
+      const j = r.data; entries = j.entries || []; next = j.has_more ? j.cursor : null;
     } else {
       const r = await dbxListContinue(next);
-      const j = r.data;
-      entries = j.entries || [];
-      next = j.has_more ? j.cursor : null;
+      const j = r.data; entries = j.entries || []; next = j.has_more ? j.cursor : null;
     }
 
     res.json({ entries: normalizeEntries(entries), next_cursor: next, truncated: !!next });
@@ -183,11 +164,7 @@ app.get("/mcp/list", async (req, res) => {
     const path = req.query.path ? String(req.query.path) : DBX_ROOT_PREFIX;
     const r = await dbxListFolder({ path: normPath(path), recursive: false, limit: 2000 });
     const j = r.data;
-    res.json({
-      entries: normalizeEntries(j.entries || []),
-      truncated: j.has_more,
-      next_cursor: j.has_more ? j.cursor : null
-    });
+    res.json({ entries: normalizeEntries(j.entries || []), truncated: j.has_more, next_cursor: j.has_more ? j.cursor : null });
   } catch (e) {
     res.status(502).json({ ok: false, message: e.message, data: e?.response?.data || null });
   }
@@ -212,7 +189,6 @@ app.post("/mcp/get", async (req, res) => {
     if (!path) return res.status(400).json({ error: "path required" });
 
     const r = await dbxDownload({ path: String(path), rangeStart: range_start, rangeEnd: range_end });
-
     if (!r.ok) {
       console.error("DROPBOX GET non-2xx", r.status, r.text);
       return res.status(502).json({ ok: false, status: r.status, data: r.text });
@@ -233,12 +209,53 @@ app.post("/mcp/get", async (req, res) => {
   }
 });
 
-// ---- Start server ----
+/* ---------- OPTIONAL: Query helpers ---------- */
+// Fast name/path search within a subtree
+app.post("/mcp/search_names", async (req, res) => {
+  try {
+    const { q, path_prefix = DBX_ROOT_PREFIX, limit = 200 } = req.body || {};
+    if (!q) return res.status(400).json({ error: "q required" });
+    const r = await dbxListFolder({ path: normPath(path_prefix), recursive: true, limit: 2000 });
+    const all = normalizeEntries(r.data.entries || []);
+    const qq = String(q).toLowerCase();
+    const hits = all.filter(e => (e.name||"").toLowerCase().includes(qq) || (e.path||"").toLowerCase().includes(qq));
+    res.json({ entries: hits.slice(0, limit), total: hits.length });
+  } catch (e) {
+    res.status(502).json({ ok: false, message: e.message, data: e?.response?.data || null });
+  }
+});
+
+// Small head/preview (first N bytes; tries to decode text)
+app.post("/mcp/head", async (req, res) => {
+  try {
+    const { path, bytes = 200000 } = req.body || {};
+    if (!path) return res.status(400).json({ error: "path required" });
+    const end = Math.max(1, Math.min(bytes, 200000));
+    const r = await dbxDownload({ path: String(path), rangeStart: 0, rangeEnd: end });
+    if (!r.ok) return res.status(502).json({ ok: false, status: r.status, data: r.text });
+
+    const ct = r.headers["content-type"] || "application/octet-stream";
+    let text = null, note = null;
+    if (/^text\/|json|yaml|csv/i.test(ct)) text = r.data.toString("utf8");
+    else if (/excel|spreadsheet|octet-stream/i.test(ct)) note = "binary (excel?) – bytes returned";
+    else if (/pdf/i.test(ct)) note = "pdf – not parsed";
+
+    res.json({
+      ok: true,
+      path,
+      content_type: ct,
+      size_bytes: r.data.length,
+      text,
+      data_base64: text ? null : r.data.toString("base64"),
+      note
+    });
+  } catch (e) {
+    res.status(502).json({ ok: false, message: e.message, data: e?.response?.data || null });
+  }
+});
+
+/* ---------- Start ---------- */
 app.listen(PORT, () =>
-  console.log(`DBX REST on ${PORT} root=${DBX_ROOT_PREFIX} ROUTES: /mcp/healthz /mcp/walk /mcp/list /mcp/meta /mcp/get`)
+  console.log(`DBX REST on ${PORT} root=${DBX_ROOT_PREFIX} ROUTES: /mcp/healthz /mcp/walk /mcp/list /mcp/meta /mcp/get /mcp/search_names /mcp/head`)
 );
-
-
-
-
 
