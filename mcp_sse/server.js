@@ -6,8 +6,9 @@ app.use(express.json({ limit: "2mb" }));
 
 app.get("/healthz", (_, res) => res.json({ ok: true }));
 
-await ensureIndexScaffold();   // make sure /indexes files exist in Dropbox
-registerRoutes(app);
+await ensureIndexScaffold();   // sets up /indexes on Dropbox if missing
+registerRoutes(app);           // attaches /mcp/index_full
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Up on :${PORT}`));
+
