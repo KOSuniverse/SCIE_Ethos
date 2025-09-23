@@ -2,13 +2,12 @@
   "name": "dbx-api",
   "version": "1.0.0",
   "type": "module",
-  "main": "index.js",
-  "scripts": { "start": "node index.js" },
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
   "dependencies": {
     "axios": "^1.6.7",
     "express": "^4.19.2"
   }
 }
-
-
-
