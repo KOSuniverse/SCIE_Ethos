@@ -91,10 +91,19 @@ async function dbxWriteText(path, text){ return dbxWriteBytes(path, Buffer.from(
 
 async function dbxReadBytes(path){ // small files only
   const args = { path };
-  const r = await axios.post(`${DBX_CONT}/files/download`, null, {
-    responseType: "arraybuffer",
-    headers:{ ...(await authHeaders()), "Dropbox-API-Arg": JSON.stringify(args) }
-  });
+  const r = await axios.post(
+    `${DBX_CONT}/files/download`,
+    null, // MUST be null body
+    {
+      responseType: "arraybuffer",
+      headers: {
+        ...(await authHeaders()),
+        "Dropbox-API-Arg": JSON.stringify(args),
+        // Explicitly set a safe content type to avoid clients auto-setting x-www-form-urlencoded
+        "Content-Type": "text/plain; charset=utf-8"
+      }
+    }
+  );
   return Buffer.from(r.data);
 }
 
