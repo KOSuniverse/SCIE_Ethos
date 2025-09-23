@@ -1,11 +1,10 @@
-// index.js — Dropbox REST API for GPT Actions (End-State, Full Indexing + Extractors)
+// index.js — Dropbox REST API for GPT Actions (End-State, Lazy PDF import)
 
 import express from "express";
 import axios from "axios";
 import crypto from "node:crypto";
-import * as XLSX from "xlsx";       // Excel parser
-import pdf from "pdf-parse";        // PDF parser
-import mammoth from "mammoth";      // DOCX parser
+import * as XLSX from "xlsx";        // Excel parser
+import mammoth from "mammoth";       // DOCX parser
 import pptxParser from "pptx-parser"; // PPTX parser
 
 /* ---------- Env ---------- */
@@ -108,6 +107,15 @@ const dbxUpload = ({ path, bytes }) =>
     return r.json();
   });
 
+/* ---------- Lazy PDF import ---------- */
+let pdfParser;
+async function getPdfParser() {
+  if (!pdfParser) {
+    pdfParser = (await import("pdf-parse")).default;
+  }
+  return pdfParser;
+}
+
 /* ---------- Extractors ---------- */
 async function extractText(path, buf) {
   try {
@@ -123,7 +131,8 @@ async function extractText(path, buf) {
       return out.join("\n");
     }
     if (PDF_RE.test(path)) {
-      const txt = await pdf(buf);
+      const parser = await getPdfParser();
+      const txt = await parser(buf);
       return txt.text;
     }
     if (DOCX_RE.test(path)) {
@@ -134,8 +143,8 @@ async function extractText(path, buf) {
       const pres = await pptxParser(buf);
       return pres.slides.map((s,i)=>`--- Slide ${i+1} ---\n${s.text}`).join("\n");
     }
-    return ""; // images etc → skip
-  } catch (e) {
+    return "";
+  } catch {
     return "";
   }
 }
@@ -156,6 +165,15 @@ app.use((req,res,next)=>{
 /* ---------- Core routes ---------- */
 app.get("/mcp/healthz", (_req,res)=>res.json({ok:true,root:DBX_ROOT_PREFIX}));
 
+app.post("/mcp/list", async (req,res)=>{
+  try {
+    const path=req.query?.path || DBX_ROOT_PREFIX;
+    const r=await dbxListFolder({ path:normPath(path), recursive:false, limit:2000});
+    const j=r.data;
+    res.json({entries:normalizeEntries(j.entries||[]), truncated:j.has_more});
+  } catch(e){res.status(502).json({ok:false,message:e.message});}
+});
+
 app.post("/mcp/walk", async (req,res)=>{
   try {
     const { path_prefix=DBX_ROOT_PREFIX, max_items=2000, cursor } = req.body||{};
@@ -168,15 +186,6 @@ app.post("/mcp/walk", async (req,res)=>{
       const j=r.data; entries=j.entries||[]; next=j.has_more?j.cursor:null;
     }
     res.json({entries:normalizeEntries(entries), next_cursor:next, truncated:!!next});
-  } catch(e){res.status(502).json({ok:false,message:e.message});}
-});
-
-app.get("/mcp/list", async (req,res)=>{
-  try {
-    const path=req.query.path?String(req.query.path):DBX_ROOT_PREFIX;
-    const r=await dbxListFolder({ path:normPath(path), recursive:false, limit:2000});
-    const j=r.data;
-    res.json({entries:normalizeEntries(j.entries||[]), truncated:j.has_more, next_cursor:j.has_more?j.cursor:null});
   } catch(e){res.status(502).json({ok:false,message:e.message});}
 });
 
@@ -200,7 +209,7 @@ app.post("/mcp/get", async (req,res)=>{
   } catch(e){res.status(502).json({ok:false,message:e.message});}
 });
 
-/* ---------- Head (safe preview) ---------- */
+/* ---------- Safe preview ---------- */
 app.post("/mcp/head", async (req,res)=>{
   try {
     const { path, bytes=200000 }=req.body||{};
@@ -209,8 +218,11 @@ app.post("/mcp/head", async (req,res)=>{
     if(!r.ok) return res.status(502).json({ok:false,status:r.status});
     const ct=r.headers["content-type"]||"";
     let text="", note=null;
-    if(TEXTISH.test(path)||/json|yaml|csv|md|log/.test(ct)) text=r.data.toString("utf8");
-    else if(PDF_RE.test(path)) text=(await pdf(r.data)).text.slice(0,2000);
+    if(TEXTISH.test(path)) text=r.data.toString("utf8").slice(0,2000);
+    else if(PDF_RE.test(path)) {
+      const parser = await getPdfParser();
+      text=(await parser(r.data)).text.slice(0,2000);
+    }
     else if(DOCX_RE.test(path)) text=(await mammoth.extractRawText({buffer:r.data})).value.slice(0,2000);
     else if(XLSX_RE.test(path)) { const wb=XLSX.read(r.data,{type:"buffer"}); text="Sheets: "+wb.SheetNames.join(", "); }
     else note="binary preview not supported";
@@ -218,7 +230,7 @@ app.post("/mcp/head", async (req,res)=>{
   } catch(e){res.status(502).json({ok:false,message:e.message});}
 });
 
-/* ---------- Full Index (deep extract) ---------- */
+/* ---------- Full Index ---------- */
 app.post("/mcp/index_full", async (req,res)=>{
   try {
     const { path_prefix=DBX_ROOT_PREFIX, output_jsonl_path="/Project_Root/GPT_Files/_indexes/file_index.jsonl" }=req.body||{};
@@ -227,19 +239,19 @@ app.post("/mcp/index_full", async (req,res)=>{
       const j=r.data; raw.push(...(j.entries||[])); cursor=j.has_more?j.cursor:null; }
     while(cursor){ const r=await dbxListContinue(cursor); const j=r.data; raw.push(...(j.entries||[])); cursor=j.has_more?j.cursor:null; }
     const entries=normalizeEntries(raw).filter(e=>e.path&&!ZIP.test(e.path)&&e.mime!=="folder");
-    const out=[];
+    let count=0;
     for(const e of entries){
       try {
         const dl=await dbxDownload({ path:e.path });
         if(!dl.ok) continue;
         const text=await extractText(e.path, dl.data);
-        out.push({ path:e.path, name:e.name, size:e.size, modified:e.modified,
-          mime:e.mime, checksum:sha1(dl.data), text });
-        // append to JSONL in Dropbox
-        await dbxUpload({ path:output_jsonl_path, bytes:Buffer.from(JSON.stringify(out[out.length-1])+"\n","utf8") });
+        const row={ path:e.path,name:e.name,size:e.size,modified:e.modified,
+          mime:e.mime, checksum:sha1(dl.data), text };
+        await dbxUpload({ path:output_jsonl_path, bytes:Buffer.from(JSON.stringify(row)+"\n","utf8") });
+        count++;
       } catch(err){ console.error("index skip",e.path,err.message); }
     }
-    res.json({ok:true,indexed:out.length,output:output_jsonl_path});
+    res.json({ok:true,indexed:count,output:output_jsonl_path});
   } catch(e){res.status(502).json({ok:false,message:e.message});}
 });
 
