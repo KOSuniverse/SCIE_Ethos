@@ -1,9 +1,11 @@
-// mcp_sse/index.js  (ESM)
+// ESM module
 import crypto from "node:crypto";
 import axios from "axios";
 
-// ====== CONFIG ======
-export const DBX_ROOT_PREFIX = "/Project_Root";              // adjust if needed
+/* =========================
+   CONFIG
+   ========================= */
+export const DBX_ROOT_PREFIX = "/Project_Root";   // change if your root differs
 const INDEX_ROOT = "/Project_Root/GPT_Files/indexes";
 const JSONL_PATH = `${INDEX_ROOT}/file_index.jsonl`;
 const CSV_PATH   = `${INDEX_ROOT}/file_index.csv`;
@@ -14,71 +16,119 @@ const ZIP     = /\.zip$/i;
 const XLSX    = /\.xlsx$/i;
 
 function sha1(buf){ return crypto.createHash("sha1").update(buf).digest("hex"); }
-const rel = p => p?.startsWith("/") ? p.slice(1) : p;
+const rel = p => (p?.startsWith("/") ? p.slice(1) : p);
 
-// ====== DROPBOX HELPERS (inline; token from env) ======
+/* =========================
+   Dropbox Auth (keeps your refresh flow)
+   Priority:
+   1) Refresh-token flow (DROPBOX_REFRESH_TOKEN + DROPBOX_APP_KEY + DROPBOX_APP_SECRET)
+   2) Static access token (DROPBOX_ACCESS_TOKEN)
+   ========================= */
+let cachedAccessToken = null;
+let cachedExpEpoch = 0;
+
+async function getAccessToken() {
+  // 2) Plain access token
+  if (process.env.DROPBOX_ACCESS_TOKEN) return process.env.DROPBOX_ACCESS_TOKEN;
+
+  // 1) Refresh flow
+  const REFRESH = process.env.DROPBOX_REFRESH_TOKEN;
+  const KEY     = process.env.DROPBOX_APP_KEY;
+  const SECRET  = process.env.DROPBOX_APP_SECRET;
+  if (REFRESH && KEY && SECRET) {
+    const now = Math.floor(Date.now() / 1000);
+    if (cachedAccessToken && now < (cachedExpEpoch - 60)) return cachedAccessToken;
+
+    const params = new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: REFRESH
+    }).toString();
+
+    const basic = Buffer.from(`${KEY}:${SECRET}`).toString("base64");
+    const r = await axios.post(
+      "https://api.dropbox.com/oauth2/token",
+      params,
+      { headers: { "Content-Type": "application/x-www-form-urlencoded", "Authorization": `Basic ${basic}` } }
+    );
+
+    cachedAccessToken = r.data.access_token;
+    cachedExpEpoch = Math.floor(Date.now() / 1000) + (r.data.expires_in || 14400);
+    return cachedAccessToken;
+  }
+
+  throw new Error("Dropbox auth not configured. Set DROPBOX_ACCESS_TOKEN or (DROPBOX_REFRESH_TOKEN + DROPBOX_APP_KEY + DROPBOX_APP_SECRET).");
+}
+async function authHeaders() {
+  const t = await getAccessToken();
+  return { Authorization: `Bearer ${t}` };
+}
+
+/* =========================
+   Dropbox REST helpers (cloud-only)
+   ========================= */
 const DBX_API  = "https://api.dropboxapi.com/2";
 const DBX_CONT = "https://content.dropboxapi.com/2";
-const H = () => ({ Authorization: `Bearer ${process.env.DROPBOX_TOKEN}` });
 
 async function dbxExists(path){
   try {
-    await axios.post(`${DBX_API}/files/get_metadata`, { path }, { headers:{...H(),"Content-Type":"application/json"} });
+    await axios.post(`${DBX_API}/files/get_metadata`, { path }, { headers:{ ...(await authHeaders()), "Content-Type":"application/json" } });
     return true;
   } catch { return false; }
 }
 async function dbxCreateFolderIfMissing(path){
   if (await dbxExists(path)) return;
-  await axios.post(`${DBX_API}/files/create_folder_v2`, { path, autorename:false }, { headers:{...H(),"Content-Type":"application/json"} });
+  await axios.post(`${DBX_API}/files/create_folder_v2`, { path, autorename:false }, { headers:{ ...(await authHeaders()), "Content-Type":"application/json" } });
 }
 async function dbxWriteBytes(path, bytes){ // overwrite
   const args = { path, mode:{".tag":"overwrite"}, mute:true };
   await axios.post(`${DBX_CONT}/files/upload`, bytes, {
-    headers:{ ...H(), "Content-Type":"application/octet-stream", "Dropbox-API-Arg": JSON.stringify(args) }
+    headers:{ ...(await authHeaders()), "Content-Type":"application/octet-stream", "Dropbox-API-Arg": JSON.stringify(args) }
   });
 }
-async function dbxWriteText(path, text){ return dbxWriteBytes(path, Buffer.from(text,"utf8")); }
-
+async function dbxWriteText(path, text){ return dbxWriteBytes(path, Buffer.from(text, "utf8")); }
 async function dbxReadBytes(path){ // small files only
   const args = { path };
   const r = await axios.post(`${DBX_CONT}/files/download`, null, {
     responseType: "arraybuffer",
-    headers:{ ...H(), "Dropbox-API-Arg": JSON.stringify(args) }
+    headers:{ ...(await authHeaders()), "Dropbox-API-Arg": JSON.stringify(args) }
   });
   return Buffer.from(r.data);
 }
-async function dbxAppendText(path, text){ // safe append (read+append+overwrite)
+// Simple append (read+append+overwrite). OK for current index sizes; shard later if needed.
+async function dbxAppendText(path, text){
   const add = Buffer.from(text, "utf8");
   let cur = Buffer.alloc(0);
   if (await dbxExists(path)) cur = await dbxReadBytes(path);
   await dbxWriteBytes(path, Buffer.concat([cur, add]));
 }
-
+// List & continue
 async function dbxListFolder({ path, recursive=true, limit=2000 }){
   return axios.post(`${DBX_API}/files/list_folder`,
     { path, recursive, limit, include_non_downloadable_files:false },
-    { headers:{...H(),"Content-Type":"application/json"} });
+    { headers:{ ...(await authHeaders()), "Content-Type":"application/json" } });
 }
 async function dbxListContinue(cursor){
   return axios.post(`${DBX_API}/files/list_folder/continue`, { cursor },
-    { headers:{...H(),"Content-Type":"application/json"} });
+    { headers:{ ...(await authHeaders()), "Content-Type":"application/json" } });
 }
-
+// Create normalized entries
 function normalizeEntries(entries){
   return (entries||[])
     .filter(e => e[".tag"] !== "deleted")
     .map(e => ({
       path: e.path_lower,
       name: e.name,
-      mime: e[".tag"] === "folder" ? "folder" : (e?.file?.mime_type || e?.mime_type || "application/octet-stream"),
+      // Dropbox list_folder doesn’t return MIME reliably; we’ll infer later if needed
+      mime: e[".tag"] === "folder" ? "folder" : "application/octet-stream",
       size: e.size ?? null,
       modified: e.server_modified ?? e.client_modified ?? null
     }));
 }
-
+// Range-friendly download (for text previews / checksums)
 async function dbxDownload({ path, rangeStart=0, rangeEnd=200000 }){
-  // temp link + HTTP Range to avoid huge responses
-  const { data } = await axios.post(`${DBX_API}/files/get_temporary_link`, { path }, { headers:{...H(),"Content-Type":"application/json"} });
+  const { data } = await axios.post(`${DBX_API}/files/get_temporary_link`, { path }, {
+    headers:{ ...(await authHeaders()), "Content-Type":"application/json" }
+  });
   const link = data?.link;
   if (!link) return { ok:false, data:null };
   const r = await axios.get(link, { responseType:"arraybuffer", headers:{ Range:`bytes=${rangeStart}-${rangeEnd}` }});
@@ -86,7 +136,9 @@ async function dbxDownload({ path, rangeStart=0, rangeEnd=200000 }){
   return { ok, data: Buffer.from(r.data) };
 }
 
-// ====== Heuristics ======
+/* =========================
+   Heuristics
+   ========================= */
 function parseMonthFromName(name){
   const m1 = name?.match(/\b(20\d{2})[-_ ]?(0[1-9]|1[0-2])\b/); if (m1) return `${m1[1]}-${m1[2]}`;
   const M={jan:"01",feb:"02",mar:"03",apr:"04",may:"05",jun:"06",jul:"07",aug:"08",sep:"09",oct:"10",nov:"11",dec:"12"};
@@ -118,9 +170,10 @@ async function readCheckpoint(cpPath){
   try { const buf = await dbxReadBytes(cpPath); return JSON.parse(buf.toString("utf8")); } catch { return null; }
 }
 
-// ====== PUBLIC API ======
+/* =========================
+   Public: scaffold + routes
+   ========================= */
 export async function ensureIndexScaffold(){
-  if (!process.env.DROPBOX_TOKEN) throw new Error("Missing DROPBOX_TOKEN");
   await dbxCreateFolderIfMissing(INDEX_ROOT);
   if (!(await dbxExists(CSV_PATH))) {
     await dbxWriteText(CSV_PATH,
@@ -134,7 +187,7 @@ export async function ensureIndexScaffold(){
 }
 
 export function registerRoutes(app){
-  // Deep, resumable-ish index; skips .zip; writes JSONL + CSV + manifest to Dropbox
+  // Deep index: skips .zip; writes JSONL + CSV + manifest to Dropbox /indexes
   app.post("/mcp/index_full", async (req, res) => {
     try {
       const {
@@ -157,7 +210,7 @@ export function registerRoutes(app){
       while (cursor) {
         const r = await dbxListContinue(cursor);
         const j = r.data; raw.push(...(j.entries||[])); cursor = j.has_more ? j.cursor : null;
-        if (raw.length > 300_000) break;
+        if (raw.length > 300_000) break; // safety
       }
 
       const entries = normalizeEntries(raw)
@@ -183,7 +236,7 @@ export function registerRoutes(app){
         const currency = guessCurrency(filePath) || guessCurrency(name);
         const as_of_date = e.modified || null;
 
-        // Previews & checksum (small/safe)
+        // Lightweight preview + checksum
         let text_preview = null, truncated = false, content_hash = "";
         let sheet_names = [];
 
@@ -199,7 +252,7 @@ export function registerRoutes(app){
           sheet_names = await sniffXlsxSheetNames();
         } else {
           if (typeof e.size === "number" && e.size <= checksum_bytes_limit) {
-            const dl = await dbxDownload({ path: filePath, rangeStart: 0, rangeEnd: e.size - 1 });
+            const dl = await dbxDownload({ path: filePath, rangeStart: 0, rangeEnd: Math.max(0, e.size - 1) });
             if (dl.ok) content_hash = sha1(dl.data);
           }
         }
@@ -212,7 +265,7 @@ export function registerRoutes(app){
           sheet_names, text_preview, truncated
         };
 
-        // Append JSONL & CSV (read+append+overwrite pattern)
+        // Append JSONL & CSV (read+append+overwrite for now)
         await dbxAppendText(output_jsonl_path, JSON.stringify(row) + "\n");
 
         const csvLine = [
@@ -224,15 +277,19 @@ export function registerRoutes(app){
 
         wrote++;
         if (wrote % 200 === 0) {
-          await dbxWriteText(manifest_path, JSON.stringify({ path_prefix, total, processed: wrote, last_path: filePath, csv_header_written: true }, null, 2));
+          await dbxWriteText(manifest_path, JSON.stringify({
+            path_prefix, total, processed: wrote, last_path: filePath, csv_header_written: true
+          }, null, 2));
         }
       }
 
-      await dbxWriteText(manifest_path, JSON.stringify({ path_prefix, total, processed: wrote, csv_header_written: true, completed: true }, null, 2));
+      await dbxWriteText(manifest_path, JSON.stringify({
+        path_prefix, total, processed: wrote, csv_header_written: true, completed: true
+      }, null, 2));
+
       res.json({ ok: true, stats: { total, processed: wrote }, outputs: { output_jsonl_path, output_csv_path, manifest_path }});
     } catch (e) {
-      res.status(502).json({ ok:false, message:e.message, data:e?.response?.data || null });
+      res.status(502).json({ ok:false, message: e?.message || "INDEX_ERROR", data: e?.response?.data || null });
     }
   });
 }
-
