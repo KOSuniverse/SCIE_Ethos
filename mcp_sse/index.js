@@ -1,12 +1,16 @@
-import crypto from "node:crypto";
+// mcp_sse/index.js  (ESM)
 import axios from "axios";
-import pdfParse from "pdf-parse";
+import crypto from "node:crypto";
 import mammoth from "mammoth";
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 /* =========================
    CONFIG
    ========================= */
+// Default root matches your healthz. Override via Render env if needed.
 export const DBX_ROOT_PREFIX = process.env.DBX_ROOT_PREFIX || "/Project_Root/GPT_Files";
+
+// All index artifacts live here in Dropbox (cloud-only).
 const INDEX_ROOT = `${DBX_ROOT_PREFIX}/indexes`;
 const JSONL_PATH = `${INDEX_ROOT}/file_index.jsonl`;
 const CSV_PATH   = `${INDEX_ROOT}/file_index.csv`;
@@ -18,38 +22,44 @@ const XLSX    = /\.xlsx$/i;
 const IS_PDF  = /\.pdf$/i;
 const IS_DOCX = /\.docx$/i;
 
-const MAX_BYTES_DEFAULT = 128_000;
-const MAX_EXTRACT_BYTES = 8 * 1024 * 1024; // 8MB
+const MAX_BYTES_DEFAULT  = 128_000;         // for byte range responses
+const MAX_EXTRACT_BYTES  = 8 * 1024 * 1024; // cap bytes fed to extractors (8MB)
+const PREVIEW_CHAR_CAP   = 12_000;          // store up to 12k chars in index
 
 const sha1 = buf => crypto.createHash("sha1").update(buf).digest("hex");
-const rel = p => (p?.startsWith("/") ? p.slice(1) : p);
-const normUserPath = p => (p||"").replace(/^\/+/, "").toLowerCase();
+const rel  = p => (p?.startsWith("/") ? p.slice(1) : p);
+const normUserPath = p => (p || "").replace(/^\/+/, "").toLowerCase();
 
 /* =========================
    Dropbox Auth (refresh first, else static)
    ========================= */
 let cachedAccessToken = null, cachedExpEpoch = 0;
+
 async function getAccessToken() {
   if (process.env.DROPBOX_ACCESS_TOKEN) return process.env.DROPBOX_ACCESS_TOKEN;
+
   const REFRESH = process.env.DROPBOX_REFRESH_TOKEN;
   const KEY     = process.env.DROPBOX_APP_KEY;
   const SECRET  = process.env.DROPBOX_APP_SECRET;
   if (!REFRESH || !KEY || !SECRET) throw new Error("Missing Dropbox auth vars.");
-  const now = Math.floor(Date.now()/1000);
-  if (cachedAccessToken && now < (cachedExpEpoch-60)) return cachedAccessToken;
-  const params = new URLSearchParams({ grant_type:"refresh_token", refresh_token:REFRESH }).toString();
+
+  const now = Math.floor(Date.now() / 1000);
+  if (cachedAccessToken && now < (cachedExpEpoch - 60)) return cachedAccessToken;
+
+  const params = new URLSearchParams({ grant_type: "refresh_token", refresh_token: REFRESH }).toString();
   const basic  = Buffer.from(`${KEY}:${SECRET}`).toString("base64");
   const r = await axios.post("https://api.dropbox.com/oauth2/token", params, {
-    headers: { "Content-Type":"application/x-www-form-urlencoded", "Authorization":`Basic ${basic}` }
+    headers: { "Content-Type": "application/x-www-form-urlencoded", "Authorization": `Basic ${basic}` }
   });
+
   cachedAccessToken = r.data.access_token;
-  cachedExpEpoch = Math.floor(Date.now()/1000) + (r.data.expires_in || 14400);
+  cachedExpEpoch    = Math.floor(Date.now() / 1000) + (r.data.expires_in || 14400);
   return cachedAccessToken;
 }
 const authHeaders = async () => ({ Authorization: `Bearer ${await getAccessToken()}` });
 
 /* =========================
-   Dropbox REST helpers
+   Dropbox REST helpers (cloud-only)
    ========================= */
 const DBX_API  = "https://api.dropboxapi.com/2";
 const DBX_CONT = "https://content.dropboxapi.com/2";
@@ -65,27 +75,35 @@ async function dbxCreateFolderIfMissing(path){
   await axios.post(`${DBX_API}/files/create_folder_v2`, { path, autorename:false },
     { headers:{ ...(await authHeaders()), "Content-Type":"application/json" } });
 }
-async function dbxWriteBytes(path, bytes){
+async function dbxWriteBytes(path, bytes){ // overwrite
   const args = { path, mode:{".tag":"overwrite"}, mute:true };
   await axios.post(`${DBX_CONT}/files/upload`, bytes, {
     headers:{ ...(await authHeaders()), "Content-Type":"application/octet-stream", "Dropbox-API-Arg": JSON.stringify(args) }
   });
 }
-const dbxWriteText = (p,t)=>dbxWriteBytes(p, Buffer.from(t,"utf8"));
-async function dbxReadBytes(path){
+const dbxWriteText = (p,t)=>dbxWriteBytes(p, Buffer.from(t, "utf8"));
+
+async function dbxReadBytes(path){ // small files only (manifest, csv)
   const args = { path };
   const r = await axios.post(`${DBX_CONT}/files/download`, null, {
-    responseType:"arraybuffer",
-    headers:{ ...(await authHeaders()), "Dropbox-API-Arg": JSON.stringify(args), "Content-Type":"text/plain; charset=utf-8" }
+    responseType: "arraybuffer",
+    headers:{
+      ...(await authHeaders()),
+      "Dropbox-API-Arg": JSON.stringify(args),
+      "Content-Type": "text/plain; charset=utf-8" // prevent x-www-form-urlencoded
+    }
   });
   return Buffer.from(r.data);
 }
+
+// naive append (read+append+overwrite). We batch upstream to keep it efficient.
 async function dbxAppendText(path, text){
-  const add = Buffer.from(text,"utf8");
+  const add = Buffer.from(text, "utf8");
   let cur = Buffer.alloc(0);
   if (await dbxExists(path)) cur = await dbxReadBytes(path);
   await dbxWriteBytes(path, Buffer.concat([cur, add]));
 }
+
 async function dbxListFolder({ path, recursive=true, limit=2000 }){
   return axios.post(`${DBX_API}/files/list_folder`,
     { path, recursive, limit, include_non_downloadable_files:false },
@@ -105,7 +123,7 @@ function normalizeEntries(entries){
     .filter(e => e[".tag"] !== "deleted")
     .map(e => ({
       tag: e[".tag"],
-      path: e.path_lower,              // lowercased path
+      path: e.path_lower, // use lowercased path for stable matching
       name: e.name,
       mime: e[".tag"] === "folder" ? "folder" : "application/octet-stream",
       size: e.size ?? null,
@@ -118,23 +136,43 @@ async function dbxTempLink(path){
   });
   return data?.link || null;
 }
-const httpRange = (link, start, end)=>axios.get(link, { responseType:"arraybuffer", headers:{ Range:`bytes=${start}-${end}` }});
+const httpRange = (link, start, end) =>
+  axios.get(link, { responseType: "arraybuffer", headers: { Range: `bytes=${start}-${end}` } });
 
 /* =========================
-   Extractors (PDF/DOCX)
+   Extractors (PDF via pdfjs-dist, DOCX via mammoth)
    ========================= */
 async function fetchBytesForExtract(dbxLowerPath, cap=MAX_EXTRACT_BYTES){
   const link = await dbxTempLink(dbxLowerPath);
   if (!link) return null;
-  const r = await axios.get(link, { responseType:"arraybuffer" });
+  const r = await axios.get(link, { responseType: "arraybuffer" });
   const buf = Buffer.from(r.data);
   return buf.length > cap ? buf.slice(0, cap) : buf;
 }
-const extractPdfText  = async buf => { try { const out = await pdfParse(buf); return (out.text||"").trim(); } catch { return ""; } };
-const extractDocxText = async buf => { try { const out = await mammoth.extractRawText({ buffer: buf }); return (out.value||"").trim(); } catch { return ""; } };
+
+async function extractPdfText(buf, pageLimit=20, charCap=120000){
+  // pdfjs-dist works in Node (no worker needed with legacy build)
+  const loadingTask = getDocument({ data: buf });
+  const pdf = await loadingTask.promise;
+  let text = "";
+  const maxPages = Math.min(pdf.numPages, pageLimit);
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    text += content.items.map(it => (it.str || "")).join(" ") + "\n";
+    if (text.length >= charCap) break;
+  }
+  return text.trim();
+}
+async function extractDocxText(buf){
+  try {
+    const out = await mammoth.extractRawText({ buffer: buf });
+    return (out.value || "").trim();
+  } catch { return ""; }
+}
 
 /* =========================
-   Heuristics
+   Heuristics (light)
    ========================= */
 function parseMonthFromName(name){
   const m1 = name?.match(/\b(20\d{2})[-_ ]?(0[1-9]|1[0-2])\b/); if (m1) return `${m1[1]}-${m1[2]}`;
@@ -235,7 +273,7 @@ export function registerRoutes(app){
       }
 
       for (const e of entries) {
-        const filePath = e.path;          // path_lower from Dropbox
+        const filePath = e.path; // path_lower
         const name = e.name || "";
 
         const month = parseMonthFromName(name) || parseMonthFromName(filePath) || null;
@@ -260,20 +298,20 @@ export function registerRoutes(app){
           const buf = await fetchBytesForExtract(filePath);
           if (buf) {
             const text = await extractPdfText(buf);
-            text_preview = text ? text.slice(0, 12000) : "";
-            truncated = !!text && text.length > 12000;
+            text_preview = text ? text.slice(0, PREVIEW_CHAR_CAP) : "";
+            truncated = !!text && text.length > PREVIEW_CHAR_CAP;
             if (buf.length <= checksum_bytes_limit) content_hash = sha1(buf);
           }
         } else if (IS_DOCX.test(name)) {
           const buf = await fetchBytesForExtract(filePath);
           if (buf) {
             const text = await extractDocxText(buf);
-            text_preview = text ? text.slice(0, 12000) : "";
-            truncated = !!text && text.length > 12000;
+            text_preview = text ? text.slice(0, PREVIEW_CHAR_CAP) : "";
+            truncated = !!text && text.length > PREVIEW_CHAR_CAP;
             if (buf.length <= checksum_bytes_limit) content_hash = sha1(buf);
           }
         } else if (XLSX.test(name)) {
-          // (XLSX parsing to be added in next step)
+          // XLSX support to be added next
         } else {
           if (typeof e.size === "number" && e.size <= checksum_bytes_limit) {
             const link = await dbxTempLink(filePath);
@@ -356,11 +394,12 @@ export function registerRoutes(app){
       const link = await dbxTempLink(absLower);
       if (!link) return res.status(404).json({ ok:false, message:"TEMP_LINK_NOT_FOUND" });
 
-      const MAX = MAX_BYTES_DEFAULT;
-      const start = Math.max(0, Number(range_start)||0);
-      const end   = (range_end!=null ? Number(range_end) : (start + MAX - 1));
+      const MAX   = MAX_BYTES_DEFAULT;
+      const start = Math.max(0, Number(range_start) || 0);
+      const end   = (range_end != null ? Number(range_end) : (start + MAX - 1));
       const r = await httpRange(link, start, Math.min(end, start + MAX - 1));
       const body = Buffer.from(r.data);
+
       res.status(206).set({
         "Content-Type": "application/octet-stream",
         "Content-Range": r.headers["content-range"] || `bytes ${start}-${start+body.length-1}/*`,
@@ -377,8 +416,10 @@ export function registerRoutes(app){
       const { path, max_chars=8000 } = req.body || {};
       if (!path) return res.status(400).json({ ok:false, message:"path required" });
       const want = normUserPath(path);
+
       const buf = await dbxReadBytes(JSONL_PATH);
       const lines = buf.toString("utf8").split(/\r?\n/).filter(Boolean);
+
       let row = null;
       for (const l of lines) {
         try {
@@ -388,6 +429,7 @@ export function registerRoutes(app){
         } catch {}
       }
       if (!row) return res.status(404).json({ ok:false, message:"NOT_INDEXED" });
+
       const text = (row.text_preview || "").slice(0, max_chars);
       res.json({ ok:true, path: row.file_path, text_excerpt: text, truncated: (row.text_preview||"").length > text.length });
     } catch (e) {
@@ -446,11 +488,11 @@ export function registerRoutes(app){
   /* On-demand single-file extract (optional) */
   app.post("/mcp/extract", async (req, res) => {
     try {
-      const { path, max_chars = 12000 } = req.body || {};
+      const { path, max_chars = PREVIEW_CHAR_CAP } = req.body || {};
       if (!path) return res.status(400).json({ ok:false, message:"path required" });
       const abs = "/" + normUserPath(path);
       let text = "";
-      if (IS_PDF.test(abs))  { const b = await fetchBytesForExtract(abs); if (b) text = await extractPdfText(b); }
+      if (IS_PDF.test(abs))   { const b = await fetchBytesForExtract(abs); if (b) text = await extractPdfText(b); }
       else if (IS_DOCX.test(abs)) { const b = await fetchBytesForExtract(abs); if (b) text = await extractDocxText(b); }
       res.json({ ok:true, path: abs.slice(1), text_excerpt: (text||"").slice(0, max_chars), truncated: (text||"").length > max_chars });
     } catch (e) { res.status(502).json({ ok:false, message: e?.message || "EXTRACT_ERROR" }); }
