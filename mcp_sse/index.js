@@ -6,7 +6,7 @@ import crypto from "node:crypto";
 import * as XLSX from "xlsx";
 import mammoth from "mammoth";
 import pptxParser from "pptx-parser";
-import * as pdfjsLib from "pdfjs-dist";
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 
 /* ---------- Env ---------- */
 const {
