@@ -5,7 +5,7 @@ import axios from "axios";
    CONFIG
    ========================= */
 export const DBX_ROOT_PREFIX = process.env.DBX_ROOT_PREFIX || "/Project_Root";
-const INDEX_ROOT = `${DBX_ROOT_PREFIX}/GPT_Files/indexes`;
+const INDEX_ROOT = `${DBX_ROOT_PREFIX}/indexes`;
 const JSONL_PATH = `${INDEX_ROOT}/file_index.jsonl`;
 const CSV_PATH   = `${INDEX_ROOT}/file_index.csv`;
 const MANIFEST   = `${INDEX_ROOT}/manifest.json`;
@@ -356,49 +356,61 @@ export function registerRoutes(app){
   });
 
   /* ---- Text from index preview ---- */
-  app.post("/mcp/get_text", async (req, res) => {
-    try {
-      const { path, max_chars=8000 } = req.body || {};
-      if (!path) return res.status(400).json({ ok:false, message:"path required" });
+app.post("/mcp/get_text", async (req, res) => {
+  try {
+    const { path, max_chars=8000 } = req.body || {};
+    if (!path) return res.status(400).json({ ok:false, message:"path required" });
 
-      const buf = await dbxReadBytes(JSONL_PATH);
-      const lines = buf.toString("utf8").split(/\r?\n/).filter(Boolean);
-      const target = lines.find(l => {
-        try { const r = JSON.parse(l); return r.file_path === rel(path) || r.file_path === path; }
-        catch { return false; }
-      });
-      if (!target) return res.status(404).json({ ok:false, message:"NOT_INDEXED" });
+    const want = path.replace(/^\/+/,"").toLowerCase(); // strip leading /, lower
+    const buf = await dbxReadBytes(JSONL_PATH);
+    const lines = buf.toString("utf8").split(/\r?\n/).filter(Boolean);
 
-      const row = JSON.parse(target);
-      const text = (row.text_preview || "").slice(0, max_chars);
-      res.json({ ok:true, path: row.file_path, text_excerpt: text, truncated: (row.text_preview||"").length > text.length });
-    } catch (e) {
-      res.status(502).json({ ok:false, message: e?.message || "GET_TEXT_ERROR" });
+    // match either exact stored form or stored form with your root stripped
+    let row = null;
+    for (const l of lines) {
+      try {
+        const r = JSON.parse(l);
+        const stored = (r.file_path || "").toLowerCase();
+        if (!stored) continue;
+        // accept: exact, or user sent absolute with same stored
+        if (stored === want || want.endsWith(stored)) { row = r; break; }
+      } catch {}
     }
-  });
+    if (!row) return res.status(404).json({ ok:false, message:"NOT_INDEXED" });
+
+    const text = (row.text_preview || "").slice(0, max_chars);
+    res.json({ ok:true, path: row.file_path, text_excerpt: text, truncated: (row.text_preview||"").length > text.length });
+  } catch (e) {
+    res.status(502).json({ ok:false, message: e?.message || "GET_TEXT_ERROR" });
+  }
+});
 
   /* ---- Back-compat: /mcp/get (per your schema) ---- */
-  app.post("/mcp/get", async (req, res) => {
-    try {
-      const { path, range_start=0, range_end=null } = req.body || {};
-      if (!path) return res.status(400).json({ ok:false, message:"path required" });
-      // Delegate to get_bytes with a hard cap
-      const link = await dbxTempLink(path);
-      if (!link) return res.status(404).json({ ok:false, message:"TEMP_LINK_NOT_FOUND" });
+app.post("/mcp/get", async (req, res) => {
+  try {
+    const { path, range_start=0, range_end=null } = req.body || {};
+    if (!path) return res.status(400).json({ ok:false, message:"path required" });
 
-      const start = Math.max(0, Number(range_start)||0);
-      const end   = (range_end!=null ? Number(range_end) : (start + MAX_BYTES_DEFAULT - 1));
-      const r = await httpRange(link, start, Math.min(end, start + MAX_BYTES_DEFAULT - 1));
-      const body = Buffer.from(r.data);
-      res.status(206).set({
-        "Content-Type": "application/octet-stream",
-        "Content-Range": r.headers["content-range"] || `bytes ${start}-${start+body.length-1}/*`,
-        "X-Truncated": (end - start + 1) > MAX_BYTES_DEFAULT ? "true" : "false"
-      }).send(body);
-    } catch (e) {
-      res.status(502).json({ ok:false, message: e?.message || "GET_ERROR" });
-    }
-  });
+    const normalized = path.replace(/^\/+/,"").toLowerCase();
+    const abs = "/" + normalized; // Dropbox API is case-insensitive but uses /path_lower
+    const link = await dbxTempLink(abs);
+    if (!link) return res.status(404).json({ ok:false, message:"TEMP_LINK_NOT_FOUND" });
+
+    const MAX = 128000;
+    const start = Math.max(0, Number(range_start) || 0);
+    const end   = range_end!=null ? Number(range_end) : (start + MAX - 1);
+    const r = await httpRange(link, start, Math.min(end, start + MAX - 1));
+    const body = Buffer.from(r.data);
+
+    res.status(206).set({
+      "Content-Type": "application/octet-stream",
+      "Content-Range": r.headers["content-range"] || `bytes ${start}-${start+body.length-1}/*`,
+      "X-Truncated": (end - start + 1) > MAX ? "true" : "false"
+    }).send(body);
+  } catch (e) {
+    res.status(502).json({ ok:false, message: e?.message || "GET_ERROR" });
+  }
+});
 
   /* ---- Schema routes: list/meta/walk ---- */
   app.get("/mcp/list", async (req, res) => {
