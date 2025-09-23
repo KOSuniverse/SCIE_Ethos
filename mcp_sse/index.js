@@ -5,7 +5,7 @@ import axios from "axios";
 import crypto from "node:crypto";
 import * as XLSX from "xlsx";
 import mammoth from "mammoth";
-import pptxParser from "pptx-parser";
+import officeParser from "officeparser";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 
 /* ---------- Env ---------- */
