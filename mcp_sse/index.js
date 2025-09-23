@@ -21,7 +21,7 @@ const rel = p => (p?.startsWith("/") ? p.slice(1) : p);
    Dropbox Auth — uses your Render env
    Priority:
    1) Refresh flow (DROPBOX_REFRESH_TOKEN + DROPBOX_APP_KEY + DROPBOX_APP_SECRET)
-   2) Static token (DROPBOX_ACCESS_TOKEN) if you ever add it
+   2) Static token (DROPBOX_ACCESS_TOKEN)
    ========================= */
 let cachedAccessToken = null;
 let cachedExpEpoch = 0;
@@ -128,16 +128,15 @@ function normalizeEntries(entries){
     }));
 }
 
-// Range-friendly download for previews/checksums
-async function dbxDownload({ path, rangeStart=0, rangeEnd=200000 }){
+// Range-friendly download for previews/bytes
+async function dbxTempLink(path){
   const { data } = await axios.post(`${DBX_API}/files/get_temporary_link`, { path }, {
     headers:{ ...(await authHeaders()), "Content-Type":"application/json" }
   });
-  const link = data?.link;
-  if (!link) return { ok:false, data:null };
-  const r = await axios.get(link, { responseType:"arraybuffer", headers:{ Range:`bytes=${rangeStart}-${rangeEnd}` }});
-  const ok = (r.status === 206 || r.status === 200);
-  return { ok, data: Buffer.from(r.data) };
+  return data?.link || null;
+}
+async function httpRange(link, start, end){
+  return axios.get(link, { responseType:"arraybuffer", headers:{ Range:`bytes=${start}-${end}` }});
 }
 
 /* =========================
@@ -191,6 +190,7 @@ export async function ensureIndexScaffold(){
 }
 
 export function registerRoutes(app){
+  /* ---- Index: build/refresh listing & previews ---- */
   app.post("/mcp/index_full", async (req, res) => {
     try {
       const {
@@ -244,9 +244,10 @@ export function registerRoutes(app){
         let sheet_names = [];
 
         if (TEXTISH.test(name)) {
-          const head = await dbxDownload({ path: filePath, rangeStart: 0, rangeEnd: preview_bytes });
-          if (head.ok) {
-            const buf = head.data;
+          const link = await dbxTempLink(filePath);
+          if (link) {
+            const r = await httpRange(link, 0, Math.max(0, preview_bytes));
+            const buf = Buffer.from(r.data);
             text_preview = buf.toString("utf8");
             truncated = buf.length >= preview_bytes;
             if (buf.length <= checksum_bytes_limit) content_hash = sha1(buf);
@@ -255,8 +256,11 @@ export function registerRoutes(app){
           sheet_names = await sniffXlsxSheetNames(); // placeholder pass
         } else {
           if (typeof e.size === "number" && e.size <= checksum_bytes_limit) {
-            const dl = await dbxDownload({ path: filePath, rangeStart: 0, rangeEnd: Math.max(0, e.size - 1) });
-            if (dl.ok) content_hash = sha1(dl.data);
+            const link = await dbxTempLink(filePath);
+            if (link) {
+              const r0 = await httpRange(link, 0, Math.max(0, e.size - 1));
+              content_hash = sha1(Buffer.from(r0.data));
+            }
           }
         }
 
@@ -295,5 +299,85 @@ export function registerRoutes(app){
       res.status(502).json({ ok:false, message: e?.message || "INDEX_ERROR", data: e?.response?.data || null });
     }
   });
+
+  /* ---- Search: name + preview content (from JSONL) ---- */
+  app.get("/mcp/search", async (req, res) => {
+    try {
+      const q = (req.query.q || "").toString().trim();
+      const k = Math.max(1, Math.min(50, parseInt(req.query.k || "20", 10)));
+      if (!q) return res.json({ ok:true, hits:[] });
+
+      const buf = await dbxReadBytes(JSONL_PATH);
+      const lines = buf.toString("utf8").split(/\r?\n/).filter(Boolean);
+
+      const lcq = q.toLowerCase();
+      const scored = [];
+      for (const line of lines) {
+        try {
+          const row = JSON.parse(line);
+          const hayName = (row.file_path || "").toLowerCase();
+          const hayPrev = (row.text_preview || "").toLowerCase();
+          let score = 0;
+          if (hayName.includes(lcq)) score += 2;
+          if (hayPrev.includes(lcq)) score += 3;
+          if (score > 0) {
+            const snippet = row.text_preview ? row.text_preview.slice(0, 500) : null;
+            scored.push({ score, path: row.file_path, mime: row.mime, size: row.size, modified: row.modified, snippet });
+          }
+        } catch { /* ignore bad rows */ }
+      }
+      scored.sort((a,b)=>b.score-a.score);
+      res.json({ ok:true, q, hits: scored.slice(0, k) });
+    } catch (e) {
+      res.status(502).json({ ok:false, message: e?.message || "SEARCH_ERROR" });
+    }
+  });
+
+  /* ---- Bytes: safe partials to avoid oversized responses ---- */
+  app.post("/mcp/get_bytes", async (req, res) => {
+    try {
+      const { path, range_start=0, range_end=null, max_bytes=128000 } = req.body || {};
+      if (!path) return res.status(400).json({ ok:false, message:"path required" });
+      const link = await dbxTempLink(path);
+      if (!link) return res.status(404).json({ ok:false, message:"TEMP_LINK_NOT_FOUND" });
+
+      const start = Math.max(0, Number(range_start)||0);
+      const end   = range_end!=null ? Number(range_end) : (start + max_bytes - 1);
+      const hardEnd = start + max_bytes - 1;
+
+      const r = await httpRange(link, start, Math.min(end, hardEnd));
+      const body = Buffer.from(r.data);
+      res.status(206).set({
+        "Content-Type": "application/octet-stream",
+        "Content-Range": r.headers["content-range"] || `bytes ${start}-${start+body.length-1}/*`,
+        "X-Truncated": body.length >= max_bytes ? "true" : "false"
+      }).send(body);
+    } catch (e) {
+      res.status(502).json({ ok:false, message: e?.message || "GET_BYTES_ERROR" });
+    }
+  });
+
+  /* ---- Text: return stored preview from the index (fast & safe) ---- */
+  app.post("/mcp/get_text", async (req, res) => {
+    try {
+      const { path, max_chars=8000 } = req.body || {};
+      if (!path) return res.status(400).json({ ok:false, message:"path required" });
+
+      const buf = await dbxReadBytes(JSONL_PATH);
+      const lines = buf.toString("utf8").split(/\r?\n/).filter(Boolean);
+      const target = lines.find(l => {
+        try { const r = JSON.parse(l); return r.file_path === rel(path) || r.file_path === path; }
+        catch { return false; }
+      });
+      if (!target) return res.status(404).json({ ok:false, message:"NOT_INDEXED" });
+
+      const row = JSON.parse(target);
+      const text = (row.text_preview || "").slice(0, max_chars);
+      res.json({ ok:true, path: row.file_path, text_excerpt: text, truncated: (row.text_preview||"").length > text.length });
+    } catch (e) {
+      res.status(502).json({ ok:false, message: e?.message || "GET_TEXT_ERROR" });
+    }
+  });
 }
+
 
