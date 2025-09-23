@@ -263,21 +263,141 @@ app.post("/mcp/index_full", async (req,res)=>{
 });
 
 /* ---------- Orchestrator ---------- */
-app.post("/routeThenAnswer", async (req,res)=>{
+/* ---------- Orchestrator: routeThenAnswer (NL query -> skills) ---------- */
+app.post("/routeThenAnswer", async (req, res) => {
   try {
-    const { query }=req.body||{};
-    if(!query) return res.status(400).json({error:"query required"});
-    const q=query.toLowerCase();
-    let intent="Browse";
-    if(/search|find/.test(q)) intent="Search";
-    else if(/preview|open/.test(q)) intent="Preview";
-    else if(/download|get/.test(q)) intent="Download";
-    else if(/forecast/.test(q)) intent="Forecasting";
-    else if(/root cause|why/.test(q)) intent="Root_Cause";
-    else if(/compare/.test(q)) intent="Comparison";
-    res.json({ text:`Intent: ${intent} (stub)`, answer:{ intent, query }});
-  } catch(e){res.status(500).json({error:"router_error",message:e.message});}
+    const { query, context = {} } = req.body || {};
+    if (!query || typeof query !== "string") {
+      return res.status(400).json({ error: "query required" });
+    }
+
+    const q = query.trim().toLowerCase();
+    const path_prefix = context.path_prefix || DBX_ROOT_PREFIX;
+
+    // classify (basic intent detection)
+    let intent = "Browse";
+    if (/(list|show)\s+(folders|files)/.test(q)) intent = "Browse";
+    else if (/(search|find)/.test(q)) intent = "Search";
+    else if (/(open|view|preview|paragraph)/.test(q)) intent = "Preview";
+    else if (/(download|get file|fetch)/.test(q)) intent = "Download";
+    else if (/(forecast|service level|lead time|demand)/.test(q)) intent = "Forecasting_Policy";
+    else if (/(root cause|why|driver|rca)/.test(q)) intent = "Root_Cause";
+    else if (/(compare|delta|shift)/.test(q)) intent = "Comparison";
+
+    const used_ops = [];
+    let text = "Unsupported intent for now.";
+    let artifacts = [];
+
+    if (intent === "Browse") {
+      const r = await dbxListFolder({
+        path: normPath(path_prefix),
+        recursive: false,
+        limit: 2000
+      });
+      const entries = normalizeEntries(r.data.entries || []).slice(0, 50);
+      used_ops.push("list");
+      text =
+        `Top entries in ${path_prefix} (showing ${entries.length}):\n` +
+        entries.map(e => `• ${e.name} (${e.mime})`).join("\n");
+      artifacts = entries;
+    }
+
+    else if (intent === "Search") {
+      const m = q.match(/(?:search|find)\s+(.+)/);
+      const term = m ? m[1].trim() : q;
+      const r = await dbxListFolder({
+        path: normPath(path_prefix),
+        recursive: true,
+        limit: 2000
+      });
+      const all = normalizeEntries(r.data.entries || []);
+      const hits = all
+        .filter(
+          e =>
+            (e.name || "").toLowerCase().includes(term) ||
+            (e.path || "").toLowerCase().includes(term)
+        )
+        .slice(0, 50);
+      used_ops.push("walk");
+      text = hits.length
+        ? `Found ${hits.length} match(es) for “${term}” (showing up to 50).`
+        : `No matches for “${term}”.`;
+      artifacts = hits;
+    }
+
+    else if (intent === "Preview") {
+      const m = query.match(/["“](.+?)["”]/);
+      const path = m ? m[1] : null;
+
+      if (!path) {
+        text =
+          'Preview needs a path in quotes, e.g., preview "/Project_Root/GPT_Files/05_Alias_Map.yaml".';
+      } else {
+        // Call /mcp/head to get a safe text preview
+        const headResp = await fetch(`http://localhost:${PORT}/mcp/head`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": SERVER_API_KEY
+          },
+          body: JSON.stringify({ path, bytes: 50000 })
+        });
+        const j = await headResp.json();
+
+        used_ops.push("head");
+
+        if (!j.ok) {
+          text = `Preview failed: ${j.message || "unknown error"}`;
+        } else {
+          const firstPara = j.text
+            ? j.text.split(/\n\s*\n/)[0]
+            : "(no text found)";
+          text = `First paragraph from ${path}:\n\n${firstPara}`;
+          artifacts = [j];
+        }
+      }
+    }
+
+    else if (intent === "Download") {
+      const m = query.match(/["“](.+?)["”]/);
+      const path = m ? m[1] : null;
+      if (!path) {
+        text =
+          'Download needs a path in quotes, e.g., download "/Project_Root/GPT_Files/05_Alias_Map.yaml".';
+      } else {
+        const r = await dbxDownload({ path: String(path) });
+        used_ops.push("get");
+        if (!r.ok) {
+          text = `Download failed (${r.status}).`;
+        } else {
+          text = `Downloaded ${path} (${r.data.length} bytes).`;
+          artifacts = [
+            {
+              path,
+              size_bytes: r.data.length,
+              content_type: r.headers["content-type"] || null
+            }
+          ];
+        }
+      }
+    }
+
+    // stubs for skills
+    else if (
+      intent === "Forecasting_Policy" ||
+      intent === "Root_Cause" ||
+      intent === "Comparison"
+    ) {
+      text = `Intent detected = ${intent}. Backend skill not wired yet.`;
+    }
+
+    return res.json({ text, answer: { intent, used_ops, artifacts } });
+  } catch (e) {
+    console.error("routeThenAnswer error", e?.message);
+    res.status(500).json({ error: "router_error", message: e?.message });
+  }
 });
+
 
 /* ---------- Start ---------- */
 app.listen(PORT, ()=>console.log(`DBX REST running on :${PORT}`));
