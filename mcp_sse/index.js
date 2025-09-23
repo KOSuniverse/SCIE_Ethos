@@ -1,10 +1,12 @@
 import crypto from "node:crypto";
 import axios from "axios";
+import pdfParse from "pdf-parse";
+import mammoth from "mammoth";
 
 /* =========================
    CONFIG
    ========================= */
-export const DBX_ROOT_PREFIX = process.env.DBX_ROOT_PREFIX || "/Project_Root";
+export const DBX_ROOT_PREFIX = process.env.DBX_ROOT_PREFIX || "/Project_Root/GPT_Files";
 const INDEX_ROOT = `${DBX_ROOT_PREFIX}/indexes`;
 const JSONL_PATH = `${INDEX_ROOT}/file_index.jsonl`;
 const CSV_PATH   = `${INDEX_ROOT}/file_index.csv`;
@@ -13,45 +15,41 @@ const MANIFEST   = `${INDEX_ROOT}/manifest.json`;
 const TEXTISH = /\.(txt|csv|json|ya?ml|md|log)$/i;
 const ZIP     = /\.zip$/i;
 const XLSX    = /\.xlsx$/i;
-const MAX_BYTES_DEFAULT = 128_000;
+const IS_PDF  = /\.pdf$/i;
+const IS_DOCX = /\.docx$/i;
 
-function sha1(buf){ return crypto.createHash("sha1").update(buf).digest("hex"); }
+const MAX_BYTES_DEFAULT = 128_000;
+const MAX_EXTRACT_BYTES = 8 * 1024 * 1024; // 8MB
+
+const sha1 = buf => crypto.createHash("sha1").update(buf).digest("hex");
 const rel = p => (p?.startsWith("/") ? p.slice(1) : p);
+const normUserPath = p => (p||"").replace(/^\/+/, "").toLowerCase();
 
 /* =========================
-   Dropbox Auth (Render env)
-   Priority: refresh flow → static token
+   Dropbox Auth (refresh first, else static)
    ========================= */
-let cachedAccessToken = null;
-let cachedExpEpoch = 0;
-
+let cachedAccessToken = null, cachedExpEpoch = 0;
 async function getAccessToken() {
   if (process.env.DROPBOX_ACCESS_TOKEN) return process.env.DROPBOX_ACCESS_TOKEN;
-
   const REFRESH = process.env.DROPBOX_REFRESH_TOKEN;
   const KEY     = process.env.DROPBOX_APP_KEY;
   const SECRET  = process.env.DROPBOX_APP_SECRET;
-  if (!REFRESH || !KEY || !SECRET) {
-    throw new Error("Dropbox auth missing. Set DROPBOX_REFRESH_TOKEN, DROPBOX_APP_KEY, DROPBOX_APP_SECRET (or DROPBOX_ACCESS_TOKEN).");
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  if (cachedAccessToken && now < (cachedExpEpoch - 60)) return cachedAccessToken;
-
-  const params = new URLSearchParams({ grant_type: "refresh_token", refresh_token: REFRESH }).toString();
-  const basic = Buffer.from(`${KEY}:${SECRET}`).toString("base64");
+  if (!REFRESH || !KEY || !SECRET) throw new Error("Missing Dropbox auth vars.");
+  const now = Math.floor(Date.now()/1000);
+  if (cachedAccessToken && now < (cachedExpEpoch-60)) return cachedAccessToken;
+  const params = new URLSearchParams({ grant_type:"refresh_token", refresh_token:REFRESH }).toString();
+  const basic  = Buffer.from(`${KEY}:${SECRET}`).toString("base64");
   const r = await axios.post("https://api.dropbox.com/oauth2/token", params, {
-    headers: { "Content-Type":"application/x-www-form-urlencoded", "Authorization": `Basic ${basic}` }
+    headers: { "Content-Type":"application/x-www-form-urlencoded", "Authorization":`Basic ${basic}` }
   });
-
   cachedAccessToken = r.data.access_token;
   cachedExpEpoch = Math.floor(Date.now()/1000) + (r.data.expires_in || 14400);
   return cachedAccessToken;
 }
-async function authHeaders(){ return { Authorization: `Bearer ${await getAccessToken()}` }; }
+const authHeaders = async () => ({ Authorization: `Bearer ${await getAccessToken()}` });
 
 /* =========================
-   Dropbox REST helpers (cloud-only)
+   Dropbox REST helpers
    ========================= */
 const DBX_API  = "https://api.dropboxapi.com/2";
 const DBX_CONT = "https://content.dropboxapi.com/2";
@@ -67,28 +65,23 @@ async function dbxCreateFolderIfMissing(path){
   await axios.post(`${DBX_API}/files/create_folder_v2`, { path, autorename:false },
     { headers:{ ...(await authHeaders()), "Content-Type":"application/json" } });
 }
-async function dbxWriteBytes(path, bytes){ // overwrite
+async function dbxWriteBytes(path, bytes){
   const args = { path, mode:{".tag":"overwrite"}, mute:true };
   await axios.post(`${DBX_CONT}/files/upload`, bytes, {
     headers:{ ...(await authHeaders()), "Content-Type":"application/octet-stream", "Dropbox-API-Arg": JSON.stringify(args) }
   });
 }
-async function dbxWriteText(path, text){ return dbxWriteBytes(path, Buffer.from(text, "utf8")); }
-async function dbxReadBytes(path){ // small files only
+const dbxWriteText = (p,t)=>dbxWriteBytes(p, Buffer.from(t,"utf8"));
+async function dbxReadBytes(path){
   const args = { path };
   const r = await axios.post(`${DBX_CONT}/files/download`, null, {
-    responseType: "arraybuffer",
-    headers:{
-      ...(await authHeaders()),
-      "Dropbox-API-Arg": JSON.stringify(args),
-      "Content-Type": "text/plain; charset=utf-8" // prevent x-www-form-urlencoded
-    }
+    responseType:"arraybuffer",
+    headers:{ ...(await authHeaders()), "Dropbox-API-Arg": JSON.stringify(args), "Content-Type":"text/plain; charset=utf-8" }
   });
   return Buffer.from(r.data);
 }
-// naive append (read+append+overwrite). OK for now; batched upstream.
 async function dbxAppendText(path, text){
-  const add = Buffer.from(text, "utf8");
+  const add = Buffer.from(text,"utf8");
   let cur = Buffer.alloc(0);
   if (await dbxExists(path)) cur = await dbxReadBytes(path);
   await dbxWriteBytes(path, Buffer.concat([cur, add]));
@@ -103,9 +96,8 @@ async function dbxListContinue(cursor){
     { headers:{ ...(await authHeaders()), "Content-Type":"application/json" } });
 }
 async function dbxGetMetadata(path){
-  const r = await axios.post(`${DBX_API}/files/get_metadata`, { path }, {
-    headers:{ ...(await authHeaders()), "Content-Type":"application/json" }
-  });
+  const r = await axios.post(`${DBX_API}/files/get_metadata`, { path },
+    { headers:{ ...(await authHeaders()), "Content-Type":"application/json" } });
   return r.data;
 }
 function normalizeEntries(entries){
@@ -113,23 +105,33 @@ function normalizeEntries(entries){
     .filter(e => e[".tag"] !== "deleted")
     .map(e => ({
       tag: e[".tag"],
-      path: e.path_lower,
+      path: e.path_lower,              // lowercased path
       name: e.name,
       mime: e[".tag"] === "folder" ? "folder" : "application/octet-stream",
       size: e.size ?? null,
       modified: e.server_modified ?? e.client_modified ?? null
     }));
 }
-// temp link + HTTP Range
 async function dbxTempLink(path){
   const { data } = await axios.post(`${DBX_API}/files/get_temporary_link`, { path }, {
     headers:{ ...(await authHeaders()), "Content-Type":"application/json" }
   });
   return data?.link || null;
 }
-async function httpRange(link, start, end){
-  return axios.get(link, { responseType:"arraybuffer", headers:{ Range:`bytes=${start}-${end}` }});
+const httpRange = (link, start, end)=>axios.get(link, { responseType:"arraybuffer", headers:{ Range:`bytes=${start}-${end}` }});
+
+/* =========================
+   Extractors (PDF/DOCX)
+   ========================= */
+async function fetchBytesForExtract(dbxLowerPath, cap=MAX_EXTRACT_BYTES){
+  const link = await dbxTempLink(dbxLowerPath);
+  if (!link) return null;
+  const r = await axios.get(link, { responseType:"arraybuffer" });
+  const buf = Buffer.from(r.data);
+  return buf.length > cap ? buf.slice(0, cap) : buf;
 }
+const extractPdfText  = async buf => { try { const out = await pdfParse(buf); return (out.text||"").trim(); } catch { return ""; } };
+const extractDocxText = async buf => { try { const out = await mammoth.extractRawText({ buffer: buf }); return (out.value||"").trim(); } catch { return ""; } };
 
 /* =========================
    Heuristics
@@ -159,7 +161,6 @@ function guessSiteCountryPlant(p){
   }
   return out;
 }
-async function sniffXlsxSheetNames(){ return []; } // upgrade later
 async function readCheckpoint(cpPath){
   try { const buf = await dbxReadBytes(cpPath); return JSON.parse(buf.toString("utf8")); } catch { return null; }
 }
@@ -182,10 +183,10 @@ export async function ensureIndexScaffold(){
 
 export function registerRoutes(app){
 
-  /* ---- Health (schema also expects /mcp/healthz) ---- */
+  /* Health */
   app.get("/mcp/healthz", (_req, res) => res.json({ ok:true, root: DBX_ROOT_PREFIX }));
 
-  /* ---- INDEX: build (BATCHED WRITES) ---- */
+  /* INDEX: build/refresh (batched writes) */
   app.post("/mcp/index_full", async (req, res) => {
     try {
       const {
@@ -196,35 +197,34 @@ export function registerRoutes(app){
         preview_bytes     = 200_000,
         checksum_bytes_limit = 1_000_000,
         resume = true,
-        batch_size = 500
+        batch_size = 400
       } = req.body || {};
 
       const prev = resume ? await readCheckpoint(manifest_path) : null;
       let total = 0, wrote = 0;
 
-      // Walk Dropbox
+      // Walk
       let cursor = null, raw = [];
       { const r = await dbxListFolder({ path: path_prefix, recursive: true, limit: 2000 });
         const j = r.data; raw.push(...(j.entries||[])); cursor = j.has_more ? j.cursor : null; }
       while (cursor) {
         const r = await dbxListContinue(cursor);
         const j = r.data; raw.push(...(j.entries||[])); cursor = j.has_more ? j.cursor : null;
-        if (raw.length > 300_000) break; // safety cap
+        if (raw.length > 300_000) break;
       }
 
       const entries = normalizeEntries(raw)
         .filter(e => e.path && e.mime !== "folder")
         .filter(e => !ZIP.test(e.path));
+
       total = entries.length;
 
-      // Ensure CSV header exists
       if (!prev || !prev.csv_header_written) {
         await dbxWriteText(output_csv_path,
           "site,country,plant_code,category,subcategory,month,file_path,as_of_date,currency,scale,canonical,has_totals,is_complete,checksum_sha1,mime,size,modified\n"
         );
       }
 
-      // Batch buffers
       let jsonlBuf = "", csvBuf = "";
       async function flush() {
         if (jsonlBuf) { await dbxAppendText(output_jsonl_path, jsonlBuf); jsonlBuf=""; }
@@ -235,8 +235,9 @@ export function registerRoutes(app){
       }
 
       for (const e of entries) {
-        const filePath = e.path;
+        const filePath = e.path;          // path_lower from Dropbox
         const name = e.name || "";
+
         const month = parseMonthFromName(name) || parseMonthFromName(filePath) || null;
         const { category, subcategory } = guessCategoryBits(filePath);
         const { site, country, plant_code } = guessSiteCountryPlant(filePath);
@@ -255,8 +256,24 @@ export function registerRoutes(app){
             truncated = buf.length >= preview_bytes;
             if (buf.length <= checksum_bytes_limit) content_hash = sha1(buf);
           }
+        } else if (IS_PDF.test(name)) {
+          const buf = await fetchBytesForExtract(filePath);
+          if (buf) {
+            const text = await extractPdfText(buf);
+            text_preview = text ? text.slice(0, 12000) : "";
+            truncated = !!text && text.length > 12000;
+            if (buf.length <= checksum_bytes_limit) content_hash = sha1(buf);
+          }
+        } else if (IS_DOCX.test(name)) {
+          const buf = await fetchBytesForExtract(filePath);
+          if (buf) {
+            const text = await extractDocxText(buf);
+            text_preview = text ? text.slice(0, 12000) : "";
+            truncated = !!text && text.length > 12000;
+            if (buf.length <= checksum_bytes_limit) content_hash = sha1(buf);
+          }
         } else if (XLSX.test(name)) {
-          sheet_names = await sniffXlsxSheetNames(); // placeholder
+          // (XLSX parsing to be added in next step)
         } else {
           if (typeof e.size === "number" && e.size <= checksum_bytes_limit) {
             const link = await dbxTempLink(filePath);
@@ -286,7 +303,7 @@ export function registerRoutes(app){
         if (wrote % batch_size === 0) await flush();
       }
 
-      await flush(); // final
+      await flush();
       await dbxWriteText(manifest_path, JSON.stringify({
         path_prefix, total, processed: wrote, csv_header_written: true, completed: true, completed_at: new Date().toISOString()
       }, null, 2));
@@ -297,7 +314,7 @@ export function registerRoutes(app){
     }
   });
 
-  /* ---- Search over names + preview ---- */
+  /* SEARCH: name + preview */
   app.get("/mcp/search", async (req, res) => {
     try {
       const q = (req.query.q || "").toString().trim();
@@ -330,110 +347,70 @@ export function registerRoutes(app){
     }
   });
 
-  /* ---- Bytes (range) ---- */
-  app.post("/mcp/get_bytes", async (req, res) => {
+  /* BYTES (range) — back-compat /mcp/get */
+  app.post("/mcp/get", async (req, res) => {
     try {
-      const { path, range_start=0, range_end=null, max_bytes=MAX_BYTES_DEFAULT } = req.body || {};
+      const { path, range_start=0, range_end=null } = req.body || {};
       if (!path) return res.status(400).json({ ok:false, message:"path required" });
-
-      const link = await dbxTempLink(path);
+      const absLower = "/" + normUserPath(path);
+      const link = await dbxTempLink(absLower);
       if (!link) return res.status(404).json({ ok:false, message:"TEMP_LINK_NOT_FOUND" });
 
+      const MAX = MAX_BYTES_DEFAULT;
       const start = Math.max(0, Number(range_start)||0);
-      const end   = (range_end!=null ? Number(range_end) : (start + max_bytes - 1));
-      const hardEnd = start + max_bytes - 1;
-
-      const r = await httpRange(link, start, Math.min(end, hardEnd));
+      const end   = (range_end!=null ? Number(range_end) : (start + MAX - 1));
+      const r = await httpRange(link, start, Math.min(end, start + MAX - 1));
       const body = Buffer.from(r.data);
       res.status(206).set({
         "Content-Type": "application/octet-stream",
         "Content-Range": r.headers["content-range"] || `bytes ${start}-${start+body.length-1}/*`,
-        "X-Truncated": body.length >= max_bytes ? "true" : "false"
+        "X-Truncated": (end - start + 1) > MAX ? "true" : "false"
       }).send(body);
     } catch (e) {
-      res.status(502).json({ ok:false, message: e?.message || "GET_BYTES_ERROR" });
+      res.status(502).json({ ok:false, message: e?.message || "GET_ERROR" });
     }
   });
 
-  /* ---- Text from index preview ---- */
-app.post("/mcp/get_text", async (req, res) => {
-  try {
-    const { path, max_chars=8000 } = req.body || {};
-    if (!path) return res.status(400).json({ ok:false, message:"path required" });
-
-    const want = path.replace(/^\/+/,"").toLowerCase(); // strip leading /, lower
-    const buf = await dbxReadBytes(JSONL_PATH);
-    const lines = buf.toString("utf8").split(/\r?\n/).filter(Boolean);
-
-    // match either exact stored form or stored form with your root stripped
-    let row = null;
-    for (const l of lines) {
-      try {
-        const r = JSON.parse(l);
-        const stored = (r.file_path || "").toLowerCase();
-        if (!stored) continue;
-        // accept: exact, or user sent absolute with same stored
-        if (stored === want || want.endsWith(stored)) { row = r; break; }
-      } catch {}
+  /* TEXT from index preview */
+  app.post("/mcp/get_text", async (req, res) => {
+    try {
+      const { path, max_chars=8000 } = req.body || {};
+      if (!path) return res.status(400).json({ ok:false, message:"path required" });
+      const want = normUserPath(path);
+      const buf = await dbxReadBytes(JSONL_PATH);
+      const lines = buf.toString("utf8").split(/\r?\n/).filter(Boolean);
+      let row = null;
+      for (const l of lines) {
+        try {
+          const r = JSON.parse(l);
+          const stored = (r.file_path || "").toLowerCase();
+          if (stored && (stored === want || want.endsWith(stored))) { row = r; break; }
+        } catch {}
+      }
+      if (!row) return res.status(404).json({ ok:false, message:"NOT_INDEXED" });
+      const text = (row.text_preview || "").slice(0, max_chars);
+      res.json({ ok:true, path: row.file_path, text_excerpt: text, truncated: (row.text_preview||"").length > text.length });
+    } catch (e) {
+      res.status(502).json({ ok:false, message: e?.message || "GET_TEXT_ERROR" });
     }
-    if (!row) return res.status(404).json({ ok:false, message:"NOT_INDEXED" });
+  });
 
-    const text = (row.text_preview || "").slice(0, max_chars);
-    res.json({ ok:true, path: row.file_path, text_excerpt: text, truncated: (row.text_preview||"").length > text.length });
-  } catch (e) {
-    res.status(502).json({ ok:false, message: e?.message || "GET_TEXT_ERROR" });
-  }
-});
-
-  /* ---- Back-compat: /mcp/get (per your schema) ---- */
-app.post("/mcp/get", async (req, res) => {
-  try {
-    const { path, range_start=0, range_end=null } = req.body || {};
-    if (!path) return res.status(400).json({ ok:false, message:"path required" });
-
-    const normalized = path.replace(/^\/+/,"").toLowerCase();
-    const abs = "/" + normalized; // Dropbox API is case-insensitive but uses /path_lower
-    const link = await dbxTempLink(abs);
-    if (!link) return res.status(404).json({ ok:false, message:"TEMP_LINK_NOT_FOUND" });
-
-    const MAX = 128000;
-    const start = Math.max(0, Number(range_start) || 0);
-    const end   = range_end!=null ? Number(range_end) : (start + MAX - 1);
-    const r = await httpRange(link, start, Math.min(end, start + MAX - 1));
-    const body = Buffer.from(r.data);
-
-    res.status(206).set({
-      "Content-Type": "application/octet-stream",
-      "Content-Range": r.headers["content-range"] || `bytes ${start}-${start+body.length-1}/*`,
-      "X-Truncated": (end - start + 1) > MAX ? "true" : "false"
-    }).send(body);
-  } catch (e) {
-    res.status(502).json({ ok:false, message: e?.message || "GET_ERROR" });
-  }
-});
-
-  /* ---- Schema routes: list/meta/walk ---- */
+  /* LIST/META/WALK (schema) */
   app.get("/mcp/list", async (req, res) => {
     try {
       const path = (req.query.path || DBX_ROOT_PREFIX).toString();
-      const r = await dbxListFolder({ path, recursive:false, limit: 2000 });
-      res.json({ ok:true, entries: normalizeEntries(r.data.entries || []) });
-    } catch (e) {
-      res.status(502).json({ ok:false, message: e?.message || "LIST_ERROR" });
-    }
+      const r = await dbxListFolder({ path, recursive:false, limit:2000 });
+      res.json({ ok:true, entries: normalizeEntries(r.data.entries||[]) });
+    } catch (e) { res.status(502).json({ ok:false, message: e?.message || "LIST_ERROR" }); }
   });
-
   app.get("/mcp/meta", async (req, res) => {
     try {
       const path = req.query.path;
       if (!path) return res.status(400).json({ ok:false, message:"path required" });
       const meta = await dbxGetMetadata(path);
       res.json({ ok:true, meta });
-    } catch (e) {
-      res.status(502).json({ ok:false, message: e?.message || "META_ERROR" });
-    }
+    } catch (e) { res.status(502).json({ ok:false, message: e?.message || "META_ERROR" }); }
   });
-
   app.post("/mcp/walk", async (req, res) => {
     try {
       const { path_prefix = DBX_ROOT_PREFIX, max_items = 2000, cursor = null } = req.body || {};
@@ -444,12 +421,10 @@ app.post("/mcp/get", async (req, res) => {
         const r = await dbxListFolder({ path: path_prefix, recursive:true, limit: Math.max(1, Math.min(2000, max_items)) });
         return res.json({ ok:true, entries: normalizeEntries(r.data.entries||[]), cursor: r.data.has_more ? r.data.cursor : null });
       }
-    } catch (e) {
-      res.status(502).json({ ok:false, message: e?.message || "WALK_ERROR" });
-    }
+    } catch (e) { res.status(502).json({ ok:false, message: e?.message || "WALK_ERROR" }); }
   });
 
-  /* ---- Debug helpers ---- */
+  /* DEBUG */
   app.get("/mcp/index_stats", async (_req, res) => {
     try {
       const exists = await dbxExists(JSONL_PATH);
@@ -457,9 +432,7 @@ app.post("/mcp/get", async (req, res) => {
       const buf = await dbxReadBytes(JSONL_PATH);
       const lines = buf.toString("utf8").split(/\r?\n/).filter(Boolean).length;
       res.json({ ok:true, exists:true, jsonl: JSONL_PATH, lines });
-    } catch (e) {
-      res.status(502).json({ ok:false, message: e?.message || "INDEX_STATS_ERROR" });
-    }
+    } catch (e) { res.status(502).json({ ok:false, message: e?.message || "INDEX_STATS_ERROR" }); }
   });
   app.get("/mcp/index_head", async (req, res) => {
     try {
@@ -467,8 +440,20 @@ app.post("/mcp/get", async (req, res) => {
       const buf = await dbxReadBytes(JSONL_PATH);
       const lines = buf.toString("utf8").split(/\r?\n/).filter(Boolean).slice(0, n);
       res.json({ ok:true, lines: lines.map(l => JSON.parse(l)) });
-    } catch (e) {
-      res.status(502).json({ ok:false, message: e?.message || "INDEX_HEAD_ERROR" });
-    }
+    } catch (e) { res.status(502).json({ ok:false, message: e?.message || "INDEX_HEAD_ERROR" }); }
+  });
+
+  /* On-demand single-file extract (optional) */
+  app.post("/mcp/extract", async (req, res) => {
+    try {
+      const { path, max_chars = 12000 } = req.body || {};
+      if (!path) return res.status(400).json({ ok:false, message:"path required" });
+      const abs = "/" + normUserPath(path);
+      let text = "";
+      if (IS_PDF.test(abs))  { const b = await fetchBytesForExtract(abs); if (b) text = await extractPdfText(b); }
+      else if (IS_DOCX.test(abs)) { const b = await fetchBytesForExtract(abs); if (b) text = await extractDocxText(b); }
+      res.json({ ok:true, path: abs.slice(1), text_excerpt: (text||"").slice(0, max_chars), truncated: (text||"").length > max_chars });
+    } catch (e) { res.status(502).json({ ok:false, message: e?.message || "EXTRACT_ERROR" }); }
   });
 }
+
