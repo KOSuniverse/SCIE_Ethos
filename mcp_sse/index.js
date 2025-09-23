@@ -124,30 +124,40 @@ const dbxUpload = ({ path, bytes }) =>
 async function extractText(path, buf) {
   try {
     if (TEXTISH.test(path)) return buf.toString("utf8");
+
     if (XLSX_RE.test(path)) {
-      const wb = XLSX.read(buf, { type:"buffer" });
+      const wb = XLSX.read(buf, { type: "buffer" });
       let out = [];
-      wb.SheetNames.forEach(name=>{
+      wb.SheetNames.forEach(name => {
         const sheet = wb.Sheets[name];
-        const csv = XLSX.utils.sheet_to_csv(sheet, { header:1 });
+        const csv = XLSX.utils.sheet_to_csv(sheet, { header: 1 });
         out.push(`--- Sheet: ${name} ---\n${csv}`);
       });
       return out.join("\n");
     }
+
     if (PDF_RE.test(path)) return await extractPdfText(buf);
+
     if (DOCX_RE.test(path)) {
       const result = await mammoth.extractRawText({ buffer: buf });
       return result.value;
     }
+
     if (PPTX_RE.test(path)) {
-      const pres = await pptxParser(buf);
-      return pres.slides.map((s,i)=>`--- Slide ${i+1} ---\n${s.text}`).join("\n");
+      return new Promise((resolve, reject) => {
+        officeParser.parseOfficeAsync(buf, "pptx", (err, data) => {
+          if (err) reject(err);
+          else resolve(data || "");
+        });
+      });
     }
+
     return "";
   } catch {
     return "";
   }
 }
+
 
 /* ---------- Express ---------- */
 const app = express();
