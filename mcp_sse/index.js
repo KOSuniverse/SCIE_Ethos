@@ -1,4 +1,4 @@
-// index.js — Dropbox REST API + Indexer + OCR + Robust Extractors
+// index.js — Dropbox REST API with /mcp/open (robust file opener)
 
 import express from "express";
 import axios from "axios";
@@ -29,7 +29,7 @@ const DBX_RPC     = "https://api.dropboxapi.com/2";
 const DBX_CONTENT = "https://content.dropboxapi.com/2";
 let _accessToken = null;
 
-/* ---------- OAuth refresh ---------- */
+/* ---------- Auth ---------- */
 async function refreshAccessToken() {
   const r = await axios.post(
     TOKEN_URL,
@@ -42,7 +42,6 @@ async function refreshAccessToken() {
     { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
   );
   _accessToken = r.data.access_token;
-  console.log("REFRESH: new Dropbox token");
   return _accessToken;
 }
 async function withAuth(fn) {
@@ -60,30 +59,14 @@ async function withAuth(fn) {
 }
 
 /* ---------- Helpers ---------- */
-const normPath = (p) => (!p || p === "/" ? "" : (p.startsWith("/") ? p : "/" + p));
-const normalizeEntries = (entries) =>
-  (entries||[]).map(e=>({ path:e.path_display||e.path_lower, name:e.name, size:e.size??null,
-    modified:e.server_modified??null, mime:e[".tag"]==="file"? e.mime_type??null:"folder"}));
 const sha1 = buf => crypto.createHash("sha1").update(buf).digest("hex");
-
 const TEXTISH = /\.(txt|csv|json|ya?ml|md|log)$/i;
-const ZIP = /\.zip$/i;
-const XLSX_RE = /\.xlsx$/i;
-const PDF_RE = /\.pdf$/i;
+const PDF_RE  = /\.pdf$/i;
 const DOCX_RE = /\.docx$/i;
+const XLSX_RE = /\.xlsx$/i;
 const PPTX_RE = /\.pptx$/i;
 
-/* ---------- Dropbox wrappers ---------- */
-const dbxListFolder = ({ path, recursive, limit }) =>
-  withAuth(token=>axios.post(`${DBX_RPC}/files/list_folder`,
-    { path, recursive:!!recursive, include_deleted:false, limit },
-    { headers:{ Authorization:`Bearer ${token}` } }));
-const dbxListContinue = (cursor) =>
-  withAuth(token=>axios.post(`${DBX_RPC}/files/list_folder/continue`,
-    { cursor }, { headers:{ Authorization:`Bearer ${token}` } }));
-const dbxGetMetadata = (path) =>
-  withAuth(token=>axios.post(`${DBX_RPC}/files/get_metadata`,
-    { path }, { headers:{ Authorization:`Bearer ${token}` } }));
+/* ---------- Dropbox ---------- */
 const dbxDownload = async ({ path }) =>
   withAuth(async token=>{
     const headers = {
@@ -108,47 +91,51 @@ async function extractPdf(buf) {
       const content = await page.getTextContent();
       text += content.items.map(it => it.str).join(" ") + "\n";
     }
-    if (text.trim().length > 0) return text;
+    if (text.trim().length > 0) return { text, note: "Extracted with pdfjs" };
   } catch {}
   const { data: { text } } = await Tesseract.recognize(buf, "eng");
-  return text;
+  return { text, note: "Extracted with OCR" };
 }
 async function extractDocx(buf) {
   try {
     const result = await mammoth.extractRawText({ buffer: buf });
-    if (result.value && result.value.trim().length > 0) return result.value;
+    if (result.value && result.value.trim().length > 0) {
+      return { text: result.value, note: "Extracted with mammoth" };
+    }
   } catch {}
   try {
     const zip = await JSZip.loadAsync(buf);
     const docXml = await zip.file("word/document.xml").async("string");
-    return docXml.replace(/<[^>]+>/g, " ");
-  } catch { return ""; }
+    return { text: docXml.replace(/<[^>]+>/g, " "), note: "Extracted with JSZip fallback" };
+  } catch { return { text: "", note: "DOCX parse failed" }; }
+}
+async function extractXlsx(buf) {
+  try {
+    const wb = XLSX.read(buf, { type:"buffer" });
+    let out = [];
+    wb.SheetNames.forEach(name=>{
+      const sheet = wb.Sheets[name];
+      const csv = XLSX.utils.sheet_to_csv(sheet, { header:1 });
+      out.push(`--- Sheet: ${name} ---\n${csv}`);
+    });
+    return { text: out.join("\n"), note: "Extracted with xlsx" };
+  } catch { return { text: "", note: "XLSX parse failed" }; }
 }
 async function extractPptx(buf) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     officeParser.parseOfficeAsync(buf, "pptx", (err, data) => {
-      if (err) reject(err);
-      else resolve(data || "");
+      if (err) resolve({ text: "", note: "PPTX parse failed" });
+      else resolve({ text: data || "", note: "Extracted with officeparser" });
     });
   });
 }
-async function extractXlsx(buf) {
-  const wb = XLSX.read(buf, { type:"buffer" });
-  let out = [];
-  wb.SheetNames.forEach(name=>{
-    const sheet = wb.Sheets[name];
-    const csv = XLSX.utils.sheet_to_csv(sheet, { header:1 });
-    out.push(`--- Sheet: ${name} ---\n${csv}`);
-  });
-  return out.join("\n");
-}
 async function extractText(path, buf) {
-  if (TEXTISH.test(path)) return buf.toString("utf8");
-  if (PDF_RE.test(path)) return await extractPdf(buf);
+  if (TEXTISH.test(path)) return { text: buf.toString("utf8"), note: "Plain text" };
+  if (PDF_RE.test(path))  return await extractPdf(buf);
   if (DOCX_RE.test(path)) return await extractDocx(buf);
-  if (PPTX_RE.test(path)) return await extractPptx(buf);
   if (XLSX_RE.test(path)) return await extractXlsx(buf);
-  return "";
+  if (PPTX_RE.test(path)) return await extractPptx(buf);
+  return { text: "", note: "Unsupported type" };
 }
 
 /* ---------- Express ---------- */
@@ -162,99 +149,33 @@ app.use((req,res,next)=>{
   next();
 });
 
-/* ---------- Routes ---------- */
+/* ---------- New /mcp/open ---------- */
+app.post("/mcp/open", async (req,res)=>{
+  try {
+    const { path } = req.body || {};
+    if (!path) return res.status(400).json({ error: "path required" });
+
+    const dl = await dbxDownload({ path });
+    if (!dl.ok) return res.status(502).json({ ok:false, status: dl.status });
+
+    const { text, note } = await extractText(path, dl.data);
+
+    res.json({
+      ok: true,
+      path,
+      content_type: dl.headers["content-type"] || null,
+      size_bytes: dl.data.length,
+      checksum: sha1(dl.data),
+      text,
+      note
+    });
+  } catch(e) {
+    res.status(502).json({ ok:false, message:e.message });
+  }
+});
+
+/* ---------- Health ---------- */
 app.get("/mcp/healthz", (_req,res)=>res.json({ok:true,root:DBX_ROOT_PREFIX}));
 
-app.get("/mcp/list", async (req,res)=>{
-  try {
-    const path=req.query?.path || DBX_ROOT_PREFIX;
-    const r=await dbxListFolder({ path:normPath(path), recursive:false, limit:2000});
-    res.json({entries:normalizeEntries(r.data.entries||[])});
-  } catch(e){res.status(502).json({ok:false,message:e.message});}
-});
-
-app.post("/mcp/walk", async (req,res)=>{
-  try {
-    const { path_prefix=DBX_ROOT_PREFIX }=req.body||{};
-    let entries=[], cursor=null;
-    const r=await dbxListFolder({ path:normPath(path_prefix), recursive:true, limit:2000});
-    entries.push(...(r.data.entries||[]));
-    cursor=r.data.has_more? r.data.cursor : null;
-    while(cursor){
-      const cont=await dbxListContinue(cursor);
-      entries.push(...(cont.data.entries||[]));
-      cursor=cont.data.has_more? cont.data.cursor:null;
-    }
-    res.json({entries:normalizeEntries(entries)});
-  } catch(e){res.status(502).json({ok:false,message:e.message});}
-});
-
-app.get("/mcp/meta", async (req,res)=>{
-  try {
-    const { path }=req.query;
-    if(!path) return res.status(400).json({error:"path required"});
-    const r=await dbxGetMetadata(String(path));
-    res.json(r.data);
-  } catch(e){res.status(502).json({ok:false,message:e.message});}
-});
-
-app.post("/mcp/get", async (req,res)=>{
-  try {
-    const { path }=req.body||{};
-    if(!path) return res.status(400).json({error:"path required"});
-    const r=await dbxDownload({ path:String(path) });
-    if(!r.ok) return res.status(502).json({ok:false,status:r.status});
-    res.json({ok:true,path,size_bytes:r.data.length,data_base64:r.data.toString("base64")});
-  } catch(e){res.status(502).json({ok:false,message:e.message});}
-});
-
-app.post("/mcp/head", async (req,res)=>{
-  try {
-    const { path, bytes=200000 }=req.body||{};
-    if(!path) return res.status(400).json({error:"path required"});
-    // Only slice text-like and PDFs, otherwise fetch full file
-    const isOffice = DOCX_RE.test(path)||XLSX_RE.test(path)||PPTX_RE.test(path);
-    const dl=await dbxDownload({ path:String(path) });
-    if(!dl.ok) return res.status(502).json({ok:false,status:dl.status});
-    const buf=dl.data;
-    const text=await extractText(path, buf);
-    res.json({ok:true,path,text,truncated:false});
-  } catch(e){res.status(502).json({ok:false,message:e.message});}
-});
-
-app.post("/mcp/index_full", async (req,res)=>{
-  try {
-    const { path_prefix=DBX_ROOT_PREFIX }=req.body||{};
-    const r=await dbxListFolder({ path:normPath(path_prefix), recursive:true, limit:2000});
-    const entries=normalizeEntries(r.data.entries||[]).filter(e=>!ZIP.test(e.path));
-    let out=[];
-    for(const e of entries){
-      try{
-        const dl=await dbxDownload({ path:e.path });
-        if(!dl.ok) continue;
-        const text=await extractText(e.path, dl.data);
-        out.push({ ...e, checksum:sha1(dl.data), text });
-      } catch(err){console.error("Index skip",e.path,err.message);}
-    }
-    res.json({ok:true,total:out.length});
-  } catch(e){res.status(502).json({ok:false,message:e.message});}
-});
-
-/* ---------- Orchestrator ---------- */
-app.post("/routeThenAnswer", async (req,res)=>{
-  try {
-    const { query }=req.body||{};
-    if(!query) return res.status(400).json({error:"query required"});
-    const q=query.toLowerCase();
-    let intent="Browse";
-    if(/search|find/.test(q)) intent="Search";
-    else if(/preview|open|paragraph/.test(q)) intent="Preview";
-    else if(/download|get/.test(q)) intent="Download";
-    else if(/forecast/.test(q)) intent="Forecasting";
-    else if(/root cause|why/.test(q)) intent="Root_Cause";
-    else if(/compare/.test(q)) intent="Comparison";
-    res.json({text:`Intent: ${intent}`,answer:{intent}});
-  } catch(e){res.status(500).json({error:"router_error",message:e.message});}
-});
-
+/* ---------- Start ---------- */
 app.listen(PORT, ()=>console.log(`DBX REST running on :${PORT}`));
