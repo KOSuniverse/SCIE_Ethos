@@ -19,7 +19,7 @@ const {
 } = process.env;
 
 // hardcoded for now — replace with your own Render env var later
-const SERVER_API_KEY = "CHANGE_ME_LATER";
+const SERVER_API_KEY = "7d3b0d1c9f0d4c6fbe6f2c8a4d7e3b12b3a9f4d0c7e1a2f5c6d7e8f9a0b1c2d3";
 
 const TOKEN_URL   = "https://api.dropboxapi.com/oauth2/token";
 const DBX_RPC     = "https://api.dropboxapi.com/2";
