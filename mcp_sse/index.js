@@ -1,4 +1,4 @@
-// index.js — Dropbox REST API with /mcp/open (robust file opener)
+// index.js — Dropbox REST API with /mcp/walk and /mcp/open
 
 import express from "express";
 import axios from "axios";
@@ -15,14 +15,11 @@ const {
   DROPBOX_APP_KEY,
   DROPBOX_APP_SECRET,
   DROPBOX_REFRESH_TOKEN,
-  SERVER_API_KEY,
   PORT = process.env.PORT || 10000
 } = process.env;
 
-if (!DROPBOX_APP_KEY || !DROPBOX_APP_SECRET || !DROPBOX_REFRESH_TOKEN) {
-  console.error("Missing Dropbox env vars");
-  process.exit(1);
-}
+// hardcoded for now — replace with your own Render env var later
+const SERVER_API_KEY = "CHANGE_ME_LATER";
 
 const TOKEN_URL   = "https://api.dropboxapi.com/oauth2/token";
 const DBX_RPC     = "https://api.dropboxapi.com/2";
@@ -66,9 +63,21 @@ const DOCX_RE = /\.docx$/i;
 const XLSX_RE = /\.xlsx$/i;
 const PPTX_RE = /\.pptx$/i;
 
-/* ---------- Dropbox ---------- */
+/* ---------- Dropbox wrappers ---------- */
+const dbxListFolder = ({ path, recursive, limit }) =>
+  withAuth(token => axios.post(
+    `${DBX_RPC}/files/list_folder`,
+    { path, recursive: !!recursive, include_deleted: false, limit },
+    { headers: { Authorization: `Bearer ${token}` } }
+  ));
+const dbxListContinue = (cursor) =>
+  withAuth(token => axios.post(
+    `${DBX_RPC}/files/list_folder/continue`,
+    { cursor },
+    { headers: { Authorization: `Bearer ${token}` } }
+  ));
 const dbxDownload = async ({ path }) =>
-  withAuth(async token=>{
+  withAuth(async token => {
     const headers = {
       Authorization:`Bearer ${token}`,
       "Dropbox-API-Arg": JSON.stringify({ path })
@@ -141,15 +150,37 @@ async function extractText(path, buf) {
 /* ---------- Express ---------- */
 const app = express();
 app.use(express.json());
+
+// simple API key check
 app.use((req,res,next)=>{
-  if(!SERVER_API_KEY) return next();
-  if(req.path.startsWith("/mcp")||req.path==="/routeThenAnswer"){
-    if(req.headers["x-api-key"]!==SERVER_API_KEY) return res.status(403).json({error:"Forbidden"});
+  if(req.path.startsWith("/mcp")){
+    const key = req.headers["x-api-key"];
+    if(key !== SERVER_API_KEY){
+      return res.status(403).json({error:"Forbidden"});
+    }
   }
   next();
 });
 
-/* ---------- New /mcp/open ---------- */
+/* ---------- Routes ---------- */
+app.get("/mcp/healthz", (_req,res)=>res.json({ok:true,root:DBX_ROOT_PREFIX}));
+
+app.post("/mcp/walk", async (req,res)=>{
+  try {
+    const { path_prefix=DBX_ROOT_PREFIX }=req.body||{};
+    let entries=[], cursor=null;
+    const r=await dbxListFolder({ path:path_prefix, recursive:true, limit:2000});
+    entries.push(...(r.data.entries||[]));
+    cursor=r.data.has_more? r.data.cursor : null;
+    while(cursor){
+      const cont=await dbxListContinue(cursor);
+      entries.push(...(cont.data.entries||[]));
+      cursor=cont.data.has_more? cont.data.cursor:null;
+    }
+    res.json({entries});
+  } catch(e){res.status(502).json({ok:false,message:e.message});}
+});
+
 app.post("/mcp/open", async (req,res)=>{
   try {
     const { path } = req.body || {};
@@ -173,9 +204,6 @@ app.post("/mcp/open", async (req,res)=>{
     res.status(502).json({ ok:false, message:e.message });
   }
 });
-
-/* ---------- Health ---------- */
-app.get("/mcp/healthz", (_req,res)=>res.json({ok:true,root:DBX_ROOT_PREFIX}));
 
 /* ---------- Start ---------- */
 app.listen(PORT, ()=>console.log(`DBX REST running on :${PORT}`));
