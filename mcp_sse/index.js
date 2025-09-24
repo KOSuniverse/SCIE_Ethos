@@ -83,15 +83,38 @@ const dbxDownload = async ({ path }) =>
   withAuth(async token => {
     console.log("Downloading from Dropbox:", path);
     const headers = {
-      Authorization:`Bearer ${token}`,
+      Authorization: `Bearer ${token}`,
       "Dropbox-API-Arg": JSON.stringify({ path })
     };
-    const r = await fetch(`${DBX_CONTENT}/files/download`, { method:"POST", headers });
-    const ab = await r.arrayBuffer();
-    console.log("Download complete:", path, "size:", ab.byteLength);
-    return { ok:r.ok, status:r.status,
-      headers:{ "content-type": r.headers.get("content-type") },
-      data:Buffer.from(ab) };
+
+    let attempt = 0;
+    while (attempt < 3) {
+      try {
+        const r = await axios.post(
+          `${DBX_CONTENT}/files/download`,
+          null, // no body
+          { headers, responseType: "arraybuffer", timeout: 30000 }
+        );
+
+        console.log("Download complete:", path, "size:", r.data.byteLength);
+        return {
+          ok: true,
+          status: r.status,
+          headers: { "content-type": r.headers["content-type"] },
+          data: Buffer.from(r.data)
+        };
+      } catch (err) {
+        const status = err?.response?.status;
+        if (status === 409) {
+          attempt++;
+          console.warn(`409 conflict, retrying ${attempt}/3...`);
+          await new Promise(res => setTimeout(res, 500 * attempt)); // backoff
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error(`Failed to download ${path} after 3 attempts`);
   });
 
 /* ---------- Extractors ---------- */
