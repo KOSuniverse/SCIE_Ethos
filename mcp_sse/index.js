@@ -1,4 +1,4 @@
-// index.js — Dropbox REST API with /mcp/walk and /mcp/open
+// index.js — Dropbox REST API with /mcp/walk and /mcp/open + robust logging
 
 import express from "express";
 import axios from "axios";
@@ -18,7 +18,7 @@ const {
   PORT = process.env.PORT || 10000
 } = process.env;
 
-// hardcoded for now — replace with your own Render env var later
+// Hardcoded API key — replace later if needed
 const SERVER_API_KEY = "7d3b0d1c9f0d4c6fbe6f2c8a4d7e3b12b3a9f4d0c7e1a2f5c6d7e8f9a0b1c2d3";
 
 const TOKEN_URL   = "https://api.dropboxapi.com/oauth2/token";
@@ -28,6 +28,7 @@ let _accessToken = null;
 
 /* ---------- Auth ---------- */
 async function refreshAccessToken() {
+  console.log("Refreshing Dropbox access token...");
   const r = await axios.post(
     TOKEN_URL,
     new URLSearchParams({
@@ -39,6 +40,7 @@ async function refreshAccessToken() {
     { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
   );
   _accessToken = r.data.access_token;
+  console.log("New token acquired.");
   return _accessToken;
 }
 async function withAuth(fn) {
@@ -48,6 +50,7 @@ async function withAuth(fn) {
     const status = e?.response?.status;
     const body = e?.response?.data || "";
     if (status === 401 || String(body).includes("expired_access_token")) {
+      console.warn("Token expired, refreshing...");
       await refreshAccessToken();
       return fn(_accessToken);
     }
@@ -78,12 +81,14 @@ const dbxListContinue = (cursor) =>
   ));
 const dbxDownload = async ({ path }) =>
   withAuth(async token => {
+    console.log("Downloading from Dropbox:", path);
     const headers = {
       Authorization:`Bearer ${token}`,
       "Dropbox-API-Arg": JSON.stringify({ path })
     };
     const r = await fetch(`${DBX_CONTENT}/files/download`, { method:"POST", headers });
     const ab = await r.arrayBuffer();
+    console.log("Download complete:", path, "size:", ab.byteLength);
     return { ok:r.ok, status:r.status,
       headers:{ "content-type": r.headers.get("content-type") },
       data:Buffer.from(ab) };
@@ -92,6 +97,7 @@ const dbxDownload = async ({ path }) =>
 /* ---------- Extractors ---------- */
 async function extractPdf(buf) {
   try {
+    console.log("PDF extractor (pdfjs)...");
     const data = new Uint8Array(buf);
     const pdf = await pdfjsLib.getDocument({ data }).promise;
     let text = "";
@@ -101,25 +107,36 @@ async function extractPdf(buf) {
       text += content.items.map(it => it.str).join(" ") + "\n";
     }
     if (text.trim().length > 0) return { text, note: "Extracted with pdfjs" };
-  } catch {}
+  } catch (err) {
+    console.error("PDF ERROR:", err.message);
+  }
+  console.log("PDF extractor failed, falling back to OCR...");
   const { data: { text } } = await Tesseract.recognize(buf, "eng");
   return { text, note: "Extracted with OCR" };
 }
 async function extractDocx(buf) {
   try {
+    console.log("DOCX extractor (mammoth)...");
     const result = await mammoth.extractRawText({ buffer: buf });
     if (result.value && result.value.trim().length > 0) {
       return { text: result.value, note: "Extracted with mammoth" };
     }
-  } catch {}
+  } catch (err) {
+    console.error("DOCX ERROR (mammoth):", err.message);
+  }
   try {
+    console.log("DOCX extractor (JSZip fallback)...");
     const zip = await JSZip.loadAsync(buf);
     const docXml = await zip.file("word/document.xml").async("string");
     return { text: docXml.replace(/<[^>]+>/g, " "), note: "Extracted with JSZip fallback" };
-  } catch { return { text: "", note: "DOCX parse failed" }; }
+  } catch (err) {
+    console.error("DOCX ERROR (JSZip):", err.message);
+    return { text: "", note: "DOCX parse failed" };
+  }
 }
 async function extractXlsx(buf) {
   try {
+    console.log("XLSX extractor...");
     const wb = XLSX.read(buf, { type:"buffer" });
     let out = [];
     wb.SheetNames.forEach(name=>{
@@ -128,13 +145,21 @@ async function extractXlsx(buf) {
       out.push(`--- Sheet: ${name} ---\n${csv}`);
     });
     return { text: out.join("\n"), note: "Extracted with xlsx" };
-  } catch { return { text: "", note: "XLSX parse failed" }; }
+  } catch (err) {
+    console.error("XLSX ERROR:", err.message);
+    return { text: "", note: "XLSX parse failed" };
+  }
 }
 async function extractPptx(buf) {
+  console.log("PPTX extractor...");
   return new Promise((resolve) => {
     officeParser.parseOfficeAsync(buf, "pptx", (err, data) => {
-      if (err) resolve({ text: "", note: "PPTX parse failed" });
-      else resolve({ text: data || "", note: "Extracted with officeparser" });
+      if (err) {
+        console.error("PPTX ERROR:", err.message);
+        resolve({ text: "", note: "PPTX parse failed" });
+      } else {
+        resolve({ text: data || "", note: "Extracted with officeparser" });
+      }
     });
   });
 }
@@ -151,11 +176,12 @@ async function extractText(path, buf) {
 const app = express();
 app.use(express.json());
 
-// simple API key check
+// API key gate
 app.use((req,res,next)=>{
   if(req.path.startsWith("/mcp")){
     const key = req.headers["x-api-key"];
     if(key !== SERVER_API_KEY){
+      console.warn("Forbidden: bad API key");
       return res.status(403).json({error:"Forbidden"});
     }
   }
@@ -168,6 +194,7 @@ app.get("/mcp/healthz", (_req,res)=>res.json({ok:true,root:DBX_ROOT_PREFIX}));
 app.post("/mcp/walk", async (req,res)=>{
   try {
     const { path_prefix=DBX_ROOT_PREFIX }=req.body||{};
+    console.log("Walking path:", path_prefix);
     let entries=[], cursor=null;
     const r=await dbxListFolder({ path:path_prefix, recursive:true, limit:2000});
     entries.push(...(r.data.entries||[]));
@@ -177,8 +204,12 @@ app.post("/mcp/walk", async (req,res)=>{
       entries.push(...(cont.data.entries||[]));
       cursor=cont.data.has_more? cont.data.cursor:null;
     }
+    console.log("Walk complete, entries:", entries.length);
     res.json({entries});
-  } catch(e){res.status(502).json({ok:false,message:e.message});}
+  } catch(e){
+    console.error("WALK ERROR:", e);
+    res.status(502).json({ok:false,message:e.message});
+  }
 });
 
 app.post("/mcp/open", async (req,res)=>{
@@ -186,8 +217,13 @@ app.post("/mcp/open", async (req,res)=>{
     const { path } = req.body || {};
     if (!path) return res.status(400).json({ error: "path required" });
 
+    console.log("Opening file:", path);
+
     const dl = await dbxDownload({ path });
-    if (!dl.ok) return res.status(502).json({ ok:false, status: dl.status });
+    if (!dl.ok) {
+      console.error("Download failed", dl.status);
+      return res.status(502).json({ ok:false, status: dl.status });
+    }
 
     const { text, note } = await extractText(path, dl.data);
 
@@ -201,9 +237,11 @@ app.post("/mcp/open", async (req,res)=>{
       note
     });
   } catch(e) {
-    res.status(502).json({ ok:false, message:e.message });
+    console.error("OPEN ERROR:", e);
+    res.status(502).json({ ok:false, message:e.message, stack: e.stack });
   }
 });
 
 /* ---------- Start ---------- */
 app.listen(PORT, ()=>console.log(`DBX REST running on :${PORT}`));
+
