@@ -264,29 +264,31 @@ app.post("/searchIndex", async (req, res) => {
     const { query, limit = 10 } = req.body || {};
     if (!query) return res.status(400).json({ error: "query required" });
 
-    const qq = query.toLowerCase();
+    const terms = query.toLowerCase().split(/\s+or\s+|\s+/).filter(t => t.length > 2);
     const files = fs.readdirSync(INDEX_DIR).filter((f) => f.endsWith(".json"));
 
     const results = [];
     for (const file of files) {
-      const doc = JSON.parse(
-        fs.readFileSync(path.join(INDEX_DIR, file), "utf8")
-      );
-      if (doc.text && doc.text.toLowerCase().includes(qq)) {
-        const idx = doc.text.toLowerCase().indexOf(qq);
-        const snippet = doc.text.substring(
-          Math.max(0, idx - 200),
-          idx + 200
-        );
-        results.push({
-          file: doc.name,
-          path: doc.path,
-          modified: doc.modified,
-          snippet: snippet.replace(/\s+/g, " ").trim(),
-          note: doc.note
-        });
-        if (results.length >= limit) break;
+      const doc = JSON.parse(fs.readFileSync(path.join(INDEX_DIR, file), "utf8"));
+      if (!doc.text) continue;
+
+      const textLower = doc.text.toLowerCase();
+      for (const term of terms) {
+        const idx = textLower.indexOf(term);
+        if (idx !== -1) {
+          const snippet = doc.text.substring(Math.max(0, idx - 200), idx + 200);
+          results.push({
+            file: doc.name,
+            path: doc.path,
+            modified: doc.modified,
+            match: term,
+            snippet: snippet.replace(/\s+/g, " ").trim(),
+            note: doc.note
+          });
+          break; // don’t add the same file multiple times
+        }
       }
+      if (results.length >= limit) break;
     }
 
     res.json({ query, hits: results.length, results });
@@ -295,6 +297,7 @@ app.post("/searchIndex", async (req, res) => {
     res.status(502).json({ ok: false, message: e.message });
   }
 });
+
 
 /* ---------- Start ---------- */
 app.listen(PORT, () =>
