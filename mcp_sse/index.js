@@ -225,6 +225,32 @@ app.post("/mcp/open", async (req, res) => { try {
   }
   res.json(response);
 } catch (e) { res.status(502).json({ ok: false, message: e.message }); }});
+// Dedicated searchIndex route (alias for GPT instructions/schema)
+app.post("/searchIndex", async (req, res) => {
+  try {
+    const { query, path_prefix = DBX_ROOT_PREFIX, limit = 50 } = req.body || {};
+    if (!query) return res.status(400).json({ error: "query required" });
+
+    console.log("searchIndex query:", query, "path_prefix:", path_prefix);
+
+    // Walk folder recursively
+    const r = await dbxListFolder({ path: normPath(path_prefix), recursive: true, limit: 2000 });
+    const entries = normalizeEntries(r.data.entries || []);
+
+    // Case-insensitive match on name or path
+    const qq = String(query).toLowerCase();
+    const hits = entries.filter(e =>
+      (e.name || "").toLowerCase().includes(qq) ||
+      (e.path || "").toLowerCase().includes(qq)
+    );
+
+    const results = hits.slice(0, parseInt(limit));
+    res.json({ query, total_matches: hits.length, results });
+  } catch (e) {
+    console.error("searchIndex ERROR:", e?.message || e);
+    res.status(502).json({ ok: false, message: e.message });
+  }
+});
 
 /* ---------- Orchestrator ---------- */
 app.post("/routeThenAnswer", async (req, res) => {
