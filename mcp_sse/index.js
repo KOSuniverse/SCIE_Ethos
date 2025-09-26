@@ -6,7 +6,11 @@ import * as XLSX from "xlsx";
 import mammoth from "mammoth";
 import JSZip from "jszip";
 import officeParser from "officeparser";
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+import * as pdfjsLib from "pdfjs-dist";
+import { GlobalWorkerOptions } from "pdfjs-dist/build/pdf";
+
+GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+
 import Tesseract from "tesseract.js";
 import fs from "fs";
 import path from "path";
