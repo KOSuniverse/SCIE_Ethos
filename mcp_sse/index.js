@@ -1,4 +1,4 @@
-// index.js — Dropbox REST API + Orchestrator + Persistent Index
+// index.js — Dropbox REST API + Semantic Index
 import express from "express";
 import axios from "axios";
 import crypto from "node:crypto";
@@ -10,6 +10,13 @@ import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import Tesseract from "tesseract.js";
 import fs from "fs";
 import path from "path";
+
+// OpenAI client
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
 const {
   DBX_ROOT_PREFIX = "/Project_Root/GPT_Files",
@@ -64,16 +71,13 @@ async function withAuth(fn) {
   try {
     return await fn(_accessToken);
   } catch (e) {
-    const body = e?.response?.data;
-    const txt = typeof body === "string" ? body : JSON.stringify(body || {});
     const status = e?.response?.status;
-    const expired =
-      status === 401 ||
-      (status === 400 && txt.includes("expired_access_token")) ||
-      txt.includes("invalid_access_token");
-    if (!expired) throw e;
-    await refreshAccessToken();
-    return fn(_accessToken);
+    const body = e?.response?.data || {};
+    if (status === 401 || JSON.stringify(body).includes("expired_access_token")) {
+      await refreshAccessToken();
+      return fn(_accessToken);
+    }
+    throw e;
   }
 }
 
@@ -94,7 +98,7 @@ const normalizeEntries = (entries) =>
     mime: e[".tag"] === "file" ? e.mime_type ?? null : "folder"
   }));
 
-/* ---------- Dropbox RPC wrappers ---------- */
+/* ---------- Dropbox RPC ---------- */
 const dbxListFolder = ({ path, recursive, limit }) =>
   withAuth((token) =>
     axios.post(
@@ -103,6 +107,7 @@ const dbxListFolder = ({ path, recursive, limit }) =>
       { headers: { Authorization: `Bearer ${token}` }, timeout: REQUEST_TIMEOUT }
     )
   );
+
 const dbxListContinue = (cursor) =>
   withAuth((token) =>
     axios.post(
@@ -111,14 +116,16 @@ const dbxListContinue = (cursor) =>
       { headers: { Authorization: `Bearer ${token}` }, timeout: REQUEST_TIMEOUT }
     )
   );
+
 const dbxGetMetadata = (path) =>
   withAuth((token) =>
     axios.post(
       `${DBX_RPC}/files/get_metadata`,
-      { path, include_media_info: false, include_deleted: false },
+      { path },
       { headers: { Authorization: `Bearer ${token}` }, timeout: 30000 }
     )
   );
+
 const dbxDownload = async ({ path }) =>
   withAuth(async (token) => {
     const metaResponse = await dbxGetMetadata(path);
@@ -135,68 +142,65 @@ const dbxDownload = async ({ path }) =>
       timeout: REQUEST_TIMEOUT,
       maxContentLength: MAX_FILE_SIZE
     });
-    return {
-      ok: true,
-      status: r.status,
-      headers: { "content-type": r.headers["content-type"] },
-      data: Buffer.from(r.data)
-    };
+    return { data: Buffer.from(r.data) };
   });
 
 /* ---------- Extractors ---------- */
-async function extractPdf(buf, path) {
-  try {
-    const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
-    let text = "";
-    const maxPages = Math.min(pdf.numPages, 5);
-    for (let i = 1; i <= maxPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      text += content.items.map((item) => item.str).join(" ") + "\n";
-    }
-    return { text, note: `Extracted ${maxPages} pages` };
-  } catch (err) {
-    const { data: { text } } = await Tesseract.recognize(buf, "eng");
-    return { text, note: "OCR fallback" };
+async function extractPdf(buf) {
+  const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
+  let text = "";
+  const maxPages = Math.min(pdf.numPages, 5);
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    text += content.items.map((item) => item.str).join(" ") + "\n";
   }
+  return text;
 }
 async function extractDocx(buf) {
-  try {
-    const result = await mammoth.extractRawText({ buffer: buf });
-    return { text: result.value, note: "Extracted with mammoth" };
-  } catch {
-    return { text: "", note: "DOCX parse failed" };
-  }
+  const result = await mammoth.extractRawText({ buffer: buf });
+  return result.value;
 }
 async function extractXlsx(buf) {
-  try {
-    const wb = XLSX.read(buf, { type: "buffer" });
-    return {
-      text: wb.SheetNames.map(
-        (name) => `--- ${name} ---\n${XLSX.utils.sheet_to_csv(wb.Sheets[name])}`
-      ).join("\n"),
-      note: "Extracted with xlsx"
-    };
-  } catch {
-    return { text: "", note: "XLSX parse failed" };
-  }
+  const wb = XLSX.read(buf, { type: "buffer" });
+  return wb.SheetNames.map(
+    (name) => `--- ${name} ---\n${XLSX.utils.sheet_to_csv(wb.Sheets[name])}`
+  ).join("\n");
 }
 async function extractPptx(buf) {
   return new Promise((resolve) => {
     officeParser.parseOfficeAsync(buf, "pptx", (err, data) => {
-      if (err) resolve({ text: "", note: "PPTX parse failed" });
-      else resolve({ text: data, note: "Extracted with officeparser" });
+      resolve(data || "");
     });
   });
 }
 async function extractText(path, buf) {
-  if (/\.pdf$/i.test(path)) return extractPdf(buf, path);
+  if (/\.pdf$/i.test(path)) return extractPdf(buf);
   if (/\.docx$/i.test(path)) return extractDocx(buf);
   if (/\.xlsx$/i.test(path)) return extractXlsx(buf);
   if (/\.pptx$/i.test(path)) return extractPptx(buf);
-  if (/\.(txt|csv|json|ya?ml|md|log)$/i.test(path))
-    return { text: buf.toString("utf8"), note: "Plain text" };
-  return { text: "", note: "Unsupported type" };
+  if (/\.(txt|csv|json|ya?ml|md|log)$/i.test(path)) return buf.toString("utf8");
+  return "";
+}
+
+/* ---------- Embeddings ---------- */
+async function embedText(text) {
+  const res = await client.embeddings.create({
+    model: "text-embedding-3-small",
+    input: text
+  });
+  return res.data[0].embedding;
+}
+function cosineSim(a, b) {
+  let dot = 0,
+    normA = 0,
+    normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
 /* ---------- Express ---------- */
@@ -204,54 +208,49 @@ const app = express();
 app.use(express.json());
 app.use((req, res, next) => {
   if (!SERVER_API_KEY) return next();
-  if (req.path.startsWith("/mcp")) {
+  if (req.path.startsWith("/")) {
     const key = req.headers["x-api-key"];
-    if (key !== SERVER_API_KEY) return res.status(403).json({ error: "Forbidden" });
+    if (key !== SERVER_API_KEY)
+      return res.status(403).json({ error: "Forbidden" });
   }
   next();
 });
-
-/* ---------- Core Routes ---------- */
-app.get("/mcp/healthz", (_req, res) =>
-  res.json({ ok: true, root: DBX_ROOT_PREFIX })
-);
 
 /* ---------- Build Index ---------- */
 app.post("/buildIndex", async (req, res) => {
   try {
     const { path_prefix = DBX_ROOT_PREFIX } = req.body || {};
-    const r = await dbxListFolder({
-      path: normPath(path_prefix),
-      recursive: true,
-      limit: 2000
-    });
-    const entries = normalizeEntries(r.data.entries || []).filter(
-      (e) => e.mime !== "folder"
-    );
+    const r = await dbxListFolder({ path: normPath(path_prefix), recursive: true, limit: 2000 });
+    const entries = normalizeEntries(r.data.entries || []).filter((e) => e.mime !== "folder");
 
     for (const f of entries) {
       try {
         const dl = await dbxDownload({ path: f.path });
-        const buf = dl.data.slice(0, 200000); // cap for large files
-        const { text, note } = await extractText(f.name, buf);
+        const text = await extractText(f.name, dl.data);
+        if (!text) continue;
 
-        const doc = {
-          path: f.path,
-          name: f.name,
-          modified: f.modified,
-          text: text.length > 100000 ? text.slice(0, 100000) : text,
-          note
-        };
+        // chunk text
+        const chunks = text.match(/.{1,800}/gs) || [];
+        const outData = [];
+        for (const chunk of chunks) {
+          const embedding = await embedText(chunk);
+          outData.push({
+            path: f.path,
+            name: f.name,
+            modified: f.modified,
+            text: chunk,
+            embedding
+          });
+        }
 
         const outPath = path.join(INDEX_DIR, f.name + ".json");
-        fs.writeFileSync(outPath, JSON.stringify(doc, null, 2));
-        console.log("Indexed", f.name);
+        fs.writeFileSync(outPath, JSON.stringify(outData, null, 2));
+        console.log("Indexed", f.name, "chunks:", outData.length);
       } catch (err) {
         console.warn("Index skip:", f.name, err.message);
       }
     }
-
-    res.json({ ok: true, indexed: entries.length, dir: INDEX_DIR });
+    res.json({ ok: true, indexed: entries.length });
   } catch (e) {
     console.error("buildIndex ERROR:", e);
     res.status(502).json({ ok: false, message: e.message });
@@ -261,42 +260,42 @@ app.post("/buildIndex", async (req, res) => {
 /* ---------- Search Index ---------- */
 app.post("/searchIndex", async (req, res) => {
   try {
-    const { query, limit = 10 } = req.body || {};
+    const { query, limit = 5 } = req.body || {};
     if (!query) return res.status(400).json({ error: "query required" });
 
-    const terms = query.toLowerCase().split(/\s+or\s+|\s+/).filter(t => t.length > 2);
+    const queryEmbedding = await embedText(query);
     const files = fs.readdirSync(INDEX_DIR).filter((f) => f.endsWith(".json"));
 
-    const results = [];
+    const scored = [];
     for (const file of files) {
-      const doc = JSON.parse(fs.readFileSync(path.join(INDEX_DIR, file), "utf8"));
-      if (!doc.text) continue;
-
-      const textLower = doc.text.toLowerCase();
-      for (const term of terms) {
-        const idx = textLower.indexOf(term);
-        if (idx !== -1) {
-          const snippet = doc.text.substring(Math.max(0, idx - 200), idx + 200);
-          results.push({
-            file: doc.name,
-            path: doc.path,
-            modified: doc.modified,
-            match: term,
-            snippet: snippet.replace(/\s+/g, " ").trim(),
-            note: doc.note
-          });
-          break; // don’t add the same file multiple times
-        }
+      const docs = JSON.parse(fs.readFileSync(path.join(INDEX_DIR, file), "utf8"));
+      for (const doc of docs) {
+        const sim = cosineSim(queryEmbedding, doc.embedding);
+        scored.push({ ...doc, score: sim });
       }
-      if (results.length >= limit) break;
     }
 
-    res.json({ query, hits: results.length, results });
+    scored.sort((a, b) => b.score - a.score);
+    const results = scored.slice(0, limit).map((r) => ({
+      file: r.name,
+      path: r.path,
+      modified: r.modified,
+      snippet: r.text.slice(0, 300),
+      score: r.score.toFixed(3)
+    }));
+
+    res.json({ query, results });
   } catch (e) {
     console.error("searchIndex ERROR:", e);
     res.status(502).json({ ok: false, message: e.message });
   }
 });
+
+/* ---------- Start ---------- */
+app.listen(PORT, () =>
+  console.log(`DBX REST with semantic index running on ${PORT}`)
+);
+
 
 
 /* ---------- Start ---------- */
