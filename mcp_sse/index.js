@@ -1,4 +1,4 @@
-// index.js — Dropbox REST API + Orchestrator + Optional Extractors
+// index.js — Dropbox REST API + Orchestrator + Persistent Index
 import express from "express";
 import axios from "axios";
 import crypto from "node:crypto";
@@ -8,6 +8,8 @@ import JSZip from "jszip";
 import officeParser from "officeparser";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import Tesseract from "tesseract.js";
+import fs from "fs";
+import path from "path";
 
 const {
   DBX_ROOT_PREFIX = "/Project_Root/GPT_Files",
@@ -32,6 +34,13 @@ let _accessToken = null;
 const TOKEN_URL = "https://api.dropboxapi.com/oauth2/token";
 const DBX_RPC = "https://api.dropboxapi.com/2";
 const DBX_CONTENT = "https://content.dropboxapi.com/2";
+
+// Persistent index directory on Render disk
+const INDEX_DIR = "/data/_index/";
+if (!fs.existsSync(INDEX_DIR)) {
+  fs.mkdirSync(INDEX_DIR, { recursive: true });
+  console.log("Created index dir at", INDEX_DIR);
+}
 
 /* ---------- Auth ---------- */
 async function refreshAccessToken() {
@@ -58,7 +67,10 @@ async function withAuth(fn) {
     const body = e?.response?.data;
     const txt = typeof body === "string" ? body : JSON.stringify(body || {});
     const status = e?.response?.status;
-    const expired = status === 401 || (status === 400 && txt.includes("expired_access_token")) || txt.includes("invalid_access_token");
+    const expired =
+      status === 401 ||
+      (status === 400 && txt.includes("expired_access_token")) ||
+      txt.includes("invalid_access_token");
     if (!expired) throw e;
     await refreshAccessToken();
     return fn(_accessToken);
@@ -111,15 +123,27 @@ const dbxDownload = async ({ path }) =>
   withAuth(async (token) => {
     const metaResponse = await dbxGetMetadata(path);
     const fileSize = metaResponse.data.size || 0;
-    if (fileSize > MAX_FILE_SIZE) throw new Error(`File too large: ${(fileSize / 1024 / 1024).toFixed(2)} MB`);
-    const headers = { Authorization: `Bearer ${token}`, "Dropbox-API-Arg": JSON.stringify({ path }) };
+    if (fileSize > MAX_FILE_SIZE)
+      throw new Error(`File too large: ${(fileSize / 1024 / 1024).toFixed(2)} MB`);
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      "Dropbox-API-Arg": JSON.stringify({ path })
+    };
     const r = await axios.post(`${DBX_CONTENT}/files/download`, null, {
-      headers, responseType: "arraybuffer", timeout: REQUEST_TIMEOUT, maxContentLength: MAX_FILE_SIZE
+      headers,
+      responseType: "arraybuffer",
+      timeout: REQUEST_TIMEOUT,
+      maxContentLength: MAX_FILE_SIZE
     });
-    return { ok: true, status: r.status, headers: { "content-type": r.headers["content-type"] }, data: Buffer.from(r.data) };
+    return {
+      ok: true,
+      status: r.status,
+      headers: { "content-type": r.headers["content-type"] },
+      data: Buffer.from(r.data)
+    };
   });
 
-/* ---------- Extractors (optional) ---------- */
+/* ---------- Extractors ---------- */
 async function extractPdf(buf, path) {
   try {
     const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
@@ -128,11 +152,10 @@ async function extractPdf(buf, path) {
     for (let i = 1; i <= maxPages; i++) {
       const page = await pdf.getPage(i);
       const content = await page.getTextContent();
-      text += content.items.map(item => item.str).join(" ") + "\n";
+      text += content.items.map((item) => item.str).join(" ") + "\n";
     }
     return { text, note: `Extracted ${maxPages} pages` };
   } catch (err) {
-    console.error("PDF parse failed, OCR fallback...");
     const { data: { text } } = await Tesseract.recognize(buf, "eng");
     return { text, note: "OCR fallback" };
   }
@@ -141,13 +164,22 @@ async function extractDocx(buf) {
   try {
     const result = await mammoth.extractRawText({ buffer: buf });
     return { text: result.value, note: "Extracted with mammoth" };
-  } catch { return { text: "", note: "DOCX parse failed" }; }
+  } catch {
+    return { text: "", note: "DOCX parse failed" };
+  }
 }
 async function extractXlsx(buf) {
   try {
     const wb = XLSX.read(buf, { type: "buffer" });
-    return { text: wb.SheetNames.map(name => `--- ${name} ---\n${XLSX.utils.sheet_to_csv(wb.Sheets[name])}`).join("\n"), note: "Extracted with xlsx" };
-  } catch { return { text: "", note: "XLSX parse failed" }; }
+    return {
+      text: wb.SheetNames.map(
+        (name) => `--- ${name} ---\n${XLSX.utils.sheet_to_csv(wb.Sheets[name])}`
+      ).join("\n"),
+      note: "Extracted with xlsx"
+    };
+  } catch {
+    return { text: "", note: "XLSX parse failed" };
+  }
 }
 async function extractPptx(buf) {
   return new Promise((resolve) => {
@@ -162,7 +194,8 @@ async function extractText(path, buf) {
   if (/\.docx$/i.test(path)) return extractDocx(buf);
   if (/\.xlsx$/i.test(path)) return extractXlsx(buf);
   if (/\.pptx$/i.test(path)) return extractPptx(buf);
-  if (/\.(txt|csv|json|ya?ml|md|log)$/i.test(path)) return { text: buf.toString("utf8"), note: "Plain text" };
+  if (/\.(txt|csv|json|ya?ml|md|log)$/i.test(path))
+    return { text: buf.toString("utf8"), note: "Plain text" };
   return { text: "", note: "Unsupported type" };
 }
 
@@ -179,116 +212,91 @@ app.use((req, res, next) => {
 });
 
 /* ---------- Core Routes ---------- */
-app.get("/mcp/healthz", (_req, res) => res.json({ ok: true, root: DBX_ROOT_PREFIX }));
-app.post("/mcp/walk", async (req, res) => { try {
-  const { path_prefix = DBX_ROOT_PREFIX, cursor } = req.body || {};
-  let entries = [], next = cursor || null;
-  if (!next) {
-    const r = await dbxListFolder({ path: normPath(path_prefix), recursive: true, limit: 2000 });
-    entries = r.data.entries || []; next = r.data.has_more ? r.data.cursor : null;
-  } else {
-    const r = await dbxListContinue(next);
-    entries = r.data.entries || []; next = r.data.has_more ? r.data.cursor : null;
-  }
-  res.json({ entries: normalizeEntries(entries), next_cursor: next, truncated: !!next });
-} catch (e) { res.status(502).json({ ok: false, message: e.message }); }});
-app.get("/mcp/list", async (req, res) => { try {
-  const path = req.query.path ? String(req.query.path) : DBX_ROOT_PREFIX;
-  const r = await dbxListFolder({ path: normPath(path), recursive: false, limit: 2000 });
-  res.json({ entries: normalizeEntries(r.data.entries || []), truncated: r.data.has_more });
-} catch (e) { res.status(502).json({ ok: false, message: e.message }); }});
-app.get("/mcp/meta", async (req, res) => { try {
-  const { path } = req.query; if (!path) return res.status(400).json({ error: "path required" });
-  const r = await dbxGetMetadata(String(path)); res.json(r.data);
-} catch (e) { res.status(502).json({ ok: false, message: e.message }); }});
-app.post("/mcp/get", async (req, res) => { try {
-  const { path } = req.body || {}; if (!path) return res.status(400).json({ error: "path required" });
-  const r = await dbxDownload({ path: String(path) });
-  res.json({ ok: true, path, size_bytes: r.data.length, data_base64: r.data.toString("base64") });
-} catch (e) { res.status(502).json({ ok: false, message: e.message }); }});
-app.post("/mcp/head", async (req, res) => { try {
-  const { path, bytes = 200000 } = req.body || {};
-  if (!path) return res.status(400).json({ error: "path required" });
-  const r = await dbxDownload({ path: String(path) });
-  const text = r.data.toString("utf8", 0, bytes);
-  res.json({ ok: true, path, size_bytes: r.data.length, text });
-} catch (e) { res.status(502).json({ ok: false, message: e.message }); }});
-app.post("/mcp/open", async (req, res) => { try {
-  const { path, extract_text = false } = req.body || {};
-  if (!path) return res.status(400).json({ error: "path required" });
-  const dl = await dbxDownload({ path });
-  const response = { ok: true, path, size_bytes: dl.data.length, checksum: sha1(dl.data) };
-  if (extract_text) {
-    const { text, note } = await extractText(path, dl.data);
-    response.text = text.length > 100000 ? text.slice(0, 100000) + "\n[TRUNCATED]" : text;
-    response.note = note;
-  }
-  res.json(response);
-} catch (e) { res.status(502).json({ ok: false, message: e.message }); }});
-// Dedicated searchIndex route (alias for GPT instructions/schema)
-app.post("/searchIndex", async (req, res) => {
+app.get("/mcp/healthz", (_req, res) =>
+  res.json({ ok: true, root: DBX_ROOT_PREFIX })
+);
+
+/* ---------- Build Index ---------- */
+app.post("/buildIndex", async (req, res) => {
   try {
-    const { query, path_prefix = DBX_ROOT_PREFIX, limit = 50 } = req.body || {};
-    if (!query) return res.status(400).json({ error: "query required" });
-
-    console.log("searchIndex query:", query, "path_prefix:", path_prefix);
-
-    // Walk folder recursively
-    const r = await dbxListFolder({ path: normPath(path_prefix), recursive: true, limit: 2000 });
-    const entries = normalizeEntries(r.data.entries || []);
-
-    // Case-insensitive match on name or path
-    const qq = String(query).toLowerCase();
-    const hits = entries.filter(e =>
-      (e.name || "").toLowerCase().includes(qq) ||
-      (e.path || "").toLowerCase().includes(qq)
+    const { path_prefix = DBX_ROOT_PREFIX } = req.body || {};
+    const r = await dbxListFolder({
+      path: normPath(path_prefix),
+      recursive: true,
+      limit: 2000
+    });
+    const entries = normalizeEntries(r.data.entries || []).filter(
+      (e) => e.mime !== "folder"
     );
 
-    const results = hits.slice(0, parseInt(limit));
-    res.json({ query, total_matches: hits.length, results });
+    for (const f of entries) {
+      try {
+        const dl = await dbxDownload({ path: f.path });
+        const buf = dl.data.slice(0, 200000); // cap for large files
+        const { text, note } = await extractText(f.name, buf);
+
+        const doc = {
+          path: f.path,
+          name: f.name,
+          modified: f.modified,
+          text: text.length > 100000 ? text.slice(0, 100000) : text,
+          note
+        };
+
+        const outPath = path.join(INDEX_DIR, f.name + ".json");
+        fs.writeFileSync(outPath, JSON.stringify(doc, null, 2));
+        console.log("Indexed", f.name);
+      } catch (err) {
+        console.warn("Index skip:", f.name, err.message);
+      }
+    }
+
+    res.json({ ok: true, indexed: entries.length, dir: INDEX_DIR });
   } catch (e) {
-    console.error("searchIndex ERROR:", e?.message || e);
+    console.error("buildIndex ERROR:", e);
     res.status(502).json({ ok: false, message: e.message });
   }
 });
 
-/* ---------- Orchestrator ---------- */
-app.post("/routeThenAnswer", async (req, res) => {
+/* ---------- Search Index ---------- */
+app.post("/searchIndex", async (req, res) => {
   try {
-    const { query, context = {} } = req.body || {};
+    const { query, limit = 10 } = req.body || {};
     if (!query) return res.status(400).json({ error: "query required" });
-    const q = query.trim().toLowerCase();
-    let intent = "Browse";
-    if (/(search|find)/.test(q)) intent = "Search";
-    else if (/(open|preview)/.test(q)) intent = "Preview";
-    else if (/(download|get file)/.test(q)) intent = "Download";
-    else if (/(forecast|demand|lead time)/.test(q)) intent = "Forecasting_Policy";
-    else if (/(root cause|why|driver|rca)/.test(q)) intent = "Root_Cause";
-    else if (/(compare|delta|shift)/.test(q)) intent = "Comparison";
 
-    let text = "Unsupported intent", artifacts = [];
-    if (intent === "Browse") {
-      const r = await dbxListFolder({ path: normPath(DBX_ROOT_PREFIX), recursive: false, limit: 50 });
-      const entries = normalizeEntries(r.data.entries || []);
-      text = `Top entries:\n` + entries.map(e => `• ${e.name}`).join("\n"); artifacts = entries;
-    } else if (intent === "Search") {
-      const term = q.replace(/.*(search|find)\s+/, "");
-      const r = await dbxListFolder({ path: normPath(DBX_ROOT_PREFIX), recursive: true, limit: 2000 });
-      const hits = normalizeEntries(r.data.entries || []).filter(e => e.name.toLowerCase().includes(term));
-      text = hits.length ? `Found ${hits.length} match(es).` : `No matches.`; artifacts = hits.slice(0, 50);
-    } else if (intent === "Preview") {
-      text = 'Use /mcp/head or /mcp/open with path for preview.';
-    } else if (intent === "Download") {
-      text = 'Use /mcp/get with path for full download.';
-    } else if (["Forecasting_Policy","Root_Cause","Comparison"].includes(intent)) {
-      text = `Intent detected = ${intent}, but skill not wired yet.`;
+    const qq = query.toLowerCase();
+    const files = fs.readdirSync(INDEX_DIR).filter((f) => f.endsWith(".json"));
+
+    const results = [];
+    for (const file of files) {
+      const doc = JSON.parse(
+        fs.readFileSync(path.join(INDEX_DIR, file), "utf8")
+      );
+      if (doc.text && doc.text.toLowerCase().includes(qq)) {
+        const idx = doc.text.toLowerCase().indexOf(qq);
+        const snippet = doc.text.substring(
+          Math.max(0, idx - 200),
+          idx + 200
+        );
+        results.push({
+          file: doc.name,
+          path: doc.path,
+          modified: doc.modified,
+          snippet: snippet.replace(/\s+/g, " ").trim(),
+          note: doc.note
+        });
+        if (results.length >= limit) break;
+      }
     }
-    res.json({ text, answer: { intent, artifacts } });
+
+    res.json({ query, hits: results.length, results });
   } catch (e) {
-    res.status(500).json({ error: "router_error", message: e.message });
+    console.error("searchIndex ERROR:", e);
+    res.status(502).json({ ok: false, message: e.message });
   }
 });
 
 /* ---------- Start ---------- */
-app.listen(PORT, () => console.log(`DBX REST on ${PORT} root=${DBX_ROOT_PREFIX}`));
-
+app.listen(PORT, () =>
+  console.log(`DBX REST on ${PORT} root=${DBX_ROOT_PREFIX}`)
+);
