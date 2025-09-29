@@ -226,17 +226,37 @@ app.use((req, res, next) => {
 });
 
 /* ---------- Build Index ---------- */
-app.post("/buildIndex", async (req, res) => {
+/* ---------- Build Index for ALL Files ---------- */
+app.post("/buildIndexAll", async (req, res) => {
   try {
-    const { path_prefix = DBX_ROOT_PREFIX } = req.body || {};
-    const r = await dbxListFolder({ path: normPath(path_prefix), recursive: true, limit: 2000 });
-    const entries = normalizeEntries(r.data.entries || []).filter((e) => e.mime !== "folder");
+    const rootPrefix = DBX_ROOT_PREFIX;
+    console.log("Starting full index build from:", rootPrefix);
 
-    for (const f of entries) {
+    // Walk everything recursively
+    const r = await dbxListFolder({ path: normPath(rootPrefix), recursive: true, limit: 2000 });
+    let entries = r.data.entries || [];
+    let cursor = r.data.has_more ? r.data.cursor : null;
+
+    // Follow cursor until complete
+    while (cursor) {
+      const next = await dbxListContinue(cursor);
+      entries = entries.concat(next.data.entries || []);
+      cursor = next.data.has_more ? next.data.cursor : null;
+    }
+
+    // Normalize and filter out folders
+    const files = normalizeEntries(entries).filter((e) => e.mime !== "folder");
+    console.log("Found", files.length, "files to index.");
+
+    let processed = 0;
+    for (const f of files) {
       try {
         const dl = await dbxDownload({ path: f.path });
         const text = await extractText(f.name, dl.data);
-        if (!text) continue;
+        if (!text) {
+          console.log("Skip (no text):", f.name);
+          continue;
+        }
 
         // chunk text
         const chunks = text.match(/.{1,800}/gs) || [];
@@ -255,16 +275,19 @@ app.post("/buildIndex", async (req, res) => {
         const outPath = path.join(INDEX_DIR, f.name + ".json");
         fs.writeFileSync(outPath, JSON.stringify(outData, null, 2));
         console.log("Indexed", f.name, "chunks:", outData.length);
+        processed++;
       } catch (err) {
         console.warn("Index skip:", f.name, err.message);
       }
     }
-    res.json({ ok: true, indexed: entries.length });
+
+    res.json({ ok: true, total: files.length, processed });
   } catch (e) {
-    console.error("buildIndex ERROR:", e);
+    console.error("buildIndexAll ERROR:", e);
     res.status(502).json({ ok: false, message: e.message });
   }
 });
+
 
 /* ---------- Search Index ---------- */
 app.post("/searchIndex", async (req, res) => {
