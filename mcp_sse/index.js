@@ -74,13 +74,11 @@ async function withAuth(fn) {
     const status = e?.response?.status;
     const body = e?.response?.data || {};
 
-    // retry on expired or unauthorized
     if (status === 401 || JSON.stringify(body).includes("expired_access_token")) {
       await refreshAccessToken();
       return fn(_accessToken);
     }
 
-    // retry once if no token yet
     if (!_accessToken) {
       await refreshAccessToken();
       return fn(_accessToken);
@@ -225,26 +223,22 @@ app.use((req, res, next) => {
   next();
 });
 
-/* ---------- Build Index ---------- */
 /* ---------- Build Index for ALL Files ---------- */
 app.post("/buildIndexAll", async (req, res) => {
   try {
     const rootPrefix = DBX_ROOT_PREFIX;
     console.log("Starting full index build from:", rootPrefix);
 
-    // Walk everything recursively
     const r = await dbxListFolder({ path: normPath(rootPrefix), recursive: true, limit: 2000 });
     let entries = r.data.entries || [];
     let cursor = r.data.has_more ? r.data.cursor : null;
 
-    // Follow cursor until complete
     while (cursor) {
       const next = await dbxListContinue(cursor);
       entries = entries.concat(next.data.entries || []);
       cursor = next.data.has_more ? next.data.cursor : null;
     }
 
-    // Normalize and filter out folders
     const files = normalizeEntries(entries).filter((e) => e.mime !== "folder");
     console.log("Found", files.length, "files to index.");
 
@@ -258,39 +252,45 @@ app.post("/buildIndexAll", async (req, res) => {
           continue;
         }
 
+        const chunks = (text.match(/.{1,1000}/gs) || [])
+          .map(c => c.trim())
+          .filter(c => c.length > 0 && c.length < 4000);
 
-// chunk text safely (character-based, trimmed, and capped for embeddings API)
-const chunks = (text.match(/.{1,1000}/gs) || [])
-  .map(c => c.trim())
-  .filter(c => c.length > 0 && c.length < 4000);  // keep under safe size
+        const outData = [];
+        for (const chunk of chunks) {
+          try {
+            const embedding = await embedText(chunk);
+            outData.push({
+              path: f.path,
+              name: f.name,
+              modified: f.modified,
+              text: chunk,
+              embedding
+            });
+          } catch (embedErr) {
+            console.warn("Embed skip:", f.name, embedErr.message);
+          }
+        }
 
-const outData = [];
-for (const chunk of chunks) {
-  try {
-    const embedding = await embedText(chunk);
-    outData.push({
-      path: f.path,
-      name: f.name,
-      modified: f.modified,
-      text: chunk,
-      embedding
-    });
-  } catch (embedErr) {
-    console.warn("Embed skip:", f.name, embedErr.message);
+        if (outData.length > 0) {
+          const outPath = path.join(INDEX_DIR, f.name + ".json");
+          fs.writeFileSync(outPath, JSON.stringify(outData, null, 2));
+          console.log("Indexed", f.name, "chunks:", outData.length);
+          processed++;
+        } else {
+          console.log("No valid chunks for:", f.name);
+        }
+      } catch (err) {
+        console.warn("Index skip:", f.name, err.message);
+      }
+    }
+
+    res.json({ ok: true, total: files.length, processed });
+  } catch (e) {
+    console.error("buildIndexAll ERROR:", e);
+    res.status(502).json({ ok: false, message: e.message });
   }
-}
-
-if (outData.length > 0) {
-  const outPath = path.join(INDEX_DIR, f.name + ".json");
-  fs.writeFileSync(outPath, JSON.stringify(outData, null, 2));
-  console.log("Indexed", f.name, "chunks:", outData.length);
-  processed++;
-} else {
-  console.log("No valid chunks for:", f.name);
-}
-
 });
-
 
 /* ---------- Search Index ---------- */
 app.post("/searchIndex", async (req, res) => {
@@ -329,7 +329,6 @@ app.post("/searchIndex", async (req, res) => {
 /* ---------- Walk (cursor-based) ---------- */
 app.post("/mcp/walk", async (req, res) => {
   const { path_prefix, max_items = 2000, cursor } = req.body;
-
   try {
     if (cursor) {
       const response = await dbxListContinue(cursor);
@@ -340,7 +339,7 @@ app.post("/mcp/walk", async (req, res) => {
     } else {
       const response = await dbxListFolder({
         path: normPath(path_prefix),
-        recursive: true,
+        recursive: false,
         limit: max_items
       });
       res.json({
@@ -369,7 +368,7 @@ app.post("/mcp/walk_full", async (req, res) => {
       } else {
         response = await dbxListFolder({
           path: normPath(path_prefix),
-          recursive: false,
+          recursive: true,
           limit: max_items
         });
       }
@@ -393,10 +392,10 @@ app.post("/mcp/walk_full", async (req, res) => {
 /* ---------- Start ---------- */
 app.listen(PORT, () => {
   console.log(`DBX REST with semantic index running on ${PORT}, root=${DBX_ROOT_PREFIX}`);
-  // eager token refresh on startup
   refreshAccessToken().catch(err => {
     console.error("Initial token refresh failed:", err.message);
   });
 });
+
 
 
