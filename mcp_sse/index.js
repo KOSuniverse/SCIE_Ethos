@@ -292,13 +292,7 @@ app.post("/searchIndex", async (req, res) => {
 });
 
 /* ---------- Start ---------- */
-app.listen(PORT, () =>
-  console.log(`DBX REST with semantic index running on ${PORT}`)
-);
+app.listen(PORT, () => {
+  console.log(`DBX REST with semantic index running on ${PORT}, root=${DBX_ROOT_PREFIX}`);
+});
 
-
-
-/* ---------- Start ---------- */
-app.listen(PORT, () =>
-  console.log(`DBX REST on ${PORT} root=${DBX_ROOT_PREFIX}`)
-);
