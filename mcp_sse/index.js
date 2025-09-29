@@ -10,16 +10,6 @@ import * as pdfjsLib from "pdfjs-dist/build/pdf.js";
 import Tesseract from "tesseract.js";
 import fs from "fs";
 import path from "path";
-let pdfjsLib;
-try {
-  pdfjsLib = await import("pdfjs-dist/build/pdf.js");
-} catch (err) {
-  try {
-    pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  } catch (err2) {
-    console.error("Failed to load pdfjs-dist", err2);
-  }
-}
 
 // OpenAI client
 import OpenAI from "openai";
