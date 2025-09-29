@@ -290,8 +290,36 @@ app.post("/searchIndex", async (req, res) => {
     res.status(502).json({ ok: false, message: e.message });
   }
 });
-// Add this route to your index.js before the app.listen() call
-// Full folder walk with pagination
+
+/* ---------- Walk (cursor-based) ---------- */
+app.post("/mcp/walk", async (req, res) => {
+  const { path_prefix, max_items = 2000, cursor } = req.body;
+
+  try {
+    if (cursor) {
+      const response = await dbxListContinue(cursor);
+      res.json({
+        entries: response.data.entries,
+        cursor: response.data.has_more ? response.data.cursor : null
+      });
+    } else {
+      const response = await dbxListFolder({
+        path: normPath(path_prefix),
+        recursive: false,
+        limit: max_items
+      });
+      res.json({
+        entries: response.data.entries,
+        cursor: response.data.has_more ? response.data.cursor : null
+      });
+    }
+  } catch (err) {
+    console.error("Error in /mcp/walk:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ---------- Walk Full (server-side pagination) ---------- */
 app.post("/mcp/walk_full", async (req, res) => {
   const { path_prefix, max_items = 2000 } = req.body;
   let allEntries = [];
