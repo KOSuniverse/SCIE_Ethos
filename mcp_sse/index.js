@@ -258,34 +258,37 @@ app.post("/buildIndexAll", async (req, res) => {
           continue;
         }
 
-        // chunk text
-        const chunks = text.match(/.{1,800}/gs) || [];
-        const outData = [];
-        for (const chunk of chunks) {
-          const embedding = await embedText(chunk);
-          outData.push({
-            path: f.path,
-            name: f.name,
-            modified: f.modified,
-            text: chunk,
-            embedding
-          });
-        }
 
-        const outPath = path.join(INDEX_DIR, f.name + ".json");
-        fs.writeFileSync(outPath, JSON.stringify(outData, null, 2));
-        console.log("Indexed", f.name, "chunks:", outData.length);
-        processed++;
-      } catch (err) {
-        console.warn("Index skip:", f.name, err.message);
-      }
-    }
+// chunk text safely (character-based, trimmed, and capped for embeddings API)
+const chunks = (text.match(/.{1,1000}/gs) || [])
+  .map(c => c.trim())
+  .filter(c => c.length > 0 && c.length < 4000);  // keep under safe size
 
-    res.json({ ok: true, total: files.length, processed });
-  } catch (e) {
-    console.error("buildIndexAll ERROR:", e);
-    res.status(502).json({ ok: false, message: e.message });
+const outData = [];
+for (const chunk of chunks) {
+  try {
+    const embedding = await embedText(chunk);
+    outData.push({
+      path: f.path,
+      name: f.name,
+      modified: f.modified,
+      text: chunk,
+      embedding
+    });
+  } catch (embedErr) {
+    console.warn("Embed skip:", f.name, embedErr.message);
   }
+}
+
+if (outData.length > 0) {
+  const outPath = path.join(INDEX_DIR, f.name + ".json");
+  fs.writeFileSync(outPath, JSON.stringify(outData, null, 2));
+  console.log("Indexed", f.name, "chunks:", outData.length);
+  processed++;
+} else {
+  console.log("No valid chunks for:", f.name);
+}
+
 });
 
 
