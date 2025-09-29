@@ -314,7 +314,7 @@ app.post("/mcp/walk", async (req, res) => {
     } else {
       const response = await dbxListFolder({
         path: normPath(path_prefix),
-        recursive: false,
+        recursive: true,
         limit: max_items
       });
       res.json({
