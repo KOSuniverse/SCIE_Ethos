@@ -252,7 +252,7 @@ app.post("/buildIndexAll", async (req, res) => {
     for (const f of files) {
       try {
         const dl = await dbxDownload({ path: f.path });
-        const text = await extractText(f.name, dl.data);
+        const text = await extractText(f.path, dl.data);
         if (!text) {
           console.log("Skip (no text):", f.name);
           continue;
