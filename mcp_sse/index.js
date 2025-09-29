@@ -324,6 +324,7 @@ app.post("/mcp/walk_full", async (req, res) => {
   const { path_prefix, max_items = 2000 } = req.body;
   let allEntries = [];
   let cursor = null;
+  let safetyLimit = 10000; // prevent runaway root listing
 
   try {
     do {
@@ -340,6 +341,11 @@ app.post("/mcp/walk_full", async (req, res) => {
 
       allEntries = allEntries.concat(response.data.entries || []);
       cursor = response.data.has_more ? response.data.cursor : null;
+
+      if (allEntries.length > safetyLimit) {
+        console.warn("walk_full: hit safety limit, stopping early.");
+        break;
+      }
     } while (cursor);
 
     res.json({ entries: allEntries, total: allEntries.length });
@@ -348,6 +354,7 @@ app.post("/mcp/walk_full", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 /* ---------- Start ---------- */
 app.listen(PORT, () => {
