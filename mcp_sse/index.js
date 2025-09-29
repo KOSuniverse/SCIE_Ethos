@@ -73,10 +73,19 @@ async function withAuth(fn) {
   } catch (e) {
     const status = e?.response?.status;
     const body = e?.response?.data || {};
+
+    // retry on expired or unauthorized
     if (status === 401 || JSON.stringify(body).includes("expired_access_token")) {
       await refreshAccessToken();
       return fn(_accessToken);
     }
+
+    // retry once if no token yet
+    if (!_accessToken) {
+      await refreshAccessToken();
+      return fn(_accessToken);
+    }
+
     throw e;
   }
 }
@@ -324,7 +333,7 @@ app.post("/mcp/walk_full", async (req, res) => {
   const { path_prefix, max_items = 2000 } = req.body;
   let allEntries = [];
   let cursor = null;
-  let safetyLimit = 10000; // prevent runaway root listing
+  let safetyLimit = 10000;
 
   try {
     do {
@@ -355,9 +364,13 @@ app.post("/mcp/walk_full", async (req, res) => {
   }
 });
 
-
 /* ---------- Start ---------- */
 app.listen(PORT, () => {
   console.log(`DBX REST with semantic index running on ${PORT}, root=${DBX_ROOT_PREFIX}`);
+  // eager token refresh on startup
+  refreshAccessToken().catch(err => {
+    console.error("Initial token refresh failed:", err.message);
+  });
 });
+
 
