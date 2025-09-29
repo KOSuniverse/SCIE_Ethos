@@ -290,6 +290,23 @@ app.post("/searchIndex", async (req, res) => {
     res.status(502).json({ ok: false, message: e.message });
   }
 });
+app.post("/mcp/walk", async (req, res) => {
+  const { path_prefix, max_items = 2000, cursor } = req.body;
+
+  try {
+    const response = await dbxListFolder({
+      path: normPath(path_prefix),
+      recursive: false,
+      limit: max_items,
+    });
+    res.json({
+      entries: response.data.entries,
+      cursor: response.data.cursor || null,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 /* ---------- Start ---------- */
 app.listen(PORT, () => {
