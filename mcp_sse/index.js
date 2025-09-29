@@ -291,31 +291,32 @@ app.post("/searchIndex", async (req, res) => {
   }
 });
 // Add this route to your index.js before the app.listen() call
-app.post("/mcp/walk", async (req, res) => {
-  const { path_prefix, max_items = 2000, cursor } = req.body;
+// Full folder walk with pagination
+app.post("/mcp/walk_full", async (req, res) => {
+  const { path_prefix, max_items = 2000 } = req.body;
+  let allEntries = [];
+  let cursor = null;
 
   try {
-    if (cursor) {
-      // Continue listing with cursor
-      const response = await dbxListContinue(cursor);
-      res.json({
-        entries: response.data.entries,
-        cursor: response.data.cursor || null
-      });
-    } else {
-      // Initial listing
-      const response = await dbxListFolder({
-        path: normPath(path_prefix),
-        recursive: false,
-        limit: max_items
-      });
-      res.json({
-        entries: response.data.entries,
-        cursor: response.data.cursor || null
-      });
-    }
+    do {
+      let response;
+      if (cursor) {
+        response = await dbxListContinue(cursor);
+      } else {
+        response = await dbxListFolder({
+          path: normPath(path_prefix),
+          recursive: false,
+          limit: max_items
+        });
+      }
+
+      allEntries = allEntries.concat(response.data.entries || []);
+      cursor = response.data.has_more ? response.data.cursor : null;
+    } while (cursor);
+
+    res.json({ entries: allEntries, total: allEntries.length });
   } catch (err) {
-    console.error("Error in /mcp/walk:", err);
+    console.error("Error in /mcp/walk_full:", err);
     res.status(500).json({ error: err.message });
   }
 });
