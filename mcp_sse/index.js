@@ -388,6 +388,99 @@ app.post("/mcp/walk_full", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+/* ---------- Get Manifest ---------- */
+app.get("/getManifest", async (req, res) => {
+  try {
+    const type = req.query.type || "snapshot"; // ?type=snapshot or ?type=file_index
+    let filePath;
+
+    if (type === "snapshot") {
+      filePath = "/data/02_Snapshot_Manifest.csv"; // adjust if stored elsewhere
+    } else if (type === "file_index") {
+      filePath = "/data/file_index.csv";
+    } else {
+      return res.status(400).json({ error: "Invalid manifest type" });
+    }
+
+    if (fs.existsSync(filePath)) {
+      const data = fs.readFileSync(filePath, "utf8");
+      res.type("text/csv").send(data);
+    } else {
+      res.status(404).json({ error: `Manifest not found: ${filePath}` });
+    }
+  } catch (e) {
+    console.error("getManifest ERROR:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/* ---------- Index Status ---------- */
+app.get("/indexStatus", async (req, res) => {
+  try {
+    if (!fs.existsSync(INDEX_DIR)) {
+      return res.json({ ok: true, total: 0, indexed: [] });
+    }
+    const files = fs.readdirSync(INDEX_DIR).filter((f) => f.endsWith(".json"));
+    res.json({
+      ok: true,
+      total: files.length,
+      indexed: files
+    });
+  } catch (e) {
+    console.error("indexStatus ERROR:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/* ---------- Query Excel ---------- */
+app.post("/queryExcel", async (req, res) => {
+  try {
+    const { path: filePath, sheet, operation = "preview", columns = [], filters = {} } = req.body;
+
+    if (!filePath) {
+      return res.status(400).json({ error: "path is required" });
+    }
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "File not found" });
+    }
+
+    const wb = XLSX.readFile(filePath);
+    const ws = sheet ? wb.Sheets[sheet] : wb.Sheets[wb.SheetNames[0]];
+    let df = XLSX.utils.sheet_to_json(ws, { defval: null });
+
+    // Apply filters
+    for (const [col, val] of Object.entries(filters)) {
+      df = df.filter((row) => row[col] == val);
+    }
+
+    let result;
+    if (operation === "preview") {
+      result = df.slice(0, 20); // return first 20 rows
+    } else if (operation === "sum" && columns.length > 0) {
+      result = {};
+      for (const col of columns) {
+        const sum = df.reduce((acc, row) => acc + (parseFloat(row[col]) || 0), 0);
+        result[col] = sum;
+      }
+    } else if (operation === "average" && columns.length > 0) {
+      result = {};
+      for (const col of columns) {
+        const valid = df.map((row) => parseFloat(row[col])).filter((v) => !isNaN(v));
+        const avg = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : 0;
+        result[col] = avg;
+      }
+    } else {
+      result = { message: "Operation not implemented or no columns specified" };
+    }
+
+    res.json({ ok: true, operation, result });
+  } catch (e) {
+    console.error("queryExcel ERROR:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 
 /* ---------- Start ---------- */
 app.listen(PORT, () => {
