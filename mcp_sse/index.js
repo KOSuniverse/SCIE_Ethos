@@ -503,6 +503,60 @@ app.get("/token/dropbox", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+// === MCP root endpoint for OpenAI Agent Builder ===
+app.get("/mcp", (req, res) => {
+  const key = req.headers["x-api-key"];
+  if (process.env.SERVER_API_KEY && key !== process.env.SERVER_API_KEY) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  res.json({
+    type: "mcp_list_tools",
+    tools: [
+      {
+        name: "walk",
+        description: "List Dropbox folder contents recursively.",
+        input_schema: {
+          type: "object",
+          properties: {
+            path_prefix: { type: "string" },
+            max_items: { type: "number" }
+          },
+          required: ["path_prefix"]
+        }
+      },
+      {
+        name: "walk_full",
+        description: "Walk Dropbox folder structure fully with pagination.",
+        input_schema: {
+          type: "object",
+          properties: {
+            path_prefix: { type: "string" },
+            max_items: { type: "number" }
+          },
+          required: ["path_prefix"]
+        }
+      },
+      {
+        name: "searchIndex",
+        description: "Search the semantic index for relevant content.",
+        input_schema: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            limit: { type: "number" }
+          },
+          required: ["query"]
+        }
+      },
+      {
+        name: "buildIndexAll",
+        description: "Rebuild semantic index for all Dropbox files.",
+        input_schema: { type: "object", properties: {} }
+      }
+    ]
+  });
+});
 
 
 /* ---------- Start ---------- */
