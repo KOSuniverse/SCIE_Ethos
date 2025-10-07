@@ -480,6 +480,29 @@ app.post("/queryExcel", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+/* ---------- Dropbox Access Token Endpoint ---------- */
+app.get("/token/dropbox", async (req, res) => {
+  try {
+    // Always ensure we have a valid token
+    if (!_accessToken) {
+      await refreshAccessToken();
+    }
+
+    // Return a new token if requested via ?refresh=true
+    if (req.query.refresh === "true") {
+      await refreshAccessToken();
+    }
+
+    res.json({
+      access_token: _accessToken,
+      source: "cached",
+      expires_in: 14400
+    });
+  } catch (e) {
+    console.error("token/dropbox ERROR:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 
 /* ---------- Start ---------- */
