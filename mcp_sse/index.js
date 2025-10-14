@@ -548,6 +548,52 @@ app.get("/mcp", (req, res) => {
     ]
   });
 });
+/* ---------- MCP Manifest (for Actions integration) ---------- */
+app.get("/mcp/manifest", (req, res) => {
+  const key = req.headers["x-api-key"];
+  if (process.env.SERVER_API_KEY && key !== process.env.SERVER_API_KEY) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  res.setHeader("Content-Type", "application/json");
+  res.status(200).json({
+    version: "1.0",
+    tools: [
+      {
+        name: "walk",
+        description: "List Dropbox folder contents recursively.",
+        input_schema: {
+          type: "object",
+          properties: {
+            path_prefix: { type: "string" },
+            max_items: { type: "number" }
+          },
+          required: ["path_prefix"]
+        }
+      },
+      {
+        name: "searchIndex",
+        description: "Search the semantic index for relevant content.",
+        input_schema: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            limit: { type: "number" }
+          },
+          required: ["query"]
+        }
+      },
+      {
+        name: "buildIndexAll",
+        description: "Rebuild the semantic index for all Dropbox files.",
+        input_schema: {
+          type: "object",
+          properties: {}
+        }
+      }
+    ]
+  });
+});
 
 
 /* ---------- Start ---------- */
