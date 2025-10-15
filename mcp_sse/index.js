@@ -548,6 +548,17 @@ app.get("/mcp", (req, res) => {
     ]
   });
 });
+
+app.use("/mcp/manifest", (req, res, next) => {
+  console.log("Incoming manifest request:", {
+    headers: req.headers,
+    method: req.method,
+    url: req.originalUrl,
+  });
+  next();
+});
+
+
 /* ---------- MCP Manifest (for Actions integration) ---------- */
 /* ---------- MCP Manifest (for Actions integration) ---------- */
 app.get("/mcp/manifest", (req, res) => {
