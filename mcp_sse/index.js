@@ -550,7 +550,7 @@ app.get("/mcp", (req, res) => {
 });
 /* ---------- MCP Manifest (for Actions integration) ---------- */
 app.get("/mcp/manifest", (req, res) => {
-  if (req.headers["x-api-key"] !== process.env.X_API_KEY) {
+  if (req.headers["x-api-key"] !== process.env.SERVER_API_KEY) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
