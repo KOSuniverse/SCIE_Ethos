@@ -595,6 +595,59 @@ app.get("/mcp/manifest", (req, res) => {
   });
 });
 
+/* ---------- MCP Manifest (strict OpenAI schema) ---------- */
+app.get("/mcp/manifest_strict", (req, res) => {
+  const key = req.headers["x-api-key"];
+  if (process.env.SERVER_API_KEY && key !== process.env.SERVER_API_KEY) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  res.type("application/json").json({
+    schema_version: "1.0",
+    name_for_human: "SCIE Ethos Connector",
+    name_for_model: "scie_ethos",
+    description_for_human:
+      "Access Dropbox and semantic-index tools for Jarvis Mayhem Orchestrator.",
+    description_for_model:
+      "Provides three tools: walk (list Dropbox folders), searchIndex (query semantic index), buildIndexAll (rebuild index).",
+    contact_email: "support@ethos.local",
+    legal_info_url: "https://scie-ethos.onrender.com/legal",
+    tools: [
+      {
+        name: "walk",
+        description: "List Dropbox folder contents recursively.",
+        parameters: {
+          type: "object",
+          properties: {
+            path_prefix: { type: "string" },
+            max_items: { type: "number" }
+          },
+          required: ["path_prefix"]
+        }
+      },
+      {
+        name: "searchIndex",
+        description: "Search the semantic index for relevant content.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            limit: { type: "number" }
+          },
+          required: ["query"]
+        }
+      },
+      {
+        name: "buildIndexAll",
+        description: "Rebuild the semantic index for all Dropbox files.",
+        parameters: {
+          type: "object",
+          properties: {}
+        }
+      }
+    ]
+  });
+});
 
 /* ---------- Start ---------- */
 app.listen(PORT, () => {
