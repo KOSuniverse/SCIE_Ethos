@@ -550,14 +550,18 @@ app.get("/mcp", (req, res) => {
 });
 /* ---------- MCP Manifest (for Actions integration) ---------- */
 app.get("/mcp/manifest", (req, res) => {
-  const key = req.headers["x-api-key"];
-  if (process.env.SERVER_API_KEY && key !== process.env.SERVER_API_KEY) {
+  if (req.headers["x-api-key"] !== process.env.X_API_KEY) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
-  res.setHeader("Content-Type", "application/json");
-  res.status(200).json({
-    version: "1.0",
+  res.json({
+    type: "mcp-manifest",
+    api_version: "1.0",
+    schema_version: "1.0",
+    name_for_human: "SCIE Ethos Connector",
+    name_for_model: "scie_ethos",
+    description_for_human: "Access Dropbox and semantic-index tools",
+    description_for_model: "Connector for Dropbox operations",
     tools: [
       {
         name: "walk",
@@ -572,28 +576,21 @@ app.get("/mcp/manifest", (req, res) => {
         }
       },
       {
-        name: "searchIndex",
-        description: "Search the semantic index for relevant content.",
+        name: "routeThenAnswer",
+        description: "Route user queries to file retrieval and analysis logic.",
         input_schema: {
           type: "object",
           properties: {
             query: { type: "string" },
-            limit: { type: "number" }
+            download: { type: "boolean" }
           },
           required: ["query"]
-        }
-      },
-      {
-        name: "buildIndexAll",
-        description: "Rebuild the semantic index for all Dropbox files.",
-        input_schema: {
-          type: "object",
-          properties: {}
         }
       }
     ]
   });
 });
+
 
 /* ---------- MCP Manifest (strict OpenAI schema) ---------- */
 app.get("/mcp/manifest_strict", (req, res) => {
