@@ -549,6 +549,7 @@ app.get("/mcp", (req, res) => {
   });
 });
 /* ---------- MCP Manifest (for Actions integration) ---------- */
+/* ---------- MCP Manifest (for Actions integration) ---------- */
 app.get("/mcp/manifest", (req, res) => {
   if (req.headers["x-api-key"] !== process.env.SERVER_API_KEY) {
     return res.status(403).json({ error: "Forbidden" });
@@ -576,20 +577,29 @@ app.get("/mcp/manifest", (req, res) => {
         }
       },
       {
-        name: "routeThenAnswer",
-        description: "Route user queries to file retrieval and analysis logic.",
+        name: "searchIndex",
+        description: "Search the semantic index for relevant content.",
         input_schema: {
           type: "object",
           properties: {
             query: { type: "string" },
-            download: { type: "boolean" }
+            limit: { type: "number" }
           },
           required: ["query"]
+        }
+      },
+      {
+        name: "buildIndexAll",
+        description: "Rebuild the semantic index for all Dropbox files.",
+        input_schema: {
+          type: "object",
+          properties: {}
         }
       }
     ]
   });
 });
+
 
 
 /* ---------- MCP Manifest (strict OpenAI schema) ---------- */
