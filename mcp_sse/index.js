@@ -560,20 +560,23 @@ app.use("/mcp/manifest", (req, res, next) => {
 
 
 /* ---------- MCP Manifest (for Actions integration) ---------- */
-/* ---------- MCP Manifest (for Actions integration) ---------- */
+/* ---------- MCP Manifest (for ChatGPT Agent Builder) ---------- */
 app.get("/mcp/manifest", (req, res) => {
-  if (req.headers["x-api-key"] !== process.env.SERVER_API_KEY) {
+  const key = req.headers["x-api-key"];
+  if (!key || key !== process.env.SERVER_API_KEY) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
-  res.json({
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+
+  res.status(200).json({
     type: "mcp-manifest",
     api_version: "1.0",
     schema_version: "1.0",
     name_for_human: "SCIE Ethos Connector",
     name_for_model: "scie_ethos",
-    description_for_human: "Access Dropbox and semantic-index tools",
-    description_for_model: "Connector for Dropbox operations",
+    description_for_human: "Access Dropbox and semantic-index tools.",
+    description_for_model: "Connector for Dropbox operations and file search.",
     tools: [
       {
         name: "walk",
@@ -610,6 +613,7 @@ app.get("/mcp/manifest", (req, res) => {
     ]
   });
 });
+
 
 
 
