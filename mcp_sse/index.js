@@ -603,13 +603,15 @@ app.get("/mcp/manifest_strict", (req, res) => {
   }
 
   res.type("application/json").json({
+    type: "mcp-manifest",                      // 👈 REQUIRED by OpenAI MCP spec
+    api_version: "1.0",                        // 👈 some clients expect this alias
     schema_version: "1.0",
     name_for_human: "SCIE Ethos Connector",
     name_for_model: "scie_ethos",
     description_for_human:
       "Access Dropbox and semantic-index tools for Jarvis Mayhem Orchestrator.",
     description_for_model:
-      "Provides three tools: walk (list Dropbox folders), searchIndex (query semantic index), buildIndexAll (rebuild index).",
+      "Provides three tools: walk (list Dropbox folders), searchIndex (query semantic index), and buildIndexAll (rebuild index).",
     contact_email: "support@ethos.local",
     legal_info_url: "https://scie-ethos.onrender.com/legal",
     tools: [
@@ -648,6 +650,7 @@ app.get("/mcp/manifest_strict", (req, res) => {
     ]
   });
 });
+
 
 /* ---------- Start ---------- */
 app.listen(PORT, () => {
